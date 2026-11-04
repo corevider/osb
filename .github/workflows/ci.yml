@@ -1,0 +1,49 @@
+name: CI
+
+# Builds the bot and runs the tests for every pull request, including pull requests from forks.
+#
+# Why this is safe: it runs on the plain `pull_request` event. For a fork the token is read-only and
+# no secret is passed to the job, and this job asks for no secret and `contents: read` only, so the
+# PR's code (the build script and the tests) runs with nothing worth stealing.
+# `workflow_dispatch` lets other workflows start it for PRs they open with GITHUB_TOKEN, which raises no events.
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build
+        run: python3 build-lean.py
+
+      - name: Syntax check
+        run: node --check osb.user.js
+
+      - name: Tests
+        run: node lean.test.cjs
+
+      - name: Tool tests
+        run: python3 -m unittest discover -s tools -p 'test_*.py'
+
+      - name: Token guard tests
+        run: node --test .github/scripts/token-guard.test.mjs
+
+      - name: Userscript header
+        run: |
+          set -e
+          head -n 20 osb.user.js | grep -q '^// @match        https://opensro.online/play\*$' || { echo "@match changed."; exit 1; }
+          for key in name namespace version updateURL downloadURL license match; do
+            grep -q "^// @$key " osb.meta.js || { echo "Header key @$key is missing."; exit 1; }
+          done
+          diff <(sed -n '/^\/\/ ==UserScript==/,/^\/\/ ==\/UserScript==/p' osb.user.js) osb.meta.js
+

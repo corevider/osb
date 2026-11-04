@@ -1,0 +1,30 @@
+OSB is a modified version of nixxane/opensro-bot-lean
+(https://github.com/nixxane/opensro-bot-lean), which was adapted from TSK's OpenSRO Assistant.
+
+Base: nixxane/opensro-bot-lean commit 497ecc7245fe51b7a2f0d739635545330ffabc9a (version 1.2.224),
+taken on 2026-11-03. OSB 2.0.0 started from version 1.2.212 and has since taken upstream's changes up to this commit.
+The record of the last upstream commit OSB took is UPSTREAM.json.
+
+Copyright nixxane and the contributors of opensro-bot-lean. Changes in OSB: Copyright Corevider.
+OSB is free software under the GNU General Public License, version 2 or (at your option) any later version.
+See LICENSE.
+
+Changes made by OSB (GPL-2.0-or-later, section 2a), 2026-11-02:
+- The bot is renamed to OSB and starts at version 2.0.0. The userscript header, the generated files (osb.user.js, osb.meta.js),
+  the console tag, the download names and the panel title use the new name.
+- Update checks, patch notes and navigation data come from github.com/corevider/osb instead of the upstream repository. The update check sends no user data,
+  stays on by default, and can be switched off in Settings, Privacy ("Check GitHub for OSB updates"); when off it makes no request.
+- Bug reports go to nobody by default: they are previewed, then copied or saved as a file. Since the opt-in release, a report is sent to api.osb.lol (Corevider) only when the
+  player presses Send and confirms, and usage statistics are sent only after the player turns them on in Settings. The upstream report endpoint, the
+  Discord link and the upstream site links are removed. Nothing is sent to nixxane or any third party.
+- Share codes and files made by the nixxane bot still import. New exports use the app name osb.
+- The OSB seal in the panel title bar and as the script icon, and the OSB README, docs and brand files.
+- Maintenance files for OSB: AGENTS.md, docs/MAINTAINING.md, UPSTREAM.json and the workflows under .github/.
+- The browser test harness is brought up to date with the current panel.
+- With bag selling on, town trips sell the character bag before pet loot (also proposed upstream as nixxane/opensro-bot-lean#94).
+- Choosing a town on the Town page sets up the town trip at once, and switching the town trip on fills what is missing; the "Set up this town" button is removed.
+- Wear better gear (OSB-only fixes, 2026-11-03): it runs before the weapon merchant sells, each piece competes only for its own worn slot, and a piece the game refuses to wear is kept unsold. The "Pick up drops" checkbox is the first control on the Loot page.
+- Gear level requirement (OSB-only fix, 2026-11-04): a requirement given as a mastery level (types 257-259, 273-276, 513-518) is read as that level, so wear better gear and the level deposit rule see such gear.
+- The upstream port of 1.2.222 to 1.2.224 leaves out the report rate-limit change in lean-reports.js, because it belonged to the upstream report endpoint, which OSB does not use. The OSB server applies its own limits.
+
+Each port of upstream changes updates the base commit, the version and the date above, and UPSTREAM.json.

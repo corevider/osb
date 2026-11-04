@@ -1,0 +1,103 @@
+name: Upstream watch
+
+# Once a week, and by hand, looks at nixxane's main (the upstream of this fork) and compares it with the commit recorded
+# in UPSTREAM.json. OSB has its own history, so nothing is merged: when upstream has commits after the recorded one, the
+# workflow opens one issue (or updates the open one) that lists the commits, every URL the added lines contain and the
+# files changed. A maintainer or an agent then ports the changes by hand, as docs/MAINTAINING.md describes.
+#
+# Why this is safe: the job has `contents: read` and `issues: write` only. It fetches a public repository without
+# credentials, reads it with git diff and git log, and runs none of the fetched code. It pushes nothing, opens no pull
+# request and starts no other workflow. There is no other secret.
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: upstream-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Fetch upstream and compare
+        id: compare
+        run: |
+          set -e
+          repository=$(jq -r .repository UPSTREAM.json)
+          branch=$(jq -r .branch UPSTREAM.json)
+          recorded=$(jq -r .commit UPSTREAM.json)
+          [ "$repository" = "https://github.com/nixxane/opensro-bot-lean.git" ] || { echo "UPSTREAM.json names an unexpected repository."; exit 1; }
+          printf '%s' "$recorded" | grep -Eq '^[0-9a-f]{40}$' || { echo "UPSTREAM.json has no valid commit."; exit 1; }
+          git remote add upstream "$repository"
+          git fetch --no-tags upstream "$branch"
+          head=$(git rev-parse upstream/"$branch")
+          echo "recorded=$recorded" >> "$GITHUB_OUTPUT"
+          echo "head=$head" >> "$GITHUB_OUTPUT"
+          if ! git cat-file -e "$recorded^{commit}" 2>/dev/null; then
+            echo "state=lost" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          count=$(git rev-list --count "$recorded..$head")
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          if [ "$count" = "0" ]; then echo "state=current" >> "$GITHUB_OUTPUT"; exit 0; fi
+          echo "state=behind" >> "$GITHUB_OUTPUT"
+          git log --no-merges --reverse --format='- %h %s (%an)' "$recorded..$head" > "$RUNNER_TEMP/commits.md"
+          git diff -U0 "$recorded..$head" -- . ':!bot.lean.user.js' ':!bot.lean.meta.js' ':!navdata-lean' ':!vendor' | grep -E '^\+' | grep -v '^+++' | grep -oE "https?://[^\"' )\`<>\]+" | sort -u > "$RUNNER_TEMP/urls.txt" || true
+          git diff --stat "$recorded..$head" -- . ':!bot.lean.user.js' ':!bot.lean.meta.js' | tail -n 40 > "$RUNNER_TEMP/stat.txt"
+
+      - name: Open or update the issue
+        if: steps.compare.outputs.state == 'behind' || steps.compare.outputs.state == 'lost'
+        env:
+          STATE: ${{ steps.compare.outputs.state }}
+          RECORDED: ${{ steps.compare.outputs.recorded }}
+          HEAD_COMMIT: ${{ steps.compare.outputs.head }}
+          COUNT: ${{ steps.compare.outputs.count }}
+        run: |
+          set -e
+          if [ "$STATE" = "lost" ]; then title="Upstream history changed: the recorded commit is gone"; else title="Upstream has $COUNT new commits to port"; fi
+          {
+            if [ "$STATE" = "lost" ]; then
+              echo "The commit recorded in UPSTREAM.json ($RECORDED) is no longer in nixxane's history. Upstream may have rewritten its history. Compare by hand, then update UPSTREAM.json."
+              echo
+              echo "Upstream head: $HEAD_COMMIT"
+            else
+              echo "nixxane's main has $COUNT commits after the last one OSB ported ($RECORDED). Upstream head: $HEAD_COMMIT."
+              echo
+              echo "## Commits"
+              cat "$RUNNER_TEMP/commits.md"
+              echo
+              echo "## URLs in the added lines (check each one: OSB sends nothing to third parties)"
+              if [ -s "$RUNNER_TEMP/urls.txt" ]; then sed 's/^/- /' "$RUNNER_TEMP/urls.txt"; else echo "None."; fi
+              echo
+              echo "## Files changed"
+              echo '```'
+              cat "$RUNNER_TEMP/stat.txt"
+              echo '```'
+            fi
+            echo
+            echo "Nothing is merged. Port the changes as docs/MAINTAINING.md describes (Taking an upstream port), then update UPSTREAM.json and NOTICE."
+          } > "$RUNNER_TEMP/issue.md"
+          existing=$(gh issue list --state open --label upstream-sync --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue edit "$existing" --title "$title" --body-file "$RUNNER_TEMP/issue.md"
+            echo "Updated issue #$existing."
+          else
+            gh label create upstream-sync --color 5319e7 --description "Upstream commits to port" 2>/dev/null || true
+            gh issue create --title "$title" --label upstream-sync --body-file "$RUNNER_TEMP/issue.md"
+          fi

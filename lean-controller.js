@@ -1,0 +1,347 @@
+// Single owner for movement/combat/pickup. Potion use remains a separate emergency lane.
+const startHunting = Hunt.start;
+Hunt.start = function (...args) {
+  // A swap cut short by death or a world change restores itself during hunting; only a review the player must do blocks the start.
+  if (BuffGear.run || BuffGear.recovery && !BuffGear.autoRestore) return UI.toast('Restore or review combat gear before hunting.', 'warn');
+  if (Alchemy.run || Alchemy.pending) return UI.toast('Stop alchemy and wait for its result before hunting.', 'warn');
+  if (Trade.run) return UI.toast('Stop auto trade before hunting.', 'warn');
+  if (Stall.run) return UI.toast('Stop the stall session before hunting.', 'warn');
+  if (SellStar.run) return UI.toast('Wait for Sell Star to finish (or stop the bot).', 'warn');
+  if (Quest.trip) return UI.toast('Wait for the quest visit to finish (or stop the bot).', 'warn');
+  if (World.gp?.stall?.phase && World.gp.stall.phase !== 'none') return UI.toast('Close the stall before hunting.', 'warn');
+  Lure.reset();
+  return startHunting.apply(this, args);
+};
+Hunt.lootAllowed = e => Loot.allowed(e);
+// Kill the small ones first. While fighting a stronger monster, switch to a weaker one that is hitting you, then come
+// back: the stronger one is still fighting you, so attackers-first picks it up again. Always on, by design:
+//  1. only monsters that hit you in the last few seconds (World.attackers) and are within chase distance;
+//  2. only a weaker class than the current target (two giants hitting you is no reason to switch);
+//  3. never away from a target below THREAT_FINISH_PCT HP: finish it;
+//  4. never during a cast (the caller only asks between skills);
+//  5. the weakest attacker first (lowest HP), so each kill removes its damage soonest;
+//  6. no flip-flop: the small one becomes the current target and only something weaker still could take its place.
+// With no current target the weakest attacker is picked the same way, so the giant is not selected between two kills.
+const THREAT_RANK = { normal: 1, champion: 2, elite: 4, party: 10, giant: 20, titan: 100, unique: 200 };
+const THREAT_WINDOW_MS = 6000, THREAT_FINISH_PCT = 25;
+Hunt.threat = function (current) {
+  if (World.isCasting() || !current && this.cfg().priority !== 'attackers') return null;
+  const rank = e => THREAT_RANK[monsterClass(e)] ?? 1, hp = e => World.hpPctOf(e) ?? 100;
+  if (current && (World.hpPctOf(current) ?? 100) < THREAT_FINISH_PCT) return null;
+  const sim = World.simNow() ?? 0, pose = World.pose(), chase = this.cfg().chase, limit = current ? rank(current) : Infinity;
+  let best = null;
+  for (const e of World.ents.values()) {
+    if (e === current || !isAttackableMob(e) || this.banned(this.ban, e.gid) || rank(e) >= limit) continue;
+    if (sim - (World.attackers.get(e.gid) ?? -Infinity) >= THREAT_WINDOW_MS || dist2D(pose, e) > chase) continue;
+    if (!best || rank(e) < rank(best) || rank(e) === rank(best) && (hp(e) < hp(best) || hp(e) === hp(best) && dist2D(pose, e) < dist2D(pose, best))) best = e;
+  }
+  if (!best || !current) return best;
+  const from = current.name || monsterClass(current), to = best.name || monsterClass(best);
+  this.threatNote = { gid: best.gid, text: `Combat: switched to ${to} (hitting you); back to ${from} after.` };
+  Log.info(`Switched from ${from} to ${to}, which is hitting you.`);
+  return best;
+};
+Hunt.chooseLoot = () => Loot.choose();
+// Quest monsters first: while a quest's kills are still counting, its learned monster types are
+// taken before distance, as long as they pass the hunt's own filters - class, area, level range,
+// name lists and anti-KS. Something already hitting the player is never displaced by a preference.
+const huntChooseTarget = Hunt.chooseTarget;
+Hunt.chooseTarget = function (...args) {
+  const target = huntChooseTarget.apply(this, args);
+  const preferred = Quest.preferred();
+  if (!preferred.size) return target;
+  const sim = World.simNow() ?? 0;
+  if (target && sim - (World.attackers.get(target.gid) ?? -Infinity) < 6000) return target;
+  const pose = World.pose(), H = this.cfg();
+  if (!pose) return target;
+  const inc = splitList(H.include), exc = splitList(H.exclude);
+  let best = null;
+  for (const e of World.ents.values()) {
+    if (!preferred.has(e.refObjId) || !isAttackableMob(e) || this.banned(this.ban, e.gid)) continue;
+    if (!this.classAllowed(e) || !this.inArea(e) || dist2D(pose, e) > H.chase) continue;
+    if (H.levelMin && (e.level ?? 0) < H.levelMin || H.levelMax && (e.level ?? 0) > H.levelMax) continue;
+    const name = (e.name || '').toLowerCase();
+    if (inc.length && !inc.some(s => name.includes(s)) || exc.some(s => name.includes(s))) continue;
+    if (this.ksAvoids(e, sim)) continue;
+    if (!best || dist2D(pose, e) < dist2D(pose, best)) best = e;
+  }
+  return best || target;
+};
+Hunt.tick = function () {
+  if (!this.running) return;
+  if (!Town.cfg().enabled && Restock.tick()) { Loot.suspend(); return; }
+  const H = this.cfg(), gp = World.gp;
+  if (!World.inWorld()) { this.state = 'waiting'; return; }
+  if (World.isDead()) {
+    Loot.suspend();
+    this.state = 'dead';
+    if (!this.deathAt) { Town.deathPoint = World.pose() ? { ...World.pose() } : null; this.deathAt = now(); Party.noteDeath(); Log.info('Died: ' + Party.waitNote()); }
+    if ((Town.autoRevive() || H.onDeath === 'revive') && now() - this.deathAt > Party.reviveDelay() && !Party.resBusy()) {
+      // A rebirth the server never answers is asked again every ten seconds; the send itself refuses unless still dead.
+      if (!this.revived) {
+        if (Cmd.rebirth(1)) { this.revived = true; this.revivedAt = now(); }
+      } else if (now() - (this.revivedAt ?? this.deathAt) > 10000 && Cmd.rebirth(1)) this.revivedAt = now();
+    } else if (!Town.autoRevive() && H.onDeath === 'stop') this.stop('character died');
+    return;
+  }
+  if (this.deathAt) {
+    this.deathAt = 0; this.revived = false; this.targetGid = 0; Lure.reset();
+    if (H.center && dist2D(World.pose(), H.center) > H.radius) { Controller.returnAfterRevive(); return; }
+  }
+  if (Restock.activeShop() || gp.storage || now() - Manual.lastAt < H.manualPauseS * 1000) {
+    Loot.suspend(); this.state = 'manual'; return;
+  }
+  if (this.playerCheck()) { Loot.suspend(); this.state = 'player'; return; }
+  if (H.stopNoHpPotion && Potion.count('hp') + Potion.count('vigor') === 0) return this.stop('out of HP potions');
+  if (H.stopInvFull && World.freeBagSlots() === 0) return this.stop('inventory full');
+  Loot.preparePet();
+  const attacked = this.underAttack(), current = this.currentTarget();
+  // One pickup at a time. A pet's request does not own the character's combat tick; a character pickup owns
+  // movement until it is done or an attacker interrupts it. The pet's drops go first, then the character's.
+  if (attacked && Loot.active && !Loot.active.petGid) Loot.suspend();
+  if (Loot.active) { if (Loot.active.petGid) Loot.tick(); else if (Loot.tick()) return; }
+  if (!Loot.active && H.pickup.enabled) {
+    if (Loot.petMode()) { const drop = Loot.choose('pet'); if (drop) Loot.begin(drop); }
+    if (!Loot.active && !attacked && (!current || !H.pickup.afterKillOnly) && !World.isSitting()) {
+      const drop = Loot.choose('character');
+      if (drop && Loot.begin(drop)) { this.state = 'loot'; return; }
+    }
+  }
+  const me = World.me();
+  if (World.isSitting()) {
+    const done = !H.sit.enabled || me.hpPct >= H.sit.resumeAt && me.mpPct >= H.sit.resumeAt;
+    this.state = done || attacked ? 'standing' : 'resting';
+    if ((done || attacked) && now() - this.sitToggleAt > 2500 && Cmd.action(1000)) this.sitToggleAt = now();
+    return;
+  }
+  if (H.sit.enabled && !attacked && !current && (me.hpPct < H.sit.hpBelow || me.mpPct < H.sit.mpBelow)) {
+    if (now() - this.sitToggleAt > 2500 && Cmd.action(1000)) this.sitToggleAt = now();
+    this.state = 'resting'; return;
+  }
+  if (Combat.buffs(true)) { this.state = 'buff'; return; }
+  // Cornered berserk runs before the attack and lure branches, so it also covers a luring tank with no target.
+  if (Combat.corneredBerserk()) return;
+  // A support character (Attack monsters off) never starts a fight, not even with what hits it: it keeps looting,
+  // its own buffs and party support, at its hunting spot or beside the member it follows.
+  const attack = H.attack !== false;
+  if (attack && Lure.on()) return Lure.tick();
+  const target = attack ? this.threat(current) || current || this.chooseTarget() : null;
+  if (target) { this.engage(target); return; }
+  this.targetGid = 0; this.state = !attack ? 'support only' : Loot.active?.petGid ? 'loot' : 'search';
+  if (H.returnToCenter && H.center && dist2D(World.pose(), H.center) > Math.max(40, H.radius * 0.5) && now() - this.lastMoveAt > 2500) {
+    // Hunting from town (dead at login and woken in town): the town cycle's own trip (services, then reverse or walk).
+    if (!(dist2D(World.pose(), H.center) <= Math.max(H.radius * 1.5, 600)) && Controller.townReturn()) return;
+    if (!Number.isFinite(dist2D(World.pose(), H.center))) return this.stop('hunt area is in another region');
+    if (Cmd.move(H.center)) this.lastMoveAt = now();
+    this.state = 'return';
+  }
+};
+
+// Stops everything, for the player and for the bot itself. A pending auto-start survives it: only the player's own
+// Stop (userStop) cancels that.
+function stopAll() {
+  Town.record('stop');
+  Alchemy.stop();
+  Trade.cancel();
+  Stall.stop();
+  SellStar.stop('Sell Star stopped.');
+  BuffGear.cancel();
+  Quest.cancel();
+  const townActive = !!Town.trip;
+  Town.cancel();
+  Resurrect.cancelTrip('', true);
+  Resurrect.holdUntil = 0;
+  Controller.resumeAfterRevive = false;
+  const active = townActive || Hunt.running || Restock.trip || WalkBack.active || Travel.active || Loot.active;
+  Travel.cancel();
+  WalkBack.cancel('', false);
+  if (Hunt.running) Hunt.stop();
+  Restock.trip = null;
+  Loot.suspend();
+  if (active && World.inWorld() && !World.isDead()) Cmd.move(World.pose());
+}
+
+// An imbue's cooldown is as long as the imbue itself, so it can be renewed only once it has (nearly) run out.
+// The 1.2 s wait after a send also holds while the old imbue still shows time left: until the answer arrives,
+// resending into the server's cooldown only earns refusals that pause the imbue.
+const IMBUE_RENEW_MS = 400;
+Combat.imbue = function () {
+  const M = Settings.profile.macro;
+  if (!M.imbue) return false;
+  const id = this.resolve(M.imbue);
+  if (!id || this.blocked(id) || !Cmd.canCast(id) || !this.mpOk(id, World.me())) return false;
+  if (World.buffRemaining(id) > IMBUE_RENEW_MS) return false;
+  if (now() - (this.buffCastAt.get('imbue') || 0) < 1200) return false;
+  if (this.cast(id, 0)) {
+    this.buffCastAt.set('imbue', now());
+    return true;
+  }
+  return false;
+};
+// A skill with a cast time reads the imbue when it releases, not when it is pressed, and the game takes an imbue
+// in the middle of another skill's cast (an instant self skill runs beside it). The imbue usually comes back
+// mid-cast, so it is cast right away: waiting for the cast to end released that skill without it.
+const fightBetweenCasts = Combat.fight;
+Combat.fight = function (target) {
+  const M = Settings.profile.macro;
+  if (target && M.imbueBeforeAttack && World.isCasting() && World.gp.target === target.gid && !World.gp.targetPending &&
+    now() - this.lastCastAt >= (M.castGapMs ?? 250) && this.imbue()) return;
+  return fightBetweenCasts.call(this, target);
+};
+// A buff can also be kept up while walking back (speed or stealth skills). The buff loop only knows "hunt", and an
+// entry saved before the choice existed has no mode, so the walk-back call sees exactly the entries that opted in
+// and the hunting call is untouched.
+const combatBuffs = Combat.buffs;
+Combat.buffs = function (hunting) {
+  if (hunting) return combatBuffs.call(this, hunting);
+  const M = Settings.profile.macro, all = M.buffs;
+  M.buffs = all.filter(b => b.enabled && b.mode === 'walk');
+  try { return combatBuffs.call(this, false); } finally { M.buffs = all; }
+};
+// Berserk fires when the gauge is full and the target's class is ticked in Combat options.
+// A party Giant has its own switch; other party monsters share the Party monsters one.
+Combat.berserk = function (cls) {
+  const key = cls === 'party' && RARITY[World.ents.get(World.gp.target)?.rarity] === 'giant' ? 'giantParty' : cls;
+  if (!Settings.profile.macro.berserkClasses?.[key] || World.berserkGauge < 5) return false;
+  if (World.local()?.appearanceState?.[2] === 1) return false;
+  return Cmd.berserk();
+};
+// SBot-style cornered berserk: with the switch on, a full gauge also fires when enough living monsters attack
+// at once, whatever their class — the defensive panic button of a luring tank or an over-pulled spot. The gauge,
+// berserk-form and attacker-expiry rules are the combat ones.
+Combat.corneredBerserk = function () {
+  const need = Number(Settings.profile.macro.berserkCornered) || 0;
+  if (need <= 0 || !Hunt.running || World.isDead() || World.berserkGauge < 5) return false;
+  if (World.local()?.appearanceState?.[2] === 1) return false;
+  const sim = World.simNow();
+  let count = 0;
+  for (const [gid, at] of World.attackers) {
+    if (sim == null || sim - at > 5000) continue;
+    const e = World.ents.get(gid);
+    if (e && World.isAlive(e) && ++count >= need) return Cmd.berserk();
+  }
+  return false;
+};
+const Controller = {
+  mode: 'idle', lastErrorAt: -Infinity, resumeAfterRevive: false, guardAt: {},
+  // Optional features must never stop hunting: an error in one is logged (at most every 5 s) and skipped.
+  guard(name, fn) {
+    try { return fn(); } catch (e) {
+      if (now() - (this.guardAt[name] ?? -Infinity) > 5000) { this.guardAt[name] = now(); Log.error(name + ' error: ' + (e?.message || e)); }
+      return false;
+    }
+  },
+  // Start hunting again after an interruption, but only where that is safe: at the hunting spot it just starts; in
+  // the town of the saved services it does the town cycle and goes back (townReturn); otherwise it walks back.
+  // WalkBack first tries the navdata corridor and falls back to short legs; its own caps refuse a spot that is too
+  // far. Returns 'started', 'town', 'walking' or 'stopped'.
+  resumeHunting(prefix) {
+    const H = Hunt.cfg(), pose = World.pose(), distance = H.center && pose ? dist2D(pose, H.center) : Infinity;
+    if (Number.isFinite(distance) && distance <= Math.max(H.radius * 1.5, 600)) { UI.toast(prefix + '; resuming hunting.', 'info', 4000); Hunt.start(); return 'started'; }
+    if (this.townReturn()) { UI.toast(prefix + ', in town: doing town services, then ' + (Town.reverses() ? 'reversing' : 'walking') + ' to the hunting spot.', 'info', 4000); return 'town'; }
+    if (Number.isFinite(distance)) { UI.toast(prefix + '; walking back to the hunting spot.', 'info', 4000); WalkBack.start(true); return WalkBack.active || Travel.active ? 'walking' : 'stopped'; }
+    UI.toast(prefix + ', but not at the hunting spot. Use Return & hunt when ready.', 'warn', 6000);
+    return 'stopped';
+  },
+  // Far from the hunting spot while standing in the town of the saved services: a character that was dead at login
+  // and woke up in town, or a revive the game did by itself. Do the town services first, as after a death in the
+  // field, then reverse, or walk back without a reverse scroll. True when the town cycle took over (or stopped hunting
+  // with a reason); false when not in that town or the town cycle is off.
+  townReturn() {
+    const c = Town.cfg();
+    if (!c.enabled) return false;
+    const here = Town.detect(), home = Town.detect(c.vendor || c.storage || c.arrival || {});
+    if (!here || !home || here.key !== home.key) return false;
+    Log.info('Far from the hunting spot, in town: doing town services before going back.');
+    WalkBack.cancel('', false);
+    Hunt.deathAt = 0; Hunt.revived = false; Hunt.targetGid = 0;
+    Town.begin(true);
+    if (Town.trip?.phase === 'revive-arrival') Town.arrived();
+    return true;
+  },
+  returnAfterRevive() {
+    this.resumeAfterRevive = false;
+    Hunt.deathAt = 0; Hunt.revived = false; Hunt.targetGid = 0;
+    if (Town.autoRevive()) Town.begin(true);
+    else if (Settings.profile.hunt.center) WalkBack.start(true);
+    else Hunt.stop('No saved hunting spot for revival return.');
+  },
+  tick() {
+    try {
+      this.guard('Reconnect', () => Reconnect.tick());
+      this.guard('Auto-start', () => AutoStart.tick());
+      this.guard('Retry', () => Retry.tick());
+      Restock.sample();
+      Alchemy.tick();
+      BuffGear.resume();
+      // Party automation runs in every state, dead or busy included: the game refuses an application to your party
+      // that is not answered within 10 seconds.
+      this.guard('Party', () => Party.tick());
+      if (BuffGear.run) {
+        if (World.inWorld()) Potion.tick();
+        if (BuffGear.tick()) { this.mode = 'buff gear'; return; }
+      }
+      if (Alchemy.run || Alchemy.pending) { this.mode = 'alchemy'; return; }
+      if (Stall.run) { if (World.inWorld()) Potion.tick(); Stall.tick(); this.mode = 'stall'; return; }
+      if (SellStar.run) { SellStar.tick(); this.mode = 'sell star'; return; }
+      if (World.inWorld() && World.isDead() && Hunt.running) {
+        Town.cancel(); Resurrect.cancelTrip(); Resurrect.holdUntil = 0;
+        Hunt.tick(); this.mode = Hunt.state; return;
+      }
+      if (World.inWorld() && !World.isDead() && (this.resumeAfterRevive || Hunt.running && Hunt.deathAt)) {
+        if (World.gp?.inventoryPending || !World.local()) { this.mode = 'waiting'; return; }
+        if (!this.resumeAfterRevive && Hunt.cfg().center && dist2D(World.pose(), Hunt.cfg().center) <= Hunt.cfg().radius) {
+          Hunt.deathAt = 0; Hunt.revived = false; Hunt.targetGid = 0;
+        } else this.returnAfterRevive();
+      }
+      if (Town.trip) {
+        // Reserve the first settled item-use window for departure. Continuing
+        // alternating potions first can perpetually renew the 350 ms hold.
+        if (Town.trip.phase !== 'recall' || !Town.trip.potionWindowReserved || World.isCasting() || World.gp?.inventoryPending) Potion.tick();
+        Town.trip.potionWindowReserved = true;
+        if (Town.tick()) { this.mode = 'town service'; return; }
+      }
+      if (!World.inWorld()) { this.mode = 'waiting'; return; }
+      Party.resumeTick();
+      AutoMastery.tick();
+      StatPoints.tick();
+      this.guard('Level spot', () => LevelSpot.tick());
+      Potion.tick();
+      ItemRules.trackGear();
+      if (!ItemRules.dropTick()) ItemRules.balanceTick();
+      Loot.checkPetFull();
+      if (Town.tick()) { this.mode = 'town service'; return; }
+      if (Trap.tick()) { this.mode = 'escape'; return; }
+      if (Chase.tick()) { this.mode = 'obstacle pursuit'; return; }
+      if (BuffGear.tick()) { this.mode = 'buff gear'; return; }
+      if (SpeedScroll.tick()) { this.mode = 'speed scroll'; return; }
+      this.guard('Battle scrolls', () => ScrollBuff.tick());
+      this.guard('Item mall', () => MallBuyer.tick());
+      if (this.guard('Repair hammer', () => RepairHammer.tick())) { this.mode = 'repair hammer'; return; }
+      if (Trade.tick()) { this.mode = 'trading'; return; }
+      if (!WalkBack.active && !Travel.active && !Restock.trip && !Restock.recording && !Controller.resumeAfterRevive &&
+          !Restock.activeShop() && !World.gp.storage && Resurrect.tick()) {
+        this.mode = 'resurrect'; return;
+      }
+      if (!WalkBack.active && !Travel.active && !Restock.trip && !Restock.recording && !Restock.activeShop() && !World.gp.storage && Support.tick()) {
+        this.mode = 'party support'; return;
+      }
+      // Quest journal watching and the window's own reward command run beside everything; an NPC
+      // visit owns the character like a town trip does.
+      this.guard('Quest', () => Quest.observe());
+      if (Quest.trip) { Quest.tick(); this.mode = 'quest'; return; }
+      if (WalkBack.active) { this.mode = 'returning'; WalkBack.tick(); }
+      else if (Travel.active) { this.mode = 'travelling'; Travel.tick(); }
+      else if (Restock.recording) this.mode = 'recording';
+      else if (Hunt.running) { if (!Trace.tick()) Hunt.tick(); this.mode = Restock.trip ? 'shopping' : Hunt.state; }
+      else { this.guard('Idle pet pickup', () => Loot.idleTick()); this.mode = 'idle'; }
+    } catch (e) {
+      stopAll();
+      if (now() - this.lastErrorAt > 5000) { this.lastErrorAt = now(); Log.error(e.message || String(e)); UI.toast('Bot stopped: ' + e.message, 'warn'); }
+      this.mode = 'error';
+    } finally {
+      Town.record();
+      Stats.sample();
+    }
+  },
+};

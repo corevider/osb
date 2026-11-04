@@ -1,0 +1,10 @@
+browser-test-profile/
+__pycache__/
+*.pyc
+node_modules/
+lean-*.png
+*.before-*.js
+*settings.json
+.env
+.env.*
+PLAN-auto-walk-to-hunting-spot.md
