@@ -170,7 +170,7 @@ nav button{min-width:0;padding:0 3px}
 /* Party page */
 .members{display:grid;gap:3px}
 .member{display:grid;grid-template-columns:minmax(0,1fr) 110px auto;align-items:center;gap:8px;min-height:38px;padding:4px 6px;background-image:var(--s-bar_l),var(--s-bar_r),var(--s-bar);background-position:left,right,center;background-repeat:no-repeat,no-repeat,repeat-x;background-size:4px 100%,4px 100%,auto 100%}
-.member.dead{opacity:.6}.member-name strong{display:block;color:#fff;font-weight:normal;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.member-name .muted{margin:0}
+.member.dead{opacity:.6}.field.gone{opacity:.5}.member-name strong{display:block;color:#fff;font-weight:normal;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.member-name .muted{margin:0}
 .member-bars{display:grid;gap:3px}.pbar{height:5px;background:#050505;border:1px solid #3d3626}.pbar i{display:block;height:100%}.pbar.hp i{background:linear-gradient(#ff7a6a,#b01e1a)}.pbar.mp i{background:linear-gradient(#7fb4ff,#2557b8)}
 .member-buffs{display:flex;gap:2px}.member-buffs .skill-icon{width:22px;min-width:22px;height:22px;flex:0 0 22px}.member-buffs .skill-icon img{width:20px;height:20px}.member-buffs .skill-icon.off{filter:grayscale(1) brightness(.5)}
 @media(min-width:900px){:host(.wide) .pane>fieldset:has(.members){grid-column:1/-1}}

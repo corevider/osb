@@ -3,7 +3,7 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const source = fs.readFileSync(__dirname + '/osb.user.js', 'utf8');
 const isolated = source.slice(0, source.lastIndexOf('installWorkerHook();')) +
-  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Assets, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Town, Travel, Quest, QuestData, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, SellStar, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, Equip, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, LevelSpot, ScrollBuff, boot, Ticker, Sound, LeanMap, Telemetry};\n})();';
+  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Assets, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Protect, Town, Travel, Quest, QuestData, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, SellStar, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, Equip, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, LevelSpot, ScrollBuff, boot, Ticker, Sound, LeanMap, Telemetry};\n})();';
 function fixture(document, sharedStorage) {
   let time = 100000;
   const storage = sharedStorage || new Map(), commands = [], notices = [], intervals = [], timers = [];
@@ -4648,6 +4648,147 @@ test('party members and their pets do not make a monster another player\'s targe
   f.Hunt.running = true; f.Hunt.state = 'search'; f.World.hitByOthers.clear(); cast(5);
   assert.equal(f.Hunt.chooseTarget()?.gid, 30, 'the monster the party is fighting can be chosen');
 });
+function protectFixture() {
+  const f = fixture(); f.Hunt.start(); f.Combat.fight = () => {};
+  f.World.gp.social = { localName: 'Me', members: [{ id: 1, name: 'Me', status: 10 }, { id: 5, name: 'Mate', status: 10 }, { id: 6, name: 'Other', status: 10 }] };
+  f.World.ents.set(5, { gid: 5, kind: 'player', name: 'Mate', regionId: 1, x: 150, y: 0, z: 100, appearanceState: [0] });
+  f.World.ents.set(6, { gid: 6, kind: 'player', name: 'Other', regionId: 1, x: 90, y: 0, z: 120, appearanceState: [0] });
+  const mob = (gid, x, name = 'Wolf') => { const e = { gid, kind: 'monster', name, regionId: 1, x, y: 0, z: 100, attackFlags: 16, appearanceState: [0] }; f.World.ents.set(gid, e); return e; };
+  const hit = (caster, target) => f.World.onCast({ caster, target, results: [{ target }] });
+  const fighting = gid => { mob(gid, 130, 'Bear'); f.Hunt.targetGid = gid; f.Hunt.targetSince = 100000; f.World.gp.target = gid; };
+  const selected = gid => f.commands.some(c => c.kind === 'select' && c.gid === gid);
+  const p = f.Settings.profile.party.protect; p.enabled = true; p.names = ['Mate'];
+  return { f, mob, hit, fighting, selected, p };
+}
+test('protect party members: a chosen member hit by a monster makes the bot switch to that monster', () => {
+  const { f, mob, hit, fighting, selected } = protectFixture();
+  assert.equal(f.DEFAULT_PROFILE.party.protect.enabled, false, 'off by default');
+  fighting(30); mob(31, 160); hit(31, 5);
+  f.Controller.tick();
+  assert.equal(f.Hunt.targetGid, 31); assert.equal(selected(31), true);
+  assert.match(f.Protect.status(), /Protecting Mate from Wolf/);
+  f.World.gp.target = 31; f.advance(500); f.Controller.tick();
+  assert.equal(f.Hunt.targetGid, 31, 'stays on the attacker while it keeps hitting the member');
+});
+test('protect party members: members not ticked, players and the feature switched off are left alone', () => {
+  let s = protectFixture(); s.fighting(30); s.mob(31, 160); s.hit(31, 6);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30, 'Other is not ticked'); assert.equal(s.selected(31), false);
+  s = protectFixture(); s.fighting(30); s.mob(31, 160); s.p.enabled = false; s.hit(31, 5);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30, 'feature off'); assert.equal(s.f.Protect.hits.size, 0, 'nothing is recorded while off');
+  s = protectFixture(); s.fighting(30); s.f.World.ents.set(9, { gid: 9, kind: 'player', name: 'Stranger', regionId: 1, x: 160, y: 0, z: 100 }); s.hit(9, 5);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30, 'a player hitting a member is never attacked'); assert.equal(s.selected(9), false);
+  s = protectFixture(); s.fighting(30); s.mob(31, 160); s.hit(31, 1);
+  assert.equal(s.f.Protect.hits.size, 0, 'a monster hitting us is not a member attacker');
+  s = protectFixture(); s.fighting(30); s.mob(31, 160); s.p.all = true; s.hit(31, 6);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 31, 'All party members covers Other');
+});
+test('protect party members: never beyond the maximum distance or out of the hunting area', () => {
+  let s = protectFixture(); s.fighting(30); s.p.range = 5; s.mob(31, 200); s.hit(31, 5);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30, '10 m away with a 5 m limit'); assert.equal(s.selected(31), false);
+  s.p.range = 15; s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 31, 'within the raised limit');
+  s.f.World.gp.target = 31; s.f.World.ents.get(31).x = 300; s.f.advance(300); s.f.Controller.tick();
+  assert.notEqual(s.f.Hunt.targetGid, 31, 'it ran past the limit: no chase');
+  s = protectFixture(); s.fighting(30); s.f.Settings.profile.hunt.radius = 100; s.p.range = 100; s.mob(31, 250); s.hit(31, 5);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30, 'outside the hunting area');
+});
+test('protect party members: avoided monsters and monsters other players fight are left alone', () => {
+  let s = protectFixture(); s.fighting(30); s.f.Settings.profile.hunt.exclude = 'wolf'; s.mob(31, 160); s.hit(31, 5);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30); assert.equal(s.selected(31), false);
+  s = protectFixture(); s.fighting(30); s.mob(31, 160); s.f.World.ents.set(9, { gid: 9, kind: 'player', name: 'Stranger', regionId: 1, x: 170, y: 0, z: 100 });
+  s.hit(9, 31); s.hit(31, 5);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30, 'a stranger fights it');
+  s.f.Settings.profile.hunt.avoidKs = false; s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 31, 'with Avoid other players targets off it is taken');
+  s = protectFixture(); s.fighting(30); s.mob(31, 160); s.hit(5, 31); s.hit(31, 5);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 31, 'the member fighting back does not count as another player');
+});
+test('protect party members: our own low HP gets the potion and no switch', () => {
+  const { f, mob, hit, fighting, selected } = protectFixture();
+  f.World.gp.inventory.push({ slot: 16, refObjId: 8, typeFlags: 2284, quantity: 50 });
+  f.World.gp.vitals = [{ gid: 1, hp: 30, mp: 100, maxHp: 100, maxMp: 100 }];
+  fighting(30); mob(31, 160); hit(31, 5);
+  f.Controller.tick();
+  assert.equal(f.commands.some(c => c.kind === 'item-use'), true, 'the potion goes out');
+  assert.equal(f.Hunt.targetGid, 30); assert.equal(selected(31), false);
+  assert.match(f.Protect.status(), /own safety/);
+  f.World.gp.vitals = [{ gid: 1, hp: 90, mp: 100, maxHp: 100, maxMp: 100 }]; f.advance(500); hit(31, 5); f.Controller.tick();
+  assert.equal(f.Hunt.targetGid, 31, 'protecting again once our HP is back');
+});
+test('protect party members: no switch during a town trip', () => {
+  const { f, mob, hit, fighting, selected } = protectFixture();
+  fighting(30); mob(31, 160); hit(31, 5);
+  f.Town.trip = { phase: 'recall' };
+  assert.equal(f.Protect.pick(f.Hunt.currentTarget()), null);
+  f.Hunt.tick(); assert.equal(f.Hunt.targetGid, 30); assert.equal(selected(31), false);
+  assert.match(f.Protect.status(), /town trip/);
+  f.Town.trip = null; f.Hunt.tick(); assert.equal(f.Hunt.targetGid, 31);
+});
+test('protect party members: several attackers, the lowest-HP member first, then the nearest, then back to normal', () => {
+  const { f, mob, hit, selected, p } = protectFixture(); p.all = true;
+  f.World.gp.vitals = [{ gid: 5, hp: 80, maxHp: 100 }, { gid: 6, hp: 20, maxHp: 100 }];
+  mob(31, 120); mob(32, 190, 'Boar'); hit(31, 5); hit(32, 6);
+  f.Controller.tick(); assert.equal(f.Hunt.targetGid, 32, 'Other has less HP'); assert.equal(selected(32), true);
+  const g = protectFixture(); g.p.all = true; g.f.World.gp.vitals = [{ gid: 5, hp: 50, maxHp: 100 }, { gid: 6, hp: 50, maxHp: 100 }];
+  g.mob(31, 190); g.mob(32, 120); g.hit(31, 5); g.hit(32, 6);
+  g.f.Controller.tick(); assert.equal(g.f.Hunt.targetGid, 32, 'equal HP: the nearest');
+  g.f.World.gp.target = 32; g.f.World.gp.vitals = [{ gid: 5, hp: 10, maxHp: 100 }, { gid: 6, hp: 50, maxHp: 100 }];
+  g.f.advance(300); g.f.Controller.tick(); assert.equal(g.f.Hunt.targetGid, 32, 'no flip-flop while the current attacker still hits a member');
+  g.f.Settings.profile.hunt.classes.normal = false; g.f.World.ents.delete(31); g.f.Protect.hits.delete(31);
+  g.f.advance(7000); g.f.Controller.tick();
+  assert.equal(g.f.Hunt.targetGid, 0, 'nobody is attacked any more: back to normal targeting');
+  assert.equal(g.f.Protect.gid, 0);
+});
+test('protect party members: a support character protects only with the option on', () => {
+  const { f, mob, hit, selected, p } = protectFixture();
+  f.Settings.profile.hunt.attack = false; mob(31, 160); hit(31, 5);
+  f.Controller.tick(); assert.equal(f.Hunt.targetGid, 0); assert.equal(f.Hunt.state, 'support only'); assert.equal(selected(31), false);
+  assert.match(f.Protect.status(), /Attack monsters is off/);
+  p.whileNoAttack = true; f.advance(300); f.Controller.tick();
+  assert.equal(f.Hunt.targetGid, 31); assert.equal(selected(31), true);
+  f.World.gp.target = 31; f.Protect.hits.clear(); f.advance(300); f.Controller.tick();
+  assert.equal(f.Hunt.targetGid, 0, 'back to support only once the member is safe'); assert.equal(f.Hunt.state, 'support only');
+});
+test('protect party members: settings persist, travel in shares and backups, and old files load with it off', async () => {
+  const f = fixture(), p = f.Settings.profile.party.protect;
+  assert.deepEqual(plain(f.botProfile({ party: { autoRes: true } }).party.protect), { enabled: false, all: false, names: [], range: 40, whileNoAttack: false });
+  assert.deepEqual(plain(f.botProfile({ party: { protect: { enabled: 'yes', names: ['Mate', ' ', 5, 'Mate', ' Left '], range: 900 } } }).party.protect),
+    { enabled: false, all: false, names: ['Mate', 'Left'], range: 100, whileNoAttack: false });
+  Object.assign(p, { enabled: true, names: ['Mate', 'Left'], range: 25, whileNoAttack: true });
+  assert.deepEqual(plain(f.botProfile(JSON.parse(JSON.stringify(f.Settings.profile))).party.protect), { enabled: true, all: false, names: ['Mate', 'Left'], range: 25, whileNoAttack: true });
+  const backup = JSON.parse(f.ProfileShare.text(false)); assert.equal(backup.profile.party.protect.range, 25);
+  const share = JSON.parse(f.ProfileShare.text(true)); assert.deepEqual(plain(share.profile.party.protect), { enabled: true, names: ['Mate', 'Left'], range: 25, whileNoAttack: true });
+  const code = await f.ProfileShare.encode(f.ProfileShare.text(true)), g = fixture();
+  g.ProfileShare.pending = await g.ProfileShare.preview(code); assert.equal(g.ProfileShare.apply(), true);
+  assert.deepEqual(plain(g.Settings.profile.party.protect), { enabled: true, all: false, names: ['Mate', 'Left'], range: 25, whileNoAttack: true });
+  f.World.gp.social = { localName: 'Me', members: [{ id: 1, name: 'Me' }, { id: 5, name: 'Mate' }, { id: 6, name: 'Other' }] };
+  assert.deepEqual(plain(f.Protect.rows()), [{ name: 'Mate', here: true }, { name: 'Other', here: true }, { name: 'Left', here: false }], 'a member who left is kept');
+  f.Protect.toggle('other', true); assert.deepEqual(plain(p.names), ['Mate', 'Left', 'other']); f.Protect.toggle('OTHER', false); assert.deepEqual(plain(p.names), ['Mate', 'Left']);
+  assert.equal(f.Protect.chosen('mate'), true, 'names match without case');
+});
+test('protect party members: the Party page lists members, keeps those who left greyed out and saves the ticks', () => {
+  const document = { createElement(tag) {
+    const events = {};
+    return { tag, children: [], className: '', value: '', dataset: {}, style: {}, attributes: {},
+      setAttribute(k, v) { this.attributes[k] = v; }, append(...children) { this.children.push(...children); }, replaceChildren(...children) { this.children = children; },
+      addEventListener(name, fn) { events[name] = fn; }, fire(name) { events[name]?.(); }, querySelectorAll() { return []; } };
+  } };
+  const f = fixture(document); f.UI.draw = () => {}; f.UI.refreshers = [];
+  const p = f.Settings.profile.party.protect; p.names = ['Mate', 'Left'];
+  f.World.gp.social = { localName: 'Me', members: [{ id: 1, name: 'Me' }, { id: 5, name: 'Mate' }, { id: 6, name: 'Other' }] };
+  const host = document.createElement('div'); f.UI.section_partyProtect(host);
+  const box = host.children[0], list = box.children.find(n => n.className === 'protect-list');
+  const rows = () => list.children.map(n => ({ label: n.children[0].textContent, checked: n.children[1].checked, disabled: n.children[1].disabled, gone: /\bgone\b/.test(n.className) }));
+  assert.equal(box.children[0].textContent, 'Protect party members');
+  assert.deepEqual(rows(), [{ label: 'Mate', checked: true, disabled: false, gone: false }, { label: 'Other', checked: false, disabled: false, gone: false },
+    { label: 'Left (not in the party)', checked: true, disabled: false, gone: true }]);
+  const other = list.children[1].children[1]; other.checked = true; other.fire('change');
+  assert.deepEqual(plain(p.names), ['Mate', 'Left', 'Other']);
+  const left = list.children[2].children[1]; left.checked = false; left.fire('change');
+  assert.deepEqual(plain(p.names), ['Mate', 'Other']); assert.equal(rows().length, 2, 'an unticked member who left disappears');
+  p.all = true; f.UI.refreshers.forEach(r => r());
+  assert.equal(rows().every(r => r.checked && r.disabled), true, 'All party members ticks and locks every row');
+  f.World.gp.social.members = [{ id: 1, name: 'Me' }]; p.all = false; p.names = []; f.UI.refreshers.forEach(r => r());
+  assert.equal(list.children[0].textContent, 'Not in a party.');
+});
 test('the anti-KS scope can spare every monster but normal and champion', () => {
   const f = fixture();
   f.Settings.profile.hunt.classes.party = true; f.Settings.profile.hunt.classes.elite = true;
@@ -7957,8 +8098,9 @@ async function updateTests() {
   }
   await check('updates compare numeric version components and ignore malformed versions', async () => {
     const f = fixture();
-    for (const v of ['9.9.9', '2.1.0', '2.0.1', '3.0.0']) assert.equal(f.Updates.newer(v), true);
-    for (const v of ['2.0.0', '1.2.9', '1.2.36', '1.1.999', 'bad', '2.0.0-beta', '2.0.999999999999999999999']) assert.equal(f.Updates.newer(v), false);
+    const [major, minor, patch] = fs.readFileSync(__dirname + '/osb.user.js', 'utf8').match(/@version\s+(\d+)\.(\d+)\.(\d+)/).slice(1).map(Number), current = `${major}.${minor}.${patch}`;
+    for (const v of ['9.9.9', `${major}.${minor + 1}.0`, `${major}.${minor}.${patch + 1}`, `${major + 1}.0.0`]) assert.equal(f.Updates.newer(v), true);
+    for (const v of [current, '1.2.9', '1.2.36', '1.1.999', 'bad', current + '-beta', `${major}.${minor}.999999999999999999999`]) assert.equal(f.Updates.newer(v), false);
   });
   await check('updates pin metadata and user-initiated installer to the same trusted commit', async () => {
     const f = fixture(), calls = updater(f); f.UI.updateButton = {};

@@ -586,7 +586,7 @@ const UI = {
     } else if (this.current === 'Quest') {
       this.sections('questAuto', 'questPick', 'questJournal');
     } else if (this.current === 'Party') {
-      this.sections('partyMembers', 'partyHeal', 'partyBuffs', 'partyParty', 'partyTrace');
+      this.sections('partyMembers', 'partyHeal', 'partyProtect', 'partyBuffs', 'partyParty', 'partyTrace');
     } else if (this.current === 'Items') {
       this.drawItems();
     } else if (this.current === 'Setup') {
@@ -623,7 +623,7 @@ const UI = {
         this.drawItems(); this.sections('townTrip', 'townCycle', 'townAmmo'); } },
       { name: 'Training place', icon: 'action\\icon_cha_camp', pages: ['Combat', 'Party'], sections: [['combatHuntArea', 'Training place'], ['partyTrace'], ['combatLure'], ['combatPet']] },
       { name: 'Party/Autores', icon: 'action\\icon_cha_party', pages: ['Party'], sections: [
-        ['partyMembers', 'Current party'], ['partyParty', 'Party settings'], ['partyHeal']] },
+        ['partyMembers', 'Current party'], ['partyParty', 'Party settings'], ['partyHeal'], ['partyProtect']] },
       { name: 'Player buffing', icon: 'action\\icon_cha_party', pages: ['Party'], sections: [['partyBuffs', 'Player buffing']] },
       { name: 'Quest', icon: 'action\\icon_cha_camp', pages: ['Quest'], sections: [['questAuto', 'Auto quest settings'], ['questPick', 'Quests to do'], ['questJournal']] },
       { name: 'Auto alchemy', icon: 'action\\icon_cha_alchemy', pages: ['Alchemy'], draw() { Alchemy.draw(); } },
@@ -1144,6 +1144,34 @@ const UI = {
         this.number('Group heal below (%)', () => S().group.pct, v => S().group.pct = v, 10, 95),
         this.number('Group heal when this many are low', () => S().group.count, v => S().group.count = v, 2, 8),
         el('p', 'Casts only on members you can see within the support range; it never walks to them. Order: group heal, then a heal on the lowest member, then missing buffs, one cast at a time. HP is exact for members in view. Your own potions still come first.', 'muted')));
+  },
+  section_partyProtect(host) {
+    const c = () => Settings.profile.party.protect;
+    const list = el('div', null, 'protect-list'), note = el('p', Protect.status(), 'muted');
+    let signature = '';
+    const render = () => {
+      note.textContent = Protect.status();
+      const rows = Protect.rows(), next = JSON.stringify([rows, c().all]);
+      if (next === signature) return;
+      signature = next;
+      if (!rows.length) { list.replaceChildren(el('div', 'Not in a party.', 'empty')); return; }
+      list.replaceChildren(...rows.map(r => {
+        const input = el('input'); input.type = 'checkbox'; input.checked = c().all || Protect.chosen(r.name); input.disabled = !!c().all;
+        input.addEventListener('change', () => { Protect.toggle(r.name, input.checked); Settings.saveProfile(); signature = ''; render(); });
+        const field = this.field(r.here ? r.name : r.name + ' (not in the party)', input);
+        if (!r.here) field.className += ' gone';
+        return field;
+      }));
+    };
+    render(); this.refreshers.push(render);
+    host.append(this.group('Protect party members',
+      this.check('Protect party members', () => c().enabled, v => { c().enabled = v; Protect.reset(); }),
+      this.check('All party members', () => c().all, v => { c().all = v; signature = ''; render(); }),
+      list,
+      this.number('Maximum distance from you (m)', () => c().range, v => c().range = v, 5, 100),
+      this.check('Also with Attack monsters off', () => c().whileNoAttack, v => c().whileNoAttack = v),
+      note,
+      el('p', 'Attacks a monster that hits a ticked member within this distance, while the bot runs. Your potions, death and return rules, town trips, Skip these mobs and fights of other players come first. It never chases past this distance or out of the hunting area, and never attacks players.', 'muted')));
   },
   section_partyBuffs(host) {
     const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();

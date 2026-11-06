@@ -159,6 +159,20 @@ On the **Party** page tick **Buff and heal party members** (off by default). The
 
 It casts only on members you can see within **Support range (m)** (30 by default) and never walks to them. HP is exact for members in view and in tenths otherwise, as the game's party window shows it. A buff that does not appear on the member after two tries waits a minute before the next. It runs while hunting; tick **Also while hunting is stopped** to support a party while you stand still. For a character that only supports, untick **Attack monsters** (Combat → Hunt area). It then never starts a fight, not even with monsters that hit it, and while hunting it keeps picking up loot, its own buffs and party support, at the hunting spot or beside the member it follows (**Following a party member**). Town trips, revival and the walk back work as usual, and the anti-stuck watchdog does not count the time without kills. The top of the page lists the party with HP and MP bars, distance and which assigned buffs each member has. The party matching, resurrection and recruit options are on the same page.
 
+## Protecting party members
+
+On the **Party** page tick **Protect party members** (off by default). Then tick the members to protect, or **All party members**. When a monster hits a ticked member, the bot switches its target to that monster and attacks it. It works while the bot runs.
+
+- **Maximum distance from you (m)**: 40 by default, the same as the default hunting radius. A monster farther away than this is not attacked, and one that runs past it is not chased. A monster outside the hunting area (or outside the area around the member you follow) is not attacked either.
+- **Also with Attack monsters off**: a support character with **Attack monsters** off protects too. Without this option it never fights.
+- Several monsters: the one that hits the member with the lowest HP comes first, then the nearest one. While its target still hits a member, the bot does not switch to another attacker.
+- When nobody it protects is hit any more (6 seconds without a hit), the bot goes back to its normal targets. A monster that now hits you stays your target.
+- Your own safety comes first. While your HP is below your HP potion or vigor potion threshold, the bot does not switch. Potions, death and the return to the hunting spot keep their priority, and a town trip pauses the protection.
+- The bot never attacks players. It skips a monster named in **Skip these mobs** (Combat → Hunt area) and a monster another player is fighting, when **Avoid other players' targets** is on. Hits by party members do not count as another player's fight.
+- While luring, the luring steps keep their own order.
+
+The bot sees the attacks in the same game events it uses for monsters that hit you: each attack names the monster and the player it hits, for every player in view. A member out of view cannot be protected. Members are saved by character name. A member who leaves the party stays in the list, greyed out; untick the member to remove the name. Share codes and backups carry these settings, and older settings load with the protection off. The log says **Protecting <name>: attacking <monster>, which is hitting them.** when it switches, and **Protection over: back to normal targeting.** when it ends. This was tested in simulation only.
+
 ## Resurrecting party members
 
 Tick **Auto-resurrect party members** on the **Party** page to cast your learned Rebirth skill on a dead party member in view. The party list shows HP in tenths, so 0 there can also mean nearly dead.

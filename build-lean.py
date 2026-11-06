@@ -241,7 +241,7 @@ skin += '\nconst LEAN_CSS = ' + __import__('json').dumps((base / 'lean-skin.css'
 header = '''// ==UserScript==
 // @name         OSB
 // @namespace    https://github.com/corevider/osb
-// @version      2.0.0
+// @version      2.0.1
 // @homepageURL  https://github.com/corevider/osb
 // @supportURL   https://github.com/corevider/osb/issues
 // @updateURL    https://raw.githubusercontent.com/corevider/osb/main/osb.meta.js
@@ -265,7 +265,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[OSB] Another SRO assistant is active. Disable it and reload to use OSB.');
   return;
 }
-const VERSION = '2.0.0';
+const VERSION = '2.0.1';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });
@@ -314,6 +314,7 @@ parts = [header, utils, (base / 'lean-settings.js').read_text(encoding='utf-8'),
          (base / 'lean-travel.js').read_text(encoding='utf-8'),
          (base / 'lean-buff-gear.js').read_text(encoding='utf-8'),
          (base / 'lean-support.js').read_text(encoding='utf-8'),
+         (base / 'lean-protect.js').read_text(encoding='utf-8'),
          (base / 'lean-trade.js').read_text(encoding='utf-8'),
          (base / 'lean-lure.js').read_text(encoding='utf-8'),
          (base / 'lean-controller.js').read_text(encoding='utf-8'),

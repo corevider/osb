@@ -20,6 +20,7 @@ module.exports = function telemetryTests( { test: baseTest, source } ) {
 	const MINUTE = 60_000;
 	const HOUR = 3_600_000;
 	const BASE = "https://api.osb.lol/v1";
+	const APP_VERSION = String( source ).match( /@version\s+([\d.]+)/ )[ 1 ];
 
 	/*
 	================
@@ -818,7 +819,7 @@ module.exports = function telemetryTests( { test: baseTest, source } ) {
 		await h.advance( 5 * MINUTE );
 		const register = h.bodies( "/installs" ).find( b => b.install_id );
 		assert.deepEqual( typesOf( register ), typesOf( GOLDEN_REGISTER ) );
-		assert.equal( register.app, "osb" ); assert.equal( register.app_version, "2.0.0" ); assert.deepEqual( register.consent, { usage_version: 1, characters: true } );
+		assert.equal( register.app, "osb" ); assert.equal( register.app_version, APP_VERSION ); assert.deepEqual( register.consent, { usage_version: 1, characters: true } );
 		assert.match( register.install_id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/ ); assert.match( register.install_key, /^[A-Za-z0-9_-]{43}$/ );
 		const telemetry = h.bodies( "/telemetry" ).at( -1 );
 		assertSubsetShape( telemetry, GOLDEN_TELEMETRY );

@@ -23,7 +23,8 @@ const DEFAULT_PROFILE = {
   scroll: { damageInc: false, damageAbs: false },
   mall: { on: false, budgetSilk: 0, hp: { on: false, low: 10, target: 1000 }, mp: { on: false, low: 10, target: 1000 }, damageInc: { on: false, low: 5, target: 20 }, damageAbs: { on: false, low: 5, target: 20 }, reverse: { on: false, low: 10, target: 50 } },
   party: { autoAcceptMatching: false, autoRecruit: false, joinMain: false, mainName: '', leaveIfNotLeader: false, onlyWhileRunning: false, acceptNames: '', autoRes: false, acceptRes: false, reviveWaitS: 20, resRadius: 300, title: 'Hunting party', min: 1, max: 90, purpose: 0, expShare: true, itemShare: true,
-    support: { enabled: false, whileStopped: false, range: 30, heal: { id: 0, group: 0, pct: 60, self: false }, group: { id: 0, group: 0, pct: 60, count: 2 }, buffs: [] } },
+    support: { enabled: false, whileStopped: false, range: 30, heal: { id: 0, group: 0, pct: 60, self: false }, group: { id: 0, group: 0, pct: 60, count: 2 }, buffs: [] },
+    protect: { enabled: false, all: false, names: [], range: 40, whileNoAttack: false } },
   wardrobe: { on: true, phantom: true, realAnim: true, hideAvatars: false,
     eq: {}, av: {}, pet: { atk: 0, pick: 0, mount: 0 }, presets: {}, undo: null },
   macro: {
@@ -95,6 +96,10 @@ function botProfile(input) {
   // The finish-steal cutoff stops at 50: above it the kill can still be won, so avoiding is pointless.
   if (!Number.isFinite(result.hunt.avoidKsBelow) || result.hunt.avoidKsBelow < 0) result.hunt.avoidKsBelow = 0;
   if (result.hunt.avoidKsBelow > 50) result.hunt.avoidKsBelow = 50;
+  const protect = result.party.protect;
+  for (const key of ['enabled', 'all', 'whileNoAttack']) protect[key] = protect[key] === true;
+  protect.range = Number.isFinite(protect.range) ? clamp(Math.round(protect.range), 5, 100) : DEFAULT_PROFILE.party.protect.range;
+  protect.names = [...new Set((Array.isArray(protect.names) ? protect.names : []).filter(n => typeof n === 'string').map(n => n.trim().slice(0, 32)).filter(Boolean))].slice(0, 50);
   // New categories inherit the old Other items switch, preserving existing selection.
   const pickup = input.hunt?.pickup;
   for (const key of ['elixirs', 'powders', 'alchemy']) {

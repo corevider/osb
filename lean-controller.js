@@ -95,14 +95,18 @@ Hunt.tick = function () {
   if (H.stopNoHpPotion && Potion.count('hp') + Potion.count('vigor') === 0) return this.stop('out of HP potions');
   if (H.stopInvFull && World.freeBagSlots() === 0) return this.stop('inventory full');
   Loot.preparePet();
-  const attacked = this.underAttack(), current = this.currentTarget();
+  const attacked = this.underAttack();
+  let current = this.currentTarget();
+  const guard = Controller.guard('Protect party members', () => Protect.pick(current)) || null;
+  if (!guard) current = Protect.release(current);
+  const busy = attacked || !!guard;
   // One pickup at a time. A pet's request does not own the character's combat tick; a character pickup owns
   // movement until it is done or an attacker interrupts it. The pet's drops go first, then the character's.
-  if (attacked && Loot.active && !Loot.active.petGid) Loot.suspend();
+  if (busy && Loot.active && !Loot.active.petGid) Loot.suspend();
   if (Loot.active) { if (Loot.active.petGid) Loot.tick(); else if (Loot.tick()) return; }
   if (!Loot.active && H.pickup.enabled) {
     if (Loot.petMode()) { const drop = Loot.choose('pet'); if (drop) Loot.begin(drop); }
-    if (!Loot.active && !attacked && (!current || !H.pickup.afterKillOnly) && !World.isSitting()) {
+    if (!Loot.active && !busy && (!current || !H.pickup.afterKillOnly) && !World.isSitting()) {
       const drop = Loot.choose('character');
       if (drop && Loot.begin(drop)) { this.state = 'loot'; return; }
     }
@@ -110,11 +114,11 @@ Hunt.tick = function () {
   const me = World.me();
   if (World.isSitting()) {
     const done = !H.sit.enabled || me.hpPct >= H.sit.resumeAt && me.mpPct >= H.sit.resumeAt;
-    this.state = done || attacked ? 'standing' : 'resting';
-    if ((done || attacked) && now() - this.sitToggleAt > 2500 && Cmd.action(1000)) this.sitToggleAt = now();
+    this.state = done || busy ? 'standing' : 'resting';
+    if ((done || busy) && now() - this.sitToggleAt > 2500 && Cmd.action(1000)) this.sitToggleAt = now();
     return;
   }
-  if (H.sit.enabled && !attacked && !current && (me.hpPct < H.sit.hpBelow || me.mpPct < H.sit.mpBelow)) {
+  if (H.sit.enabled && !busy && !current && (me.hpPct < H.sit.hpBelow || me.mpPct < H.sit.mpBelow)) {
     if (now() - this.sitToggleAt > 2500 && Cmd.action(1000)) this.sitToggleAt = now();
     this.state = 'resting'; return;
   }
@@ -125,7 +129,7 @@ Hunt.tick = function () {
   // its own buffs and party support, at its hunting spot or beside the member it follows.
   const attack = H.attack !== false;
   if (attack && Lure.on()) return Lure.tick();
-  const target = attack ? this.threat(current) || current || this.chooseTarget() : null;
+  const target = guard || (attack ? this.threat(current) || current || this.chooseTarget() : null);
   if (target) { this.engage(target); return; }
   this.targetGid = 0; this.state = !attack ? 'support only' : Loot.active?.petGid ? 'loot' : 'search';
   if (H.returnToCenter && H.center && dist2D(World.pose(), H.center) > Math.max(40, H.radius * 0.5) && now() - this.lastMoveAt > 2500) {
