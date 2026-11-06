@@ -105,7 +105,7 @@ const Chase = {
   ================
   */
 	radius( target ) {
-		const ranges = Combat.rotation( monsterClass( target ) ).map( e => World.skill( Combat.resolve( e ) ) )
+		const ranges = Combat.rotation( Rotations.classOf( target ) ).map( e => World.skill( Combat.resolve( e ) ) )
 			.filter( s => s?.targetRequired && !s.groundTarget && s.range > 0 ).map( s => s.range );
 		return Math.min( 120, ranges.length ? Math.max( 7, Math.min( ...ranges ) - 5 ) : 7 );
 	},
@@ -118,7 +118,7 @@ const Chase = {
   */
 	canProbe( target ) {
 		const distance = dist2D( World.pose(), target );
-		return Combat.rotation( monsterClass( target ) ).some( e => {
+		return Combat.rotation( Rotations.classOf( target ) ).some( e => {
 			const s = World.skill( Combat.resolve( e ) );
 			return s?.targetRequired && !s.groundTarget && s.range >= 60 && s.range >= distance;
 		} );

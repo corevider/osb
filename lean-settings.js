@@ -1,6 +1,51 @@
 const SUPPORT_URL = 'https://github.com/corevider/osb/issues';
 const NOTES_URL = 'https://github.com/corevider/osb/releases';
-const CLASS_KEYS = ['normal', 'champion', 'giant', 'party', 'elite', 'unique'];
+const CLASS_KEYS = ['normal', 'champion', 'party', 'giant', 'partyChampion', 'partyGiant', 'elite', 'unique'];
+const ROTATION_LABELS = { normal: 'Normal', champion: 'Champion', party: 'Party', giant: 'Giant', partyChampion: 'Party champion', partyGiant: 'Party giant', elite: 'Elite', unique: 'Unique' };
+const ROTATION_ICONS = { normal: ['tw_normal'], champion: ['tw_champion'], party: ['tw_party'], giant: ['tw_giant'], partyChampion: ['tw_party', 'tw_champion'], partyGiant: ['tw_party', 'tw_giant'], elite: ['tw_elite'], unique: ['tw_unique'] };
+const Rotations = {
+  classOf(e) {
+    const cls = rotationKey(monsterClass(e));
+    if (cls !== 'party') return cls;
+    const grade = RARITY[e.rarity ?? 0];
+    return grade === 'champion' ? 'partyChampion' : grade === 'giant' ? 'partyGiant' : 'party';
+  },
+  source(cls, macro = Settings.profile.macro) {
+    const rotations = macro?.rotations || {};
+    let i = Math.max(0, CLASS_KEYS.indexOf(rotationKey(cls)));
+    if (Array.isArray(rotations[CLASS_KEYS[i]]) && rotations[CLASS_KEYS[i]].length) return CLASS_KEYS[i];
+    if (!macro?.fallbackToNormal) return null;
+    while (--i >= 0) if (Array.isArray(rotations[CLASS_KEYS[i]]) && rotations[CLASS_KEYS[i]].length) return CLASS_KEYS[i];
+    return null;
+  },
+  list(cls, macro = Settings.profile.macro) {
+    const key = this.source(cls, macro);
+    return key ? macro.rotations[key] : [];
+  },
+  hint(cls, macro = Settings.profile.macro) {
+    const key = this.source(cls, macro);
+    if (key === cls) return '';
+    return key ? 'Empty: uses ' + ROTATION_LABELS[key] : 'Empty: no skills';
+  },
+  upgrade(input) {
+    const rotations = input?.macro?.rotations;
+    if (!rotations || typeof rotations !== 'object' || !Array.isArray(rotations.party) || !rotations.party.length) return input;
+    const missing = ['partyChampion', 'partyGiant'].filter(key => !(key in rotations));
+    if (!missing.length) return input;
+    const copy = { ...rotations };
+    for (const key of missing) copy[key] = rotations.party.map(entry => entry && typeof entry === 'object' ? { ...entry } : entry);
+    return { ...input, macro: { ...input.macro, rotations: copy } };
+  },
+};
+const SOX_SEALS = ['star', 'moon', 'sun'];
+function upgradeSoxSound(input) {
+  const pickup = input?.hunt?.pickup;
+  if (!pickup || typeof pickup !== 'object' || !('soxSound' in pickup)) return input;
+  const { soxSound, ...rest } = pickup;
+  if (!('soxSeals' in rest)) rest.soxSeals = Object.fromEntries(SOX_SEALS.map(seal => [seal, soxSound !== false]));
+  return { ...input, hunt: { ...input.hunt, pickup: rest } };
+}
+function upgradeProfile(input) { return upgradeSoxSound(Rotations.upgrade(input)); }
 const DEFAULT_PROFILE = {
   items: { rules: {}, balance: false, autoEquip: false, gear: { primaryWeapon: null, secondaryWeapon: null, shield: null } },
   sounds: { player: false, died: false, levelUp: false, unique: false },
@@ -28,7 +73,7 @@ const DEFAULT_PROFILE = {
   wardrobe: { on: true, phantom: true, realAnim: true, hideAvatars: false,
     eq: {}, av: {}, pet: { atk: 0, pick: 0, mount: 0 }, presets: {}, undo: null },
   macro: {
-    rotations: { normal: [], champion: [], giant: [], party: [], elite: [], unique: [] },
+    rotations: { normal: [], champion: [], party: [], giant: [], partyChampion: [], partyGiant: [], elite: [], unique: [] },
     fallbackToNormal: true, normalAttack: true, buffs: [], imbue: null, buffSwap: false, buffAuto: true, buffSets: [],
     imbueBeforeAttack: true, berserkClasses: { normal: false, champion: false, giant: true, giantParty: false, party: false, elite: false, unique: false, titan: false }, berserkCornered: 0,
     minMpPct: 0, castGapMs: 350,
@@ -59,7 +104,7 @@ const DEFAULT_PROFILE = {
     levelMin: 0, levelMax: 0, include: '', exclude: '', priority: 'attackers', avoidKs: true, avoidKsScope: 'all', avoidKsBelow: 50,
     targetTimeoutS: 25,
     pickup: { enabled: true, soxOnly: false, skipStar: false, gold: true, potions: true, equipment: true, elixirs: true, powders: true, magicStones: true, attrStones: true, alchemy: true, others: true,
-      collector: 'character', by: {}, petFullSound: true, soxSound: true, include: '', exclude: '', radius: 300, afterKillOnly: true, retries: 2 },
+      collector: 'character', by: {}, petFullSound: true, soxSeals: { star: true, moon: true, sun: true }, include: '', exclude: '', radius: 300, afterKillOnly: true, retries: 2 },
     sit: { enabled: true, hpBelow: 35, mpBelow: 20, resumeAt: 90 },
     antiStuck: { enabled: true, minutes: 3, maxRecoveries: 3, recall: false },
     detour: { enabled: true, stallMs: 2500 },
@@ -72,12 +117,16 @@ const DEFAULT_PROFILE = {
 function botProfile(input) {
   const result = deepMerge(DEFAULT_PROFILE, {});
   if (!input || typeof input !== 'object') return result;
+  input = upgradeProfile(input);
   for (const key of ['macro', 'potion', 'hunt', 'lure', 'pet', 'scroll', 'mall', 'wardrobe', 'party', 'alchemy', 'mastery', 'statPoints', 'trace', 'items', 'trade', 'stall', 'quest', 'sounds']) {
     if (!input[key] || typeof input[key] !== 'object') continue;
     for (const field of Object.keys(DEFAULT_PROFILE[key])) {
       if (field in input[key]) result[key][field] = deepMerge(DEFAULT_PROFILE[key][field], input[key][field]);
     }
   }
+  for (const key of CLASS_KEYS) if (!Array.isArray(result.macro.rotations[key])) result.macro.rotations[key] = [];
+  result.hunt.pickup.soxSeals = Object.fromEntries(SOX_SEALS.map(seal => [seal, result.hunt.pickup.soxSeals?.[seal] === true]));
+  delete result.hunt.pickup.soxSound;
   // Migrate the old separate town stack targets once. Preserve the active
   // return mode's target; walking-only profiles retain their refill quantities.
   const restock = input.potion?.restock;
@@ -172,6 +221,7 @@ const Sound = {
   // Alert chimes for events the bus already carries (SBot-style alarms); every switch is off by default.
   level: null,
   anyOn() { const s = Settings.profile.sounds; return !!(s && (s.player || s.died || s.levelUp || s.unique)); },
+  soxOn(tier = 0) { const s = Settings.profile.hunt.pickup.soxSeals || {}; return tier ? s[SOX_SEALS[tier - 1]] === true : SOX_SEALS.some(seal => s[seal] === true); },
   init() {
     bus.on('alert', (kind, e) => { if (kind === 'player' && e && Settings.profile.sounds?.player) this.play('player'); });
     bus.on('death', e => { if (e?.gid === World.localGid() && Settings.profile.sounds?.died) this.play('died'); });

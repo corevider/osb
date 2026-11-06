@@ -232,6 +232,10 @@ async function tickProof(browser, localPort) {
     await page.getByRole('button', { name: 'Skills', exact: true }).click();
     await page.getByRole('button', { name: 'Add Test attack', exact: true }).click();
     assert.equal(await page.evaluate(() => SROLean.settings.profile.macro.rotations.normal[0].id), 5);
+    const clippedTabs = await page.evaluate(() => [...document.getElementById('sro-bot-lean').shadowRoot.querySelectorAll('.class-tabs button')]
+      .filter(b => b.scrollWidth > b.clientWidth + 1 || [...b.querySelectorAll('span')].some(s => s.scrollWidth > s.clientWidth + 1)).map(b => b.textContent));
+    assert.deepEqual(clippedTabs, [], 'every rotation tab label fits in the compact window');
+    await page.locator('.class-tabs').screenshot({ path: __dirname + '/lean-rotation-tabs.png' });
     // A share code is compressed with the browser's own stream and opens again to the same settings, without the hunting spot.
     const shared = await page.evaluate(async () => {
       const share = SROLean.share, code = await share.encode(share.text(true)), profile = await share.parse(code);
@@ -395,7 +399,7 @@ async function tickProof(browser, localPort) {
     assert.deepEqual(await page.evaluate(() => JSON.parse(JSON.stringify(SROLean.settings.profile.party.support))), {
       enabled: true, whileStopped: false, range: 30, heal: { id: 9, group: 9, pct: 70, self: false }, group: { id: 0, group: 0, pct: 60, count: 2 },
       buffs: [{ id: 9, group: 9, only: 'Mate' }] });
-    assert.equal(await page.getByText('Not in a party.', { exact: true }).isVisible(), true);
+    assert.equal(await page.getByText('Not in a party.', { exact: true }).first().isVisible(), true);
     await page.evaluate(() => {
       SROLean.world.gp.social = { localName: 'TestHero', self: 10, leader: 10, options: 1, members: [{ id: 10, name: 'TestHero', status: 0xaa }, { id: 11, name: 'Mate', level: 31, status: 0x76 }] };
       SROLean.world.ents.set(70, { gid: 70, kind: 'player', name: 'Mate', regionId: 1, x: 150, y: 0, z: 100, appearanceState: [0] });

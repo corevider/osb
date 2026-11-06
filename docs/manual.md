@@ -49,6 +49,16 @@ The catalogue normally loads from the game's data files. When the site does not 
 
 While hunting, the primary weapon is the combat weapon. When something else is worn (after a reconnect or a manual change), the bot puts it back on, with the chosen shield when it is one-handed; a bow wears arrows and a crossbow bolts: the worn stack when it fits, otherwise the biggest stack in your bag, and the next one when a stack runs out. A secondary bow or crossbow gets its ammunition the same way. Under each buff, **Keep <skill> up** chooses **While hunting** (the default) or **Hunting and walk-back**: a walk-back buff is also kept up while the bot walks back to the hunting spot or between towns — speed or stealth skills stay on for the whole trip. Under each buff, **Gear for <skill>** can be **Primary weapon**, **Secondary weapon** or **Shield (with a one-handed weapon)**: the bot wears it, casts the buff, then goes back to the primary weapon. Automatic buff swaps try the secondary weapon first, then the primary. A primary weapon or shield the game will not equip is not tried again until you pick it again, and the gear worn before goes back on; any other refused move waits five minutes. Hunting goes on either way. Without a primary weapon chosen, whatever is worn stays the combat gear.
 
+## Attack rotations
+
+**Combat → Skills → Attack rotation** has one rotation per monster class, from the weakest to the strongest: **Normal**, **Champion**, **Party**, **Giant**, **Party champion**, **Party giant**, **Elite** and **Unique**. Titans use the Unique rotation. Pick a class tab, then click skill icons to build its attack order, as before.
+
+With **Empty rotations use the class below** on (the default), a class with an empty rotation uses the rotation of the next class below it in that order, and if that one is empty too, the next one down, as far as Normal. For example, a Unique with empty Unique and Elite rotations uses Party giant; a Party champion with an empty rotation uses Giant, else Party, else Champion, else Normal. A class never borrows from a class above it. When every class down to Normal is empty, the bot uses normal attacks only (if **Use normal attacks** is on). With the switch off, an empty class uses normal attacks only.
+
+An empty class shows which rotation it uses right now, for example "Empty: uses Party giant", under the tabs and when you point at its tab; it changes as soon as you fill or clear a rotation. The same rotation is used when hunting, when protecting party members and when the bot works out how close it must get to a monster.
+
+Settings from earlier versions keep their Normal, Champion, Giant, Party, Elite and Unique rotations. Earlier versions used the Party rotation for every party monster, so when your Party rotation has skills, Party champion and Party giant start as a copy of it and fight as before; otherwise they start empty. Share codes and settings files carry all eight rotations, and older ones still import the same way.
+
 ## Berserk
 
 Under **Combat → Berserk when the gauge is full, on**, tick the monster kinds berserk is spent on (only Giants by default; it fires once the gauge is full, so the gauge waits for a ticked kind). **Also berserk when this many monsters attack at once** (0 = off) fires a full gauge whatever the monsters' kind once that many living monsters attack at the same time — the defensive panic button of a luring tank or an over-pulled spot; it also works while luring, where no target kind is ever consulted.
@@ -361,7 +371,7 @@ Under **Settings → Anti-stuck**, the bot watches for progress while hunting: a
 
 ## SoX alerts
 
-When the bot confirms a pickup of Star, Moon or Sun equipment, it shows the item name and tier and plays a short chime. Turn it off with **Chime and notice when a SoX item is picked up** in **Loot**; **Test SoX chime** previews the sound. The count also appears under Session stats. It needs the item catalogue, which loads automatically when hunting starts, and it only announces bot pickups.
+When the bot confirms a pickup of Star, Moon or Sun equipment, it shows the item name and tier and plays a short chime. **Loot → Collection** has one switch per seal: **Chime and notice when Star gear is picked up**, and the same for **Moon** and **Sun** (all three on by default). The chime and notice come only for the ticked seals; untick all three to turn them off. **Test SoX chime** previews the sound. Settings from earlier versions that had the single SoX chime switch on get all three ticked, and those that had it off get none. The count also appears under Session stats. It needs the item catalogue, which loads automatically when hunting starts, and it only announces bot pickups.
 
 ## Alert sounds
 

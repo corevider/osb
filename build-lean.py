@@ -145,6 +145,18 @@ combat = combat.replace(helper_old, """  // Why the last normal attack replaced 
   },
 
 """ + helper_old)
+rotation_old = """  rotation(cls) {
+    const M = Settings.profile.macro;
+    const list = M.rotations[rotationKey(cls)] || [];
+    if (!list.length && M.fallbackToNormal) return M.rotations.normal || [];
+    return list;
+  },"""
+assert combat.count(rotation_old) == 1
+combat = combat.replace(rotation_old, """  rotation(cls) {
+    return Rotations.list(cls);
+  },""")
+assert combat.count('this.rotation(cls)') == 2
+combat = combat.replace('this.rotation(cls)', 'this.rotation(Rotations.classOf(target))')
 attackable = section('const isAttackableMob =', '// Automatic potion shopping.')
 hunt = section('const Hunt =', '// Independent return command:') if '// Independent return command:' in original else section('const Hunt =', '// Independent return command using')
 hunt = hunt.replace('    Assets.skills(this.knownSkillIds());', '')
@@ -241,7 +253,7 @@ skin += '\nconst LEAN_CSS = ' + __import__('json').dumps((base / 'lean-skin.css'
 header = '''// ==UserScript==
 // @name         OSB
 // @namespace    https://github.com/corevider/osb
-// @version      2.0.1
+// @version      2.0.2
 // @homepageURL  https://github.com/corevider/osb
 // @supportURL   https://github.com/corevider/osb/issues
 // @updateURL    https://raw.githubusercontent.com/corevider/osb/main/osb.meta.js
@@ -265,7 +277,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[OSB] Another SRO assistant is active. Disable it and reload to use OSB.');
   return;
 }
-const VERSION = '2.0.1';
+const VERSION = '2.0.2';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });

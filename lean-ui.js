@@ -768,16 +768,19 @@ const UI = {
   },
   section_combatRotation(host) {
     const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();
-      this.rotationClass ||= 'normal';
+      if (!CLASS_KEYS.includes(this.rotationClass)) this.rotationClass = 'normal';
       const classes = el('div', null, 'class-tabs');
       for (const key of CLASS_KEYS) {
-        const tab = this.button('', () => { this.rotationClass = key; this.draw(); });
-        tab.setAttribute('aria-label', 'Rotation for ' + key); tab.setAttribute('aria-selected', String(key === this.rotationClass));
-        const icon = el('i'); icon.style.backgroundImage = `var(--s-tw_${key})`;
-        tab.append(icon, el('span', key)); classes.append(tab);
+        const tab = this.button('', () => { this.rotationClass = key; this.draw(); }), hint = Rotations.hint(key, M());
+        tab.setAttribute('aria-label', 'Rotation for ' + ROTATION_LABELS[key] + (hint ? '. ' + hint : '')); tab.setAttribute('aria-selected', String(key === this.rotationClass));
+        if (hint) { tab.title = hint; tab.className = 'unset'; }
+        for (const icon of ROTATION_ICONS[key]) { const i = el('i'); i.style.backgroundImage = `var(--s-${icon})`; tab.append(i); }
+        tab.append(el('span', ROTATION_LABELS[key])); classes.append(tab);
       }
+      const hint = Rotations.hint(this.rotationClass, M());
       const rotation = this.group('Attack rotation', classes,
-        this.check('Empty classes use Normal rotation', () => M().fallbackToNormal, v => M().fallbackToNormal = v),
+        el('p', hint || ROTATION_LABELS[this.rotationClass] + ' uses its own rotation.', 'muted rotation-hint'),
+        this.check('Empty rotations use the class below', () => M().fallbackToNormal, v => { M().fallbackToNormal = v; this.draw(); }),
         this.check('Use normal attacks', () => M().normalAttack, v => M().normalAttack = v));
       this.skillList(rotation, M().rotations[this.rotationClass]); host.append(rotation);
   },
@@ -816,7 +819,7 @@ const UI = {
       const options = this.group('Collection', this.check('Pick up drops', () => L().enabled, v => L().enabled = v));
       options.append(this.select('Default collector', [['character', 'Character'], ['pet', 'Pickup pet']], () => L().collector, v => { L().collector = v; Loot.reset(); }));
       options.append(this.check('Chime when pet bag is full', () => L().petFullSound, v => { L().petFullSound = v; Loot.fullAlert = null; }), this.button('Test pet chime', () => Sound.test()),
-        this.check('Chime and notice when a SoX item is picked up', () => L().soxSound, v => L().soxSound = v), this.button('Test SoX chime', () => Sound.test('sox')));
+        ...SOX_SEALS.map((seal, i) => this.check(`Chime and notice when ${['Star', 'Moon', 'Sun'][i]} gear is picked up`, () => L().soxSeals[seal], v => L().soxSeals[seal] = v)), this.button('Test SoX chime', () => Sound.test('sox')));
       this.petNote = el('p', '', 'muted pet-note'); options.append(this.petNote);
       options.append(this.row(...[['Elixirs only','elixirs'],['Elixirs + gold','elixirs-gold'],['All items','all']].map(([label,mode]) => this.button(label, () => { Loot.preset(mode); this.draw(); }))));
       for (const [key, label] of [['soxOnly', 'Equipment: only SoX (Star / Moon / Sun)'], ['skipStar', "Equipment: don't pick up Star gear (Moon and Sun still are)"], ['afterKillOnly', 'Character: finish the current fight before picking up']]) options.append(this.check(label, () => L()[key], v => L()[key] = v));

@@ -31,7 +31,7 @@ const Stats = {
     this.potions = []; this.potionTotals.clear();
     this.sample(); this.render();
   },
-  huntStart() { this.sample(); this.loadLevels(); if (Hunt.cfg().pickup.soxSound) Loot.ensureCatalogue(); },
+  huntStart() { this.sample(); this.loadLevels(); if (Sound.soxOn()) Loot.ensureCatalogue(); },
   huntStop() { this.sample(); },
   count(kind) {
     if (kind in this.values) this.values[kind]++;
@@ -46,7 +46,7 @@ const Stats = {
   soxFound(a, tier) {
     this.session.sox++;
     const name = a.name || Items.name(a.ref), label = ['Star', 'Moon', 'Sun'][tier - 1];
-    if (!Hunt.cfg().pickup.soxSound) return;
+    if (!Sound.soxOn(tier)) return;
     UI.toast('SoX found: ' + name + ' (' + label + ')', 'info', 10000);
     Sound.play('sox');
   },

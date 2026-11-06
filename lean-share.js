@@ -66,12 +66,15 @@ const ProfileShare = {
   // The settings an import would leave you with: the shared ones, plus your own positions and wardrobe.
   build(imported) {
     const own = this.personal(Settings.profile);
-    return this.restore(botProfile(this.conform(DEFAULT_PROFILE, imported)), own);
+    return this.restore(botProfile(this.conform(DEFAULT_PROFILE, upgradeProfile(imported))), own);
   },
   // Starter settings: changes laid over the current settings (arrays are replaced, everything else you have stays).
   overlay(settings) { return botProfile(deepMerge(this.clone(Settings.profile), settings)); },
   text(share = true) {
-    const profile = this.diff(share ? this.strip(Settings.profile) : Settings.profile, DEFAULT_PROFILE) || {};
+    const source = share ? this.strip(Settings.profile) : Settings.profile, profile = this.diff(source, DEFAULT_PROFILE) || {};
+    const rotations = { ...profile.macro?.rotations };
+    for (const key of ['partyChampion', 'partyGiant']) rotations[key] = this.clone(source.macro.rotations[key] || []);
+    profile.macro = { ...profile.macro, rotations };
     return JSON.stringify({ app: SHARE.apps[0], format: SHARE.format, version: VERSION, profile }, null, share ? 0 : 2);
   },
   // Text <-> bytes <-> base64 without relying on browser-only helpers.

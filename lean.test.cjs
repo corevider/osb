@@ -3,7 +3,7 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const source = fs.readFileSync(__dirname + '/osb.user.js', 'utf8');
 const isolated = source.slice(0, source.lastIndexOf('installWorkerHook();')) +
-  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Assets, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Protect, Town, Travel, Quest, QuestData, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, SellStar, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, Equip, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, LevelSpot, ScrollBuff, boot, Ticker, Sound, LeanMap, Telemetry};\n})();';
+  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Assets, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Protect, Town, Travel, Quest, QuestData, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, SellStar, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, Equip, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, LevelSpot, ScrollBuff, boot, Ticker, Sound, LeanMap, Telemetry, Rotations};\n})();';
 function fixture(document, sharedStorage) {
   let time = 100000;
   const storage = sharedStorage || new Map(), commands = [], notices = [], intervals = [], timers = [];
@@ -2737,9 +2737,9 @@ test('SoX pickups are counted and announced once; gold, unknown items and stoppe
   pick(901); assert.equal(f.Stats.session.sox, 1); assert.deepEqual(chimes, ['sox']);
   assert.ok(f.notices.some(n => /SoX found: Sword \(Star\)/.test(n))); assert.equal(f.Stats.display().sox, '1');
   pick(902); pick(999); pick(901, true); assert.equal(f.Stats.session.sox, 1); assert.equal(chimes.length, 1);
-  f.Settings.profile.hunt.pickup.soxSound = false; f.notices.length = 0; pick(901);
+  f.Settings.profile.hunt.pickup.soxSeals.star = false; f.notices.length = 0; pick(901);
   assert.equal(f.Stats.session.sox, 2); assert.equal(chimes.length, 1); assert.equal(f.notices.some(n => /SoX/.test(n)), false);
-  f.Settings.profile.hunt.pickup.soxSound = true; f.Hunt.stop(); pick(901); assert.equal(f.Stats.session.sox, 2);
+  f.Settings.profile.hunt.pickup.soxSeals.star = true; f.Hunt.stop(); pick(901); assert.equal(f.Stats.session.sox, 2);
   f.Hunt.start(); f.Stats.reset(); assert.equal(f.Stats.session.sox, 0);
 });
 test('SoX chime is a distinct audible alert and unknown sounds stay silent', () => {
@@ -2840,6 +2840,41 @@ test('auto stat points is off by default, waits for a living character and never
   unknown.Controller.tick(); assert.deepEqual(statSends(unknown), []); assert.match(unknown.StatPoints.status(), /not known yet/);
 });
 const plain = v => JSON.parse(JSON.stringify(v));
+test('the SoX chime and notice play only for the ticked seals', () => {
+  const f = fixture(), seals = f.Settings.profile.hunt.pickup.soxSeals; let chimes = [];
+  f.Sound.play = kind => { chimes.push(kind); return true; };
+  ['A', 'B', 'C'].forEach((tier, i) => f.Items.data.set(911 + i, { name: 'Sword ' + tier, icon: '', code: 'ITEM_CH_SWORD_08_' + tier + '_RARE' }));
+  assert.deepEqual([911, 912, 913].map(ref => f.Items.sox(ref)), [1, 2, 3]);
+  const pick = ref => { chimes = []; f.notices.length = 0; f.Stats.pickup({ ref, name: 'Sword', gold: false, petGid: 0, before: 0 }); return chimes.length === 1 && f.notices.some(n => /^SoX found/.test(n)); };
+  f.Hunt.start();
+  assert.deepEqual(plain(seals), { star: true, moon: true, sun: true }, 'all three on by default');
+  assert.deepEqual([911, 912, 913].map(pick), [true, true, true]);
+  for (const [i, seal] of ['star', 'moon', 'sun'].entries()) {
+    for (const k of ['star', 'moon', 'sun']) seals[k] = k === seal;
+    assert.deepEqual([911, 912, 913].map(pick), [0, 1, 2].map(j => j === i), 'only ' + seal);
+  }
+  seals.star = seals.moon = seals.sun = false;
+  assert.deepEqual([911, 912, 913].map(pick), [false, false, false]);
+  assert.equal(f.Stats.session.sox, 15, 'every SoX pickup is still counted');
+  assert.equal(f.Sound.soxOn(), false); seals.moon = true; assert.equal(f.Sound.soxOn(), true); assert.equal(f.Sound.soxOn(2), true); assert.equal(f.Sound.soxOn(1), false);
+});
+test('the old single SoX sound switch becomes the three seals, and shares carry them', async () => {
+  const f = fixture();
+  assert.deepEqual(plain(f.botProfile({ hunt: { pickup: { soxSound: true } } }).hunt.pickup.soxSeals), { star: true, moon: true, sun: true });
+  const off = f.botProfile({ hunt: { pickup: { soxSound: false, gold: false } } }).hunt.pickup;
+  assert.deepEqual(plain(off.soxSeals), { star: false, moon: false, sun: false }, 'the sound off: no seal ticked');
+  assert.equal('soxSound' in off, false); assert.equal(off.gold, false);
+  assert.deepEqual(plain(f.botProfile({ hunt: { pickup: { gold: true } } }).hunt.pickup.soxSeals), { star: true, moon: true, sun: true }, 'never set: the old default, on');
+  assert.deepEqual(plain(f.botProfile({ hunt: { pickup: { soxSound: false, soxSeals: { star: true, moon: 'yes' } } } }).hunt.pickup.soxSeals), { star: true, moon: false, sun: true }, 'saved seals win and are checked');
+  f.Settings.profile.hunt.pickup.soxSeals = { star: false, moon: true, sun: false };
+  const g = fixture(); g.ProfileShare.pending = await g.ProfileShare.preview(await f.ProfileShare.encode(f.ProfileShare.text(true))); g.ProfileShare.apply();
+  assert.deepEqual(plain(g.Settings.profile.hunt.pickup.soxSeals), { star: false, moon: true, sun: false }, 'share round trip');
+  assert.deepEqual(plain(f.botProfile(JSON.parse(f.ProfileShare.text(false)).profile).hunt.pickup.soxSeals), { star: false, moon: true, sun: false }, 'the settings file holds them');
+  const old = await g.ProfileShare.preview(JSON.stringify({ app: 'osb', format: 1, profile: { hunt: { pickup: { soxSound: false } } } }));
+  assert.deepEqual(plain(old.next.hunt.pickup.soxSeals), { star: false, moon: false, sun: false }, 'an old share with the sound off imports with none ticked');
+  const u = fixture(); u.storage.set('sroBotLean:v1:backup:profile:default', JSON.stringify({ at: 1, profile: { hunt: { pickup: { soxSound: false } } } }));
+  assert.equal(u.ProfileShare.undo(), true); assert.deepEqual(plain(u.Settings.profile.hunt.pickup.soxSeals), { star: false, moon: false, sun: false }, 'an old backup too');
+});
 function shareFixture() {
   const f = fixture(), p = f.Settings.profile;
   p.hunt.center = { regionId: 5, x: 10, y: 0, z: 20 }; p.hunt.radius = 250; p.mastery.enabled = true; p.mastery.ids = [257];
@@ -3128,6 +3163,138 @@ test('combat uses the rotation skill when it can, and explains every normal atta
   f.Combat.fight(f.World.ents.get(30)); assert.match(f.Diagnostics.main(), /Combat: normal attack \(1 cooling down\)/);
   f.advance(9000); assert.equal(f.Combat.fallbackNote(), '', 'the reason expires once skills are used again');
   assert.ok(f.Combat.fallbackNote(true), 'but the log wording stays available');
+});
+const ROTATION_CLASSES = ['normal', 'champion', 'party', 'giant', 'partyChampion', 'partyGiant', 'elite', 'unique'];
+const ROTATION_GRADES = { normal: [0, 0], champion: [1, 0], party: [0, 1], giant: [4, 0], partyChampion: [1, 1], partyGiant: [4, 1], elite: [6, 0], unique: [3, 0], titan: [5, 0] };
+function rotationFixture() {
+  const f = combatFixture();
+  f.World.rebuildCatalog(ROTATION_CLASSES.map((key, i) => ({ id: 601 + i, group: 61 + i, level: 1, name: 'Skill ' + key, targetRequired: true, mp: 5, cooldownGroup: 0 })));
+  f.World.applyGameplay({ ...f.World.gp, skills: ROTATION_CLASSES.map((key, i) => 601 + i) });
+  const M = f.Settings.profile.macro;
+  const only = (...keys) => { ROTATION_CLASSES.forEach((key, i) => { M.rotations[key] = keys.includes(key) ? [{ id: 601 + i, group: 61 + i }] : []; }); };
+  const grade = key => { const [rarity, rarityAuxIcon] = ROTATION_GRADES[key]; return Object.assign(f.World.ents.get(30), { rarity, rarityAuxIcon }); };
+  const cast = key => {
+    f.advance(5000); f.commands.length = 0; f.Combat.fight(grade(key));
+    const c = f.commands[0];
+    return c?.kind === 'skill' ? ROTATION_CLASSES[c.skillId - 601] : c?.kind;
+  };
+  only();
+  return { f, M, only, grade, cast };
+}
+test('monster class detection gives each of the eight rotation classes, and titans the Unique one', () => {
+  const { f, grade } = rotationFixture();
+  for (const key of ROTATION_CLASSES) assert.equal(f.Rotations.classOf(grade(key)), key, key);
+  assert.equal(f.Rotations.classOf(grade('titan')), 'unique', 'a titan uses the Unique rotation');
+  assert.equal(f.Rotations.classOf({ rarity: 2, rarityAuxIcon: 0 }), 'normal', 'an unknown grade counts as normal');
+  assert.equal(f.Rotations.classOf({ rarity: 6, rarityAuxIcon: 1 }), 'party', 'a party monster of another grade stays Party, as before');
+  assert.equal(f.Rotations.classOf(null), 'normal');
+});
+test('every monster class fights with its own rotation when it has one', () => {
+  const { only, cast } = rotationFixture();
+  only(...ROTATION_CLASSES);
+  for (const key of ROTATION_CLASSES) assert.equal(cast(key), key, key + ' casts its own skill');
+  assert.equal(cast('titan'), 'unique');
+});
+test('an empty rotation uses the next filled class below it, down to Normal', () => {
+  const { only, cast } = rotationFixture();
+  for (let i = 1; i < ROTATION_CLASSES.length; i++) {
+    only(ROTATION_CLASSES[i - 1]);
+    assert.equal(cast(ROTATION_CLASSES[i]), ROTATION_CLASSES[i - 1], ROTATION_CLASSES[i] + ' falls back one step');
+  }
+  only('normal');
+  for (const key of ROTATION_CLASSES) assert.equal(cast(key), 'normal', key + ' reaches Normal through the whole chain');
+  assert.equal(cast('titan'), 'normal');
+  only('normal', 'partyGiant');
+  assert.equal(cast('unique'), 'partyGiant', 'a Unique with empty Unique and Elite rotations uses Party giant');
+  assert.equal(cast('elite'), 'partyGiant'); assert.equal(cast('partyChampion'), 'normal', 'a class never borrows from above');
+  for (const [filled, expected] of [[['normal', 'champion', 'party', 'giant'], 'giant'], [['normal', 'champion', 'party'], 'party'], [['normal', 'champion'], 'champion'], [['normal'], 'normal']]) {
+    only(...filled); assert.equal(cast('partyChampion'), expected, 'party champion with ' + filled.join(', '));
+  }
+  only('champion'); assert.equal(cast('normal'), 'attack', 'Normal has nothing below it');
+});
+test('with every rotation empty, or the fallback switch off, an empty class uses no skills', () => {
+  const { f, M, only, cast } = rotationFixture();
+  only();
+  for (const key of ROTATION_CLASSES) assert.equal(cast(key), 'attack', key + ': normal attack as before');
+  assert.match(f.Combat.fallbackNote(), /no skills in the rotation/);
+  only('normal'); M.fallbackToNormal = false;
+  assert.equal(cast('normal'), 'normal'); assert.equal(cast('elite'), 'attack', 'the switch off keeps an empty class empty');
+  M.normalAttack = false; assert.equal(cast('elite'), undefined, 'and with normal attacks off nothing is sent');
+});
+test('chasing reads the reach of the rotation the class really uses', () => {
+  const { f, only, grade } = rotationFixture();
+  f.World.catalog.get(601).range = 300; f.World.catalog.get(604).range = 80;
+  only('normal', 'giant');
+  assert.equal(f.Chase.radius(grade('partyGiant')), 75, 'a party giant with no own rotation uses the Giant reach');
+  assert.equal(f.Chase.radius(grade('champion')), 120, 'a champion uses Normal');
+});
+test('old settings keep their rotations; party champions and party giants keep the Party rotation', () => {
+  const f = fixture(), skill = id => [{ id, group: id }];
+  const old = { macro: { fallbackToNormal: true, rotations: { normal: skill(1), champion: skill(2), giant: skill(3), party: skill(4), elite: skill(5), unique: skill(6) } } };
+  const R = f.botProfile(JSON.parse(JSON.stringify(old))).macro.rotations;
+  assert.deepEqual(plain(R), { normal: skill(1), champion: skill(2), party: skill(4), giant: skill(3), partyChampion: skill(4), partyGiant: skill(4), elite: skill(5), unique: skill(6) });
+  assert.deepEqual(Object.keys(R), ROTATION_CLASSES, 'the eight classes in order');
+  R.partyGiant[0].id = 99; assert.equal(R.party[0].id, 4, 'the copies are separate lists');
+  const empty = f.botProfile({ macro: { rotations: { normal: skill(1), giant: skill(3), party: [] } } }).macro.rotations;
+  assert.deepEqual(plain(empty.partyChampion), []); assert.deepEqual(plain(empty.partyGiant), [], 'with no Party rotation the new classes start empty');
+  const kept = f.botProfile({ macro: { rotations: { party: skill(4), partyChampion: [], partyGiant: skill(9) } } }).macro.rotations;
+  assert.deepEqual(plain(kept.partyChampion), []); assert.deepEqual(plain(kept.partyGiant), skill(9), 'saved new classes are never overwritten');
+  assert.deepEqual(plain(f.botProfile({ macro: { rotations: { normal: 'x', elite: null } } }).macro.rotations.normal), [], 'a broken rotation becomes empty');
+  assert.deepEqual(plain(f.botProfile({}).macro.rotations), Object.fromEntries(ROTATION_CLASSES.map(k => [k, []])));
+  const { cast, M } = rotationFixture();
+  Object.assign(M, f.botProfile({ macro: { rotations: { normal: [{ id: 601, group: 61 }], giant: [{ id: 604, group: 64 }], party: [{ id: 603, group: 63 }] } } }).macro);
+  assert.equal(cast('partyChampion'), 'party', 'a party champion still uses the Party rotation after the upgrade');
+  assert.equal(cast('partyGiant'), 'party'); assert.equal(cast('party'), 'party'); assert.equal(cast('giant'), 'giant');
+  assert.equal(cast('elite'), 'party', 'an empty Elite now takes the class below (Party giant, a copy of Party)');
+});
+test('share codes and backups carry all eight rotations, and old ones still import', async () => {
+  const f = fixture(), M = f.Settings.profile.macro;
+  ROTATION_CLASSES.forEach((key, i) => { M.rotations[key] = [{ id: 700 + i, group: 70 + i }]; });
+  const g = fixture(); g.ProfileShare.pending = await g.ProfileShare.preview(await f.ProfileShare.encode(f.ProfileShare.text(true)));
+  assert.equal(g.ProfileShare.apply(), true);
+  assert.deepEqual(plain(g.Settings.profile.macro.rotations), plain(M.rotations), 'share round trip');
+  assert.deepEqual(plain(JSON.parse(f.ProfileShare.text(false)).profile.macro.rotations), plain(M.rotations), 'the full backup holds them');
+  M.rotations.partyChampion = []; M.rotations.partyGiant = [];
+  const h = fixture(); h.ProfileShare.pending = await h.ProfileShare.preview(await f.ProfileShare.encode(f.ProfileShare.text(true))); h.ProfileShare.apply();
+  assert.deepEqual(plain(h.Settings.profile.macro.rotations.partyChampion), [], 'an empty new class stays empty through a share');
+  assert.deepEqual(plain(h.Settings.profile.macro.rotations.partyGiant), []);
+  assert.deepEqual(plain(h.Settings.profile.macro.rotations.party), [{ id: 702, group: 72 }]);
+  const oldShare = JSON.stringify({ app: 'nixxane-bot', format: 1, profile: { macro: { rotations: { party: [{ id: 9, group: 9 }], elite: [{ id: 8, group: 8 }] } } } });
+  const imported = (await h.ProfileShare.preview(oldShare)).next.macro.rotations;
+  assert.deepEqual(plain(imported.partyChampion), [{ id: 9, group: 9 }]); assert.deepEqual(plain(imported.partyGiant), [{ id: 9, group: 9 }], 'an old share keeps the Party rotation for party champions and giants');
+  assert.deepEqual(plain(imported.elite), [{ id: 8, group: 8 }]);
+  const u = fixture();
+  u.storage.set('sroBotLean:v1:backup:profile:default', JSON.stringify({ at: 1, profile: { macro: { rotations: { party: [{ id: 9, group: 9 }] } } } }));
+  assert.equal(u.ProfileShare.undo(), true, 'an old backup restores');
+  assert.deepEqual(plain(u.Settings.profile.macro.rotations.partyGiant), [{ id: 9, group: 9 }]);
+});
+test('Combat > Skills shows the eight rotations in order and names the class an empty one falls back to', () => {
+  const document = { createElement(tag) {
+    const events = {};
+    return { tag, children: [], className: '', value: '', dataset: {}, style: {}, attributes: {},
+      setAttribute(k, v) { this.attributes[k] = v; }, append(...children) { this.children.push(...children); }, replaceChildren(...children) { this.children = children; },
+      addEventListener(name, fn) { events[name] = fn; }, fire(name) { events[name]?.(); }, querySelectorAll() { return []; } };
+  } };
+  const f = fixture(document); f.UI.refreshers = []; f.UI.tip = {};
+  const M = f.Settings.profile.macro, find = (node, match) => match(node) ? node : (node.children || []).map(c => find(c, match)).find(Boolean);
+  let host;
+  const render = () => { host = document.createElement('div'); f.UI.section_combatRotation(host); };
+  f.UI.draw = render;
+  const tabs = () => find(host, n => n.className === 'class-tabs').children;
+  const label = tab => tab.children.at(-1).textContent, hint = () => find(host, n => /rotation-hint/.test(n.className)).textContent;
+  M.rotations.normal = [{ id: 1, group: 1 }]; render();
+  assert.deepEqual(tabs().map(label), ['Normal', 'Champion', 'Party', 'Giant', 'Party champion', 'Party giant', 'Elite', 'Unique']);
+  assert.deepEqual(tabs().map(t => t.title || ''), ['', ...Array(7).fill('Empty: uses Normal')]);
+  assert.equal(tabs()[4].children.length, 3, 'party champion shows the party and champion marks');
+  assert.equal(hint(), 'Normal uses its own rotation.');
+  M.rotations.partyGiant = [{ id: 2, group: 2 }]; tabs()[7].fire('click');
+  assert.equal(f.UI.rotationClass, 'unique'); assert.equal(hint(), 'Empty: uses Party giant');
+  assert.equal(tabs()[6].title, 'Empty: uses Party giant'); assert.equal(tabs()[4].title, 'Empty: uses Normal');
+  assert.equal(tabs()[7].attributes['aria-label'], 'Rotation for Unique. Empty: uses Party giant');
+  M.rotations.partyGiant = []; render(); assert.equal(hint(), 'Empty: uses Normal', 'the hint follows a cleared rotation');
+  M.rotations.normal = []; render(); assert.equal(hint(), 'Empty: no skills');
+  M.rotations.normal = [{ id: 1, group: 1 }]; M.fallbackToNormal = false; render(); assert.equal(hint(), 'Empty: no skills', 'with the switch off nothing is borrowed');
+  M.fallbackToNormal = true; f.UI.rotationClass = 'titan'; render(); assert.equal(f.UI.rotationClass, 'normal', 'an unknown class tab resets to Normal');
 });
 test('approaching a monster outside skill reach does not poison the rotation', () => {
   const f = combatFixture();
