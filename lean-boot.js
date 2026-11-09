@@ -1,14 +1,14 @@
 // The player's Start / stop (F8 and the buttons). What they choose is remembered for auto-start.
-function toggleBot() {
-  if (Alchemy.run || Alchemy.pending || Stall.run || SellStar.run || Hunt.running || Town.trip || Quest.trip || WalkBack.active || Travel.active || Restock.trip || Resurrect.trip || Controller.resumeAfterRevive) userStop();
+function toggleBot(reason) {
+  if (Alchemy.run || Alchemy.pending || Stall.run || SellStar.run || Hunt.running || Town.trip || Quest.trip || WalkBack.active || Travel.active || Restock.trip || Resurrect.trip || Controller.resumeAfterRevive) userStop(reason);
   else if (Restock.recording) UI.toast('Finish or cancel route recording before starting the bot.', 'warn');
   else { Hunt.start(); if (Hunt.running) RunIntent.set(true); }
 }
 
-function userStop() {
+function userStop(reason = 'stopped by you') {
   RunIntent.set(false);
   AutoStart.cancel('Auto-start cancelled.');
-  stopAll();
+  stopAll(reason);
   Reconnect.forgetHunting();
 }
 
@@ -41,9 +41,9 @@ function boot() {
   Combat.init(); Loot.init(); Alchemy.init(); BuffGear.init(); Stall.init();
   bus.on('character', name => {
     const key = name ? 'profile:' + name : 'profile:default';
-    if (key !== Settings.profileKey) { Town.lastScrollPoint = null; Town.deathPoint = null; stopAll(); Settings.useCharacter(name); }
+    if (key !== Settings.profileKey) { Town.lastScrollPoint = null; Town.deathPoint = null; stopAll('character changed'); Settings.useCharacter(name); }
   });
-  bus.on('profile', () => { PetPotion.reset(); AutoMastery.reset(); StatPoints.reset(); Trace.reset(); BuffGear.reset(); Equip.reset(); Town.lastScrollPoint = null; Town.deathPoint = null; Town.tier = {}; SpeedScroll.reset(); ScrollBuff.reset(); MallBuyer.reset(); MallBuyer.unpoison(); RepairHammer.reset(); Party.reset(); Resurrect.reset(); Quest.reset(); stopAll(); Restock.cancelRecording(); Restock.unbuyable.clear(); Loot.reset(); Wardrobe.applyNow(); UI.draw(); });
+  bus.on('profile', () => { PetPotion.reset(); AutoMastery.reset(); StatPoints.reset(); Trace.reset(); BuffGear.reset(); Equip.reset(); Town.lastScrollPoint = null; Town.deathPoint = null; Town.tier = {}; SpeedScroll.reset(); ScrollBuff.reset(); MallBuyer.reset(); MallBuyer.unpoison(); RepairHammer.reset(); Party.reset(); Resurrect.reset(); Quest.reset(); stopAll('settings changed'); Restock.cancelRecording(); Restock.unbuyable.clear(); Loot.reset(); Wardrobe.applyNow(); UI.draw(); });
   bus.on('phase', phase => {
     if (phase !== 'world') {
       BuffGear.interrupt('World transition interrupted buff swaps.', true);
@@ -56,11 +56,11 @@ function boot() {
       Resurrect.reset();
       if (Town.phase(phase) || Travel.phase(phase)) { Loot.reset(); return; }
       const revival = phase === 'entering-world' && Hunt.running && (Town.autoRevive() || Hunt.cfg().onDeath === 'revive') && (Hunt.state === 'dead' || Hunt.revived);
-      stopAll(); Restock.cancelRecording(); Loot.reset();
+      stopAll('world change'); Restock.cancelRecording(); Loot.reset();
       Controller.resumeAfterRevive = revival;
     }
   });
-  bus.on('failure', () => { BuffGear.interrupt('Connection failed during buff swaps.'); stopAll(); Restock.cancelRecording(); UI.toast('Game connection failed; bot stopped.', 'warn'); });
+  bus.on('failure', () => { BuffGear.interrupt('Connection failed during buff swaps.'); stopAll('game connection failed'); Restock.cancelRecording(); UI.toast('Game connection failed; bot stopped.', 'warn'); });
   bus.on('reset', () => {
     BuffGear.interrupt('World reset interrupted buff swaps.', true);
     if (Town.trip) {
@@ -75,7 +75,7 @@ function boot() {
     if (!e.isTrusted || e.repeat || e.isComposing) return;
     const target = e.composedPath()[0];
     if (target?.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target?.tagName || '')) return;
-    if (e.code === 'F8') { e.preventDefault(); e.stopImmediatePropagation(); toggleBot(); }
+    if (e.code === 'F8') { e.preventDefault(); e.stopImmediatePropagation(); toggleBot('stopped by you (F8)'); }
     else if (e.code === 'F6') { e.preventDefault(); e.stopImmediatePropagation(); UI.toggleMinimised(); }
     else if (e.code === 'F7') {
       e.preventDefault(); e.stopImmediatePropagation();
@@ -87,7 +87,7 @@ function boot() {
   Ticker.start(() => Controller.tick(), 100);
   setInterval(() => { Wardrobe.tick(); UI.update(); }, 500);
   W.SROLean = { version: VERSION, stats: Stats, updates: Updates, diagnostics: Diagnostics, reports: Reports, alchemy: Alchemy, buffGear: BuffGear, world: World, settings: Settings, hunt: Hunt, loot: Loot, speedScroll: SpeedScroll, repairHammer: RepairHammer, resurrect: Resurrect, stall: Stall, quest: Quest,
-    restock: Restock, town: Town, walkBack: WalkBack, travel: Travel, antiStuck: AntiStuck, chase: Chase, trap: Trap, autoMastery: AutoMastery, statPoints: StatPoints, share: ProfileShare, trace: Trace, setup: Setup, reconnect: Reconnect, petPotion: PetPotion, petAttack: PetAttack, mall: MallProbe, mallBuyer: MallBuyer, scrolls: ScrollBuff, navigation: Navigation, route: Route, wardrobe: Wardrobe, wardrobeData: WdData, learned: Learned, controller: Controller, ui: UI, activity: Activity, map: LeanMap, render: RenderControl, support: Support, items: ItemRules, stop: stopAll, log: Log };
+    restock: Restock, town: Town, walkBack: WalkBack, travel: Travel, antiStuck: AntiStuck, chase: Chase, trap: Trap, autoMastery: AutoMastery, statPoints: StatPoints, share: ProfileShare, trace: Trace, setup: Setup, reconnect: Reconnect, petPotion: PetPotion, petAttack: PetAttack, mall: MallProbe, mallBuyer: MallBuyer, scrolls: ScrollBuff, navigation: Navigation, route: Route, wardrobe: Wardrobe, wardrobeData: WdData, learned: Learned, controller: Controller, ui: UI, activity: Activity, map: LeanMap, render: RenderControl, support: Support, items: ItemRules, stop: () => userStop('stopped from outside the panel'), log: Log };
   Log.info('OSB ready. F8 starts/stops; F7 folds; F6 or the × minimises and restores; Shift+F7 hides/shows the window.');
 }
 

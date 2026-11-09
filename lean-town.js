@@ -8,6 +8,7 @@ const TOWN_SETTLE_MS = 60000;
 // Such a reload is done at most once in this time, so a game that never answers cannot reload the page in a loop.
 // The time of the last one is kept in localStorage under TOWN_STALL_KEY, across the reload.
 const TOWN_STALL_RELOAD_GAP_MS = 30 * 60000, TOWN_STALL_KEY = 'sro-lean-town-stall-reload';
+const TOWN_OPEN_WAIT_MS = 60000, TOWN_OPEN_TRIES = 3;
 // The service each transaction phase belongs to, to start it over after a stalled transaction.
 const TOWN_SERVICE_OF = { store: 'storage', buy: 'vendor', sell: 'smith', ammo: 'smith' };
 const MASTERY_IDS = [257, 258, 259, 273, 274, 275, 276, 513, 514, 515, 516, 517, 518];
@@ -315,6 +316,11 @@ const Town = {
     if (this.cfg().storage && Equip.wanted(item)) return false;
     return ItemRules.get(item.refObjId)?.act === 'sell' || this.plainGear(item);
   },
+  sellableDrained(item) {
+    if (!ItemRules.fromPet(item) || this.needed(item) || Alchemy.selected && Alchemy.selected.slot === item.slot) return false;
+    if (this.cfg().storage && Equip.wanted(item)) return false;
+    return this.sellable(item);
+  },
   // Ordinary race gear: equipment of TID3 1-6 or 9-12 (garments to accessories; 7 is job suits, 13 avatars and
   // devil spirits) with an ITEM_CH_ / ITEM_EU_ codename.
   // The codename comes from the item catalogue; until it has loaded nothing is sold from the bag.
@@ -416,7 +422,7 @@ const Town = {
     const inTown = this.inTown(revival);
     const origin = revival || inTown ? (reverseChoice === TOWN_REVERSE.death ? this.deathPoint || Hunt.cfg().center : this.lastScrollPoint || Hunt.cfg().center) : World.pose();
     if (!origin) return this.fail(inTown ? 'No saved hunting point to return to; set the hunting area first.' : 'No saved hunting point for revival return.');
-    if (!this.walks() && !this.scroll(0x19ec)) Log.info('No reverse return scroll: unless one is bought in town, the trip walks back to the hunting spot after the services.');
+    if (!this.walks() && !this.scroll(0x19ec)) Log.info(MallBuyer.reverseBlocked() ? 'No reverse return scroll: the trip walks back to the hunting spot after the services.' : 'No reverse return scroll: one is bought from the Item mall after the services.');
     if (revival) Hunt.running = true;
     Restock.trip = null;
     Resurrect.cancelTrip('', true); Resurrect.holdUntil = 0; Loot.suspend();
@@ -459,11 +465,21 @@ const Town = {
     const order = !sellFirst ? ['storage', 'vendor', 'smith', 'gate'] : full ? ['smith', 'storage', 'vendor', 'gate'] : ['storage', 'smith', 'vendor', 'gate'];
     return order.filter(role => (role !== 'storage' || this.cfg().storage) && (role !== 'gate' || !this.walks()));
   },
-  // The service to walk to after closing a window. After the last one: the world statue to reverse, or the walk back
-  // when no reverse scroll is carried (none was bought in town either).
+  // The service to walk to after closing a window. After the last one: the world statue to reverse; without a reverse
+  // scroll, first an Item mall purchase when that switch is on, otherwise the walk back.
   closeNext(phase) {
     const order = this.trip?.order || this.order(false), role = phase.replace(/^close-/, ''), next = order[order.indexOf(role) + 1] || 'gate';
-    return next === 'gate' && !this.reverses() ? 'leave' : 'walk-' + next;
+    if (next !== 'gate' || this.reverses()) return 'walk-' + next;
+    return !this.walks() && !this.trip?.recovery && !MallBuyer.reverseBlocked() ? 'mall-reverse' : 'leave';
+  },
+  mallReverse() {
+    const t = this.trip, result = MallBuyer.townReverse(t.at);
+    if (result === 'done' || this.reverses()) { Log.info('Town: Reverse Return Scroll bought from the Item mall.'); this.enter('walk-gate'); return; }
+    if (result === 'wait') { this.message = 'Buying a Reverse Return Scroll from the Item mall.'; return; }
+    this.message = result + ' Walking back to the hunting spot.';
+    Log.info('Town: ' + this.message);
+    UI.toast(this.message, 'warn', 6000);
+    this.enter('leave');
   },
   // A supply the merchant does not sell, or the gold did not cover, was skipped on purpose and is not a reason to stop.
   supplyShort(t) { return t.supplies.some(s => !t.buySkipped?.includes(s.refObjId) && Restock.count(s.refObjId) < s.target); },
@@ -555,10 +571,10 @@ const Town = {
   },
   open(role, kind) {
     const t = this.trip, gp = World.gp, npc = this.npc(role);
-    if (now() - t.at > 15000) { this.fail('Could not open ' + role + '.'); return false; }
+    if (now() - t.at > 15000) { this.openFailed(role, 'Could not open ' + role + '.'); return false; }
     if (!npc || gp.targetPending || gp.inventoryPending) return false;
     if (gp.target !== npc.gid) {
-      if (t.sent) { this.fail('Town NPC selection changed.'); return false; }
+      if (t.sent) { this.openFailed(role, 'Town NPC selection changed.'); return false; }
       if (Cmd.spaced('select')) Cmd.select(npc.gid);
       return false;
     }
@@ -574,6 +590,20 @@ const Town = {
     }
     if (role === 'storage') return gp.storage?.phase === 'open' && !gp.storage.guild && gp.storage.npc === npc.gid;
     return gp.shop?.npc === npc.gid && gp.shopCompletionRevision !== t.revision;
+  },
+  openFailed(role, reason) {
+    const t = this.trip, tries = t.openTries = t.openTries || {};
+    tries[role] = (tries[role] || 0) + 1;
+    if (tries[role] >= TOWN_OPEN_TRIES) return this.fail(reason);
+    this.enter('service-wait');
+    t.resume = 'walk-' + role;
+    this.message = 'Town cycle: the ' + this.role(role) + ' did not open; the town may still be loading. Waiting a minute (try ' + (tries[role] + 1) + ' of ' + TOWN_OPEN_TRIES + ' next).';
+    Log.warn(this.message);
+  },
+  serviceWait() {
+    const t = this.trip, gp = World.gp, npc = this.npc(t.resume.slice(5));
+    if ((gp.storage || Restock.activeShop() || npc && gp.target === npc.gid) && !gp.inventoryPending && now() >= t.retryAt && Cmd.raw({ kind: 'npc-close' }, 'Town: close NPC before trying again')) t.retryAt = now() + 5000;
+    if (now() - t.at >= TOWN_OPEN_WAIT_MS) this.enter(t.resume);
   },
   close(next) {
     const t = this.trip, gp = World.gp;
@@ -649,7 +679,8 @@ const Town = {
     const bagItem = t.staged ? World.items().find(i => i.slot === t.staged.slot && i.refObjId === t.staged.ref) : null;
     if (t.staged && !bagItem) return this.fail('Staged pet item changed unexpectedly.');
     // Gear the character picked up is deposited straight from the bag, then pet loot is staged through it.
-    const bagSox = bagItem ? null : World.items().find(i => this.depositItem(i, true) || this.stone(i) || t.equippedOut?.includes(BuffGear.key(i)));
+    ItemRules.pruneDrained();
+    const bagSox = bagItem ? null : World.items().find(i => this.depositItem(i, true) || this.stone(i) || t.equippedOut?.includes(BuffGear.key(i)) || ItemRules.fromPet(i) && this.eligible(i));
     const direct = bagItem || bagSox;
     const item = direct || pet?.rec.inventory.find(i => this.eligible(i));
     if (!item) {
@@ -711,7 +742,9 @@ const Town = {
     // bag sells before the pet, so a full bag frees the slots that pet loot has to pass through.
     const staged = t.staged ? World.items().find(i => i.slot === t.staged.slot && i.refObjId === t.staged.ref) : null;
     if (t.staged && !staged) return this.fail('Staged pet item changed unexpectedly.');
-    const bagItem = staged || (t.sellFirst ? World.items().find(i => this.sellableBag(i) && !unsold('bag:', i)) : null);
+    ItemRules.pruneDrained();
+    const bagItem = staged || (t.sellFirst ? World.items().find(i => this.sellableBag(i) && !unsold('bag:', i)) : null) ||
+      World.items().find(i => this.sellableDrained(i) && !unsold('bag:', i));
     const petItem = bagItem ? null : pet?.rec.inventory.find(i => this.sellable(i) && !unsold('pet:', i));
     const item = bagItem || null;
     if (petItem && !item) {
@@ -983,6 +1016,7 @@ const Town = {
       const role = t.phase.slice(5), kind = role === 'storage' ? 'storage-open' : role === 'gate' ? 'npc-talk' : 'shop-open';
       if (this.open(role, kind) && this.trip) this.enter({ storage: 'store', vendor: 'buy', smith: 'sell', gate: 'reverse' }[role]);
     } else if (t.phase === 'settle') this.settle();
+    else if (t.phase === 'service-wait') this.serviceWait();
     else if (t.phase === 'pet-revive') this.revivePet();
     else if (t.phase === 'store') this.store();
     else if (t.phase === 'buy') this.buy();
@@ -990,6 +1024,7 @@ const Town = {
     else if (t.phase === 'ammo') this.ammo();
     else if (t.phase === 'repair') this.repair();
     else if (t.phase === 'leave') this.leave();
+    else if (t.phase === 'mall-reverse') this.mallReverse();
     else if (t.phase.startsWith('close-')) {
       if (now() - t.at > 15000) this.fail('NPC window did not close.');
       else this.close(this.closeNext(t.phase));

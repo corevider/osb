@@ -165,6 +165,9 @@ hunt = hunt[:hunt.index('  tick() {')] + hunt[hunt.index('  currentTarget() {'):
 hunt = hunt.replace("    this.state = 'start';", "    Loot.reset();\n    this.state = 'start';")
 hunt = hunt.replace('    this.running = false;', '    Loot.suspend();\n    this.running = false;')
 hunt = hunt.replace('if (Restock.trip && World.inWorld() && !World.isDead()) Cmd.move(World.pose());', 'if (World.inWorld() && !World.isDead()) Cmd.move(World.pose());')
+stop_toast_old = "reason ? 'warn' : 'info', 3500);"
+assert hunt.count(stop_toast_old) == 1
+hunt = hunt.replace(stop_toast_old, "reason && !/^(stopped (by you|from outside)|walking back)/.test(reason) ? 'warn' : 'info', 3500);")
 # Anti-KS with a scope: all monsters, or only normal and champion ones (a high-damage character still
 # takes party/giant/elite/titan/unique monsters another player is fighting). One helper owns the
 # choice, so the quest preference and the diagnostics count the same way as the hunt itself.
@@ -253,7 +256,7 @@ skin += '\nconst LEAN_CSS = ' + __import__('json').dumps((base / 'lean-skin.css'
 header = '''// ==UserScript==
 // @name         OSB
 // @namespace    https://github.com/corevider/osb
-// @version      2.0.2
+// @version      2.0.3
 // @homepageURL  https://github.com/corevider/osb
 // @supportURL   https://github.com/corevider/osb/issues
 // @updateURL    https://raw.githubusercontent.com/corevider/osb/main/osb.meta.js
@@ -277,7 +280,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[OSB] Another SRO assistant is active. Disable it and reload to use OSB.');
   return;
 }
-const VERSION = '2.0.2';
+const VERSION = '2.0.3';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });

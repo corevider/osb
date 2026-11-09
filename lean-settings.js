@@ -47,7 +47,7 @@ function upgradeSoxSound(input) {
 }
 function upgradeProfile(input) { return upgradeSoxSound(Rotations.upgrade(input)); }
 const DEFAULT_PROFILE = {
-  items: { rules: {}, balance: false, autoEquip: false, gear: { primaryWeapon: null, secondaryWeapon: null, shield: null } },
+  items: { rules: {}, balance: false, petToBag: false, autoEquip: false, gear: { primaryWeapon: null, secondaryWeapon: null, shield: null } },
   sounds: { player: false, died: false, levelUp: false, unique: false },
   stall: { title: '', greeting: '', network: true, closeWhenEmpty: true, prices: {} },
   alchemy: { target: 3, limit: 20, elixir: 0, powder: false, use: { luck: false, steady: false, immortal: false, astral: false }, stones: { luck: 1, steady: 1, immortal: 1, astral: 1 }, stoneLimit: 0,
@@ -66,7 +66,7 @@ const DEFAULT_PROFILE = {
   lure: { enabled: false, points: [], taunt: { id: 0, group: 0 }, area: { id: 0, group: 0 }, holdS: 10, pauseEveryM: 10, pauseS: 4, radius: 15, returnHpPct: 50, stopAt: 0, stopOnPlayers: 0, stopAfter: 0 },
   pet: { attack: { on: false, recall: true, radius: 15, timeout: 3, resend: 5 } },
   scroll: { damageInc: false, damageAbs: false },
-  mall: { on: false, budgetSilk: 0, hp: { on: false, low: 10, target: 1000 }, mp: { on: false, low: 10, target: 1000 }, damageInc: { on: false, low: 5, target: 20 }, damageAbs: { on: false, low: 5, target: 20 }, reverse: { on: false, low: 10, target: 50 } },
+  mall: { on: false, budgetSilk: 0, hp: { on: false, low: 10, target: 1000 }, mp: { on: false, low: 10, target: 1000 }, damageInc: { on: false, low: 5, target: 20 }, damageAbs: { on: false, low: 5, target: 20 }, reverse: { on: false, low: 1, target: 5 } },
   party: { autoAcceptMatching: false, autoRecruit: false, joinMain: false, mainName: '', leaveIfNotLeader: false, onlyWhileRunning: false, acceptNames: '', autoRes: false, acceptRes: false, reviveWaitS: 20, resRadius: 300, title: 'Hunting party', min: 1, max: 90, purpose: 0, expShare: true, itemShare: true,
     support: { enabled: false, whileStopped: false, range: 30, heal: { id: 0, group: 0, pct: 60, self: false }, group: { id: 0, group: 0, pct: 60, count: 2 }, buffs: [] },
     protect: { enabled: false, all: false, names: [], range: 40, whileNoAttack: false } },
@@ -140,6 +140,11 @@ function botProfile(input) {
   if (!Number.isInteger(result.potion.delayMs) || result.potion.delayMs < 0 || result.potion.delayMs > 60000) result.potion.delayMs = DEFAULT_PROFILE.potion.delayMs;
   if (!['death', 'recall'].includes(result.potion.restock.town.deathReturn)) result.potion.restock.town.deathReturn = 'recall';
   if (!['reverse', 'walk'].includes(result.potion.restock.town.returnBy)) result.potion.restock.town.returnBy = 'reverse';
+  const merchantReverse = result.potion.restock.reverse, mallReverse = result.mall.reverse;
+  if (merchantReverse.on) {
+    if (!mallReverse.on) { mallReverse.low = merchantReverse.low; mallReverse.target = merchantReverse.target; }
+    mallReverse.on = true; merchantReverse.on = false;
+  }
   // The anti-KS scope only has the two meanings; anything else is the old full behavior.
   if (result.hunt.avoidKsScope !== 'minor') result.hunt.avoidKsScope = 'all';
   // The finish-steal cutoff stops at 50: above it the kill can still be won, so avoiding is pointless.
@@ -194,7 +199,7 @@ const Settings = {
       const raw = W.localStorage.getItem('sroAsistan:v7:' + this.profileKey)
         || W.localStorage.getItem('sroAsistan:v7:profile:default');
       if (!raw) return UI.toast('No original bot profile was found.', 'warn');
-      stopAll();
+      stopAll('settings changed');
       this.profile = botProfile(JSON.parse(raw));
       // The improved loot controller defaults to finishing its fight first.
       this.profile.hunt.pickup.afterKillOnly = true;

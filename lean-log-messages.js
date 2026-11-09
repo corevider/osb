@@ -37,14 +37,14 @@ Activity.userMessage = function( entry ) {
 		const phases = {
 			recall: "Preparing to return to town.", "recall-wait": "Returning to town…",
 			"revive-arrival": "Waiting to revive in town.", "walk-arrival": "Walking to the town start.", "walk-storage": "Walking to the warehouse.",
-			"open-storage": "Opening the warehouse.", store: "Depositing loot.", "close-storage": "Finished at the warehouse.",
+			"service-wait": "Waiting for the town to load, then trying again.", "open-storage": "Opening the warehouse.", store: "Depositing loot.", "close-storage": "Finished at the warehouse.",
 			"walk-vendor": "Walking to the potion merchant.", "open-vendor": "Opening the potion shop.",
 			buy: "Buying supplies.", "close-vendor": "Finished buying supplies.",
 			"walk-smith": "Walking to the repair merchant.", "open-smith": "Opening the repair shop.",
 			sell: "Selling loot.", ammo: "Buying ammunition.", repair: "Repairing equipment.",
 			"close-smith": "Finished at the repair merchant.", "walk-gate": "Walking to the return point.",
 			"open-gate": "Opening return travel.", reverse: "Preparing to return to the hunting area.",
-			"reverse-wait": "Returning to the hunting area…",
+			"mall-reverse": "Buying a Reverse Return Scroll from the Item mall.", "reverse-wait": "Returning to the hunting area…",
 			leave: "Finished town services; walking back to the hunting spot."
 		};
 		return phases[phase] || "Continuing town services.";

@@ -151,8 +151,7 @@ const BuffGear = {
     this.autoRestore = false;
     if (this.run) this.recovery = this.run.home;
     this.run = null;
-    if (Hunt.running && World.inWorld() && !World.isDead()) Hunt.stop(text);
-    else Hunt.running = false;
+    if (Hunt.running) Hunt.stop(text);
     this.message = text + ' Check gear or use Restore combat gear.';
     UI.toast(this.message, 'warn');
   },

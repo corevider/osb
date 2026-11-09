@@ -16,7 +16,8 @@ const CHASE_LIMIT = {
 	memory: 15000,
 	progress: 8,
 	targetMove: 40,
-	replans: 2
+	replans: 2,
+	releases: 2
 };
 const CHASE_OBSERVE_MS = 8000;
 
@@ -166,8 +167,16 @@ const Chase = {
 		this.s.reason = reason;
 		this.s.abandonAt = now();
 		this.s.halted = false;
-		this.s.released = false;
+		this.s.releases = 0;
 		this.message = "Blocked target: " + reason + "; stopping its approach.";
+		return true;
+	},
+	drop( target, reason ) {
+		Hunt.ban.set( target.gid, now() + CHASE_LIMIT.ban );
+		Hunt.targetGid = 0;
+		this.message = "Dropped blocked target: " + reason;
+		Log.warn( this.message );
+		this.reset();
 		return true;
 	},
 	/*
@@ -277,26 +286,18 @@ const Chase = {
 			s.phase = "evaluate";
 		}
 		if ( s.phase === "abandon" ) {
-			if ( t - s.abandonAt > CHASE_LIMIT.episode ) {
-				Hunt.stop( "Blocked approach could not be stopped safely." );
-				return true;
-			}
+			if ( t - s.abandonAt > CHASE_LIMIT.episode ) return this.drop( target, s.reason + " (the approach did not stop in time)" );
 			if ( !this.settle() ) return true;
 			if ( World.gp.target === target.gid ) {
-				if ( !s.released && Cmd.release() ) {
-					s.released = true;
+				if ( s.releases && t - s.releaseAt <= CHASE_LIMIT.unknown ) return true;
+				if ( s.releases >= CHASE_LIMIT.releases ) return this.drop( target, s.reason + " (release not confirmed)" );
+				if ( Cmd.release() ) {
+					s.releases = (s.releases || 0) + 1;
 					s.releaseAt = t;
-				} else if ( s.released && t - s.releaseAt > CHASE_LIMIT.unknown ) {
-					Hunt.stop( "Blocked target release was not confirmed." );
 				}
 				return true;
 			}
-			Hunt.ban.set( target.gid, t + CHASE_LIMIT.ban );
-			Hunt.targetGid = 0;
-			this.message = "Dropped blocked target: " + s.reason;
-			Log.warn( this.message );
-			this.reset();
-			return true;
+			return this.drop( target, s.reason );
 		}
 		if ( s.phase === "attack" && this.hit( target.gid ) && !this.detour ) {
 			s.at = t;

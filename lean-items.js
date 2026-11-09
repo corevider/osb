@@ -13,7 +13,7 @@ const ITEM_DROP_CONFIRM_MS = 5000;
 const ITEM_BALANCE_CONFIRM_MS = 5000;
 const ITEM_GEAR_SLOTS = ['primaryWeapon', 'secondaryWeapon', 'shield'];
 const ItemRules = {
-  infos: new Map(), dropping: null, dropBan: new Map(), message: '', balancing: null, balanceBan: new Map(), gearSlots: {}, gearOwner: '',
+  infos: new Map(), dropping: null, dropBan: new Map(), message: '', balancing: null, balanceBan: new Map(), drained: new Set(), gearSlots: {}, gearOwner: '',
   cfg() { return Settings.profile.items; },
   get(id) { return this.cfg().rules[id] || null; },
   // change: { pick: 'yes' | 'no' | null, act: 'store' | 'sell' | 'keep' | 'drop' | null }; null clears that part.
@@ -139,32 +139,45 @@ const ItemRules = {
     for (const e of World.ents.values()) if (e.kind === 'ground-item') seen.push(e);
     if (Items.wireLearn(seen)) this.infos.clear();
   },
+  drainKey(item) { return World.charName + ':' + item.slot + ':' + item.refObjId; },
+  fromPet(item) { return !!item && this.drained.has(this.drainKey(item)); },
+  pruneDrained() {
+    if (!this.drained.size) return;
+    const present = new Set(World.items().map(i => this.drainKey(i))), mine = World.charName + ':';
+    for (const key of this.drained) if (key.startsWith(mine) && !present.has(key)) this.drained.delete(key);
+  },
   // Keep free slots even between the bag and the pickup pet by moving items that have a Sell or Store rule to the side with
   // more room, one at a time, while hunting and outside town service and open windows. Needs two free slots on the side
   // that receives, so loot keeps flowing. Protected gear, supplies the trip needs and worn gear never move.
   balanceTick() {
     const gp = World.gp, pet = Loot.pet();
-    if (!this.cfg().balance || !pet || !Hunt.running || Town.trip || !World.inWorld() || World.isDead() || !gp || gp.inventoryPending || gp.storage || gp.exchange?.open || Restock.activeShop()) return false;
+    if (!(this.cfg().balance || this.cfg().petToBag) || !pet || !Hunt.running || Town.trip || !World.inWorld() || World.isDead() || !gp || gp.inventoryPending || gp.storage || gp.exchange?.open || Restock.activeShop()) return false;
     const t = now(), b = this.balancing, equipped = gp.equipmentSlotCount || 13;
     if (b) {
       const moved = (b.toPet ? Loot.items(pet) : World.items()).some(i => i.slot === b.destination && i.refObjId === b.ref);
-      if (moved) { this.balancing = null; Log.info('Moved ' + Items.name(b.ref) + (b.toPet ? ' to the pet' : ' to the bag') + ' (balance).'); }
+      if (moved) {
+        if (b.drain) this.drained.add(this.drainKey({ slot: b.destination, refObjId: b.ref }));
+        this.balancing = null; Log.info('Moved ' + Items.name(b.ref) + (b.toPet ? ' to the pet' : ' to the bag') + (b.drain ? ' (pet nearly full).' : ' (balance).'));
+      }
       else if (t - b.at < ITEM_BALANCE_CONFIRM_MS) return false;
       else { this.balancing = null; this.balanceBan.set(b.key, t + 30000); this.message = Items.name(b.ref) + ' was not moved; trying again in 30 s.'; Log.warn(this.message); }
     }
+    this.pruneDrained();
     const petInv = pet.rec.inventory || [], petFree = pet.rec.status - petInv.length, bagFree = World.freeBagSlots();
-    const toPet = bagFree - petFree <= -2 && petFree >= 2, toBag = petFree - bagFree <= -2 && bagFree >= 2;
+    const drain = !!this.cfg().petToBag && petFree <= Town.cfg().petFree + 2 && bagFree >= 3;
+    const toPet = !!this.cfg().balance && bagFree - petFree <= -2 && petFree >= 2, toBag = drain || !!this.cfg().balance && petFree - bagFree <= -2 && bagFree >= 2;
     if (!toPet && !toBag) return false;
     const key = i => (toPet ? 0 : pet.rec.gid) + ':' + i.slot + ':' + i.refObjId;
     const movable = i => ['store', 'sell'].includes(this.get(i.refObjId)?.act) && !this.guarded(i) && !(toPet && (Town.needed(i) || Alchemy.selected && Alchemy.selected.slot === i.slot)) &&
       (this.balanceBan.get(key(i)) || 0) <= t;
-    const item = (toPet ? World.items().filter(i => i.slot >= equipped) : petInv).find(movable);
+    const anyLoot = i => drain && !toPet && !this.guarded(i) && (this.balanceBan.get(key(i)) || 0) <= t;
+    const item = (toPet ? World.items().filter(i => i.slot >= equipped) : petInv).find(movable) || (!toPet && drain ? petInv.find(anyLoot) : null);
     if (!item) return false;
     const destination = toPet ? Town.free(petInv, 0, pet.rec.status) : Town.free(gp.inventory, equipped, gp.inventorySlotCount);
     if (destination === null) return false;
     const command = { kind: 'cos-transfer', gid: pet.rec.gid, toCos: toPet, source: item.slot, destination };
     if (!Cmd.spaced(command.kind) || !Cmd.raw(command, 'Balance: move ' + Items.name(item.refObjId))) return false;
-    this.balancing = { key: key(item), toPet, ref: item.refObjId, destination, at: t };
+    this.balancing = { key: key(item), toPet, drain: !toPet && drain, ref: item.refObjId, destination, at: t };
     return true;
   },
   // Drop items with a Drop rule from the character bag (never worn gear) or the pickup pet, one at a time, while

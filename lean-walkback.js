@@ -29,7 +29,7 @@ const WalkBack = {
     this.cancel();
     Restock.cancelRecording();
     Restock.trip = null;
-    if (Hunt.running) Hunt.stop();
+    if (Hunt.running) Hunt.stop('walking back to the hunting spot');
     if (Restock.activeShop() || World.gp?.storage) Cmd.raw({ kind: 'npc-close' }, 'Walk back: close merchant');
     const recorded = Restock.cfg().route;
     let route = [], nearest = -1, best = 500;

@@ -221,20 +221,56 @@ module.exports = function runObstacleTests( { fixture, combatFixture, navProduct
 		assert.ok( c.f.Hunt.banned( c.f.Hunt.ban, 30 ) );
 		assert.ok( c.f.commands.every( command => ![ "attack", "skill" ].includes( command.kind ) ) );
 	});
-	test("unconfirmed release retains ownership then stops without selecting another enemy", () => {
+	test("unconfirmed release is sent again once, then the target is banned and hunting goes on", () => {
 		const c = chase();
 		c.ackRelease = false;
 		c.f.Navigation.attackRoute = () => ({ status: "unreachable", route: [] });
-		for ( let i = 0; i < 22 && c.f.Hunt.running; i++ ) {
+		for ( let i = 0; i < 30 && !c.f.Hunt.banned( c.f.Hunt.ban, 30 ); i++ ) {
 			fresh( c.f, c.f.World.pose() );
 			c.step();
 		}
-		assert.equal( c.f.Hunt.running, false );
+		assert.equal( c.f.Hunt.running, true, "an unconfirmed release never stops hunting" );
+		assert.ok( c.f.Hunt.banned( c.f.Hunt.ban, 30 ) );
+		assert.equal( c.f.Hunt.targetGid, 0 );
+		assert.equal( c.f.Chase.s, null );
+		assert.match( c.f.Chase.message, /^Dropped blocked target: .*release not confirmed/ );
+		const releases = c.f.commands.filter( command => command.kind === "release-target" );
+		assert.equal( releases.length, 2, "one release and one retry" );
 		const release = c.f.commands.findIndex( command => command.kind === "release-target" );
-		assert.ok( release >= 0 );
 		assert.ok(
-			c.f.commands.slice( release ).every( command => ![ "attack", "skill", "select" ].includes( command.kind ) )
+			c.f.commands.slice( release ).every( command => ![ "attack", "skill", "select" ].includes( command.kind ) ),
+			"no attack on the blocked target while its release is pending"
 		);
+	});
+	test("a release refused until the episode ends still drops the target instead of stopping", () => {
+		const c = chase();
+		c.ackRelease = false;
+		c.f.Navigation.attackRoute = () => ({ status: "unreachable", route: [] });
+		c.f.Cmd.release = () => false;
+		for ( let i = 0; i < 40 && !c.f.Hunt.banned( c.f.Hunt.ban, 30 ); i++ ) {
+			fresh( c.f, c.f.World.pose() );
+			c.step();
+		}
+		assert.equal( c.f.Hunt.running, true );
+		assert.ok( c.f.Hunt.banned( c.f.Hunt.ban, 30 ) );
+		assert.match( c.f.Chase.message, /did not stop in time/ );
+	});
+	test("a blocked target that dies or despawns during its release counts as released", () => {
+		const c = chase();
+		c.ackRelease = false;
+		c.f.Navigation.attackRoute = () => ({ status: "unreachable", route: [] });
+		for ( let i = 0; i < 30 && c.f.Chase.s?.phase !== "abandon"; i++ ) {
+			fresh( c.f, c.f.World.pose() );
+			c.step();
+		}
+		assert.equal( c.f.Chase.s.phase, "abandon" );
+		c.f.World.ents.delete( 30 );
+		for ( let i = 0; i < 4; i++ ) {
+			c.f.advance( 1000 );
+			c.f.Chase.tick();
+		}
+		assert.equal( c.f.Chase.s, null );
+		assert.equal( c.f.Hunt.running, true );
 	});
 	test("target HP changes and cast announcements do not release a detour", () => {
 		const c = chase();

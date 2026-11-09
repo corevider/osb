@@ -65,9 +65,10 @@ Activity.refusal = function( message ) {
 		recentCommands, state: { inventoryPending: World.gp?.inventoryPending, movementPending: World.gp?.pendingMoves,
 			targetPending: World.gp?.targetPending, casting: World.isCasting() } } );
 	const commandKey = JSON.stringify( recentCommands.map( command => [ command.kind, command.skillId, command.monsterId ] ) );
-	const key = JSON.stringify( [ this.session, World.epoch, source, code, routine ? null : commandKey ] );
+	const key = JSON.stringify( [ this.session, World.epoch, source, code ] );
 	const previous = this.refusalGroups.get( key );
-	if ( previous && now() - previous.lastMono < REFUSAL_LIMIT.groupMs && (this.refusals.includes( previous ) || Log.lines.includes( previous )) ) {
+	const grouped = previous && (routine ? now() - previous.lastMono < REFUSAL_LIMIT.groupMs : now() - previous.mono < REFUSAL_LIMIT.warnMs);
+	if ( grouped && (this.refusals.includes( previous ) || Log.lines.includes( previous )) ) {
 		previous.repeatCount++; previous.lastAt = Date.now(); previous.lastMono = now(); previous.failure = failure; this.revision++;
 		if ( commandKey !== previous.sampleKey ) {
 			previous.failureSamples.push( failure );

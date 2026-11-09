@@ -1,7 +1,7 @@
 // Lazy, shared image cache using the game's verified packs. No catalogue downloads.
 const Icons = {
   port: null, ready: null, forcePage: false, seq: 0,
-  pending: new Map(), urls: new Map(), failures: new Map(),
+  pending: new Map(), urls: new Map(), failures: new Map(), warnings: new Map(),
   iconPath(ddj) {
     if (!ddj) return '';
     let path = String(ddj).replace(/\\/g, '/').toLowerCase().replace(/^\/+/, '').replace(/^icon\//, '').replace(/\.ddj$/, '.png');
@@ -70,11 +70,19 @@ const Icons = {
     if ((this.failures.get(path) || 0) > now()) return Promise.resolve('');
     const result = this.request(path).then(blob => { this.failures.delete(path); return URL.createObjectURL(blob); }, error => {
       this.urls.delete(path); this.failures.set(path, now() + 30000);
-      Log.warn('Skill icon unavailable: ' + path + ' (' + error.message + ')');
+      this.warn(path, error);
       return '';
     });
     this.urls.set(path, result);
     return result;
+  },
+  warn(path, error) {
+    const seen = this.warnings.get(path) || { at: -Infinity, count: 0 };
+    seen.count++;
+    this.warnings.set(path, seen);
+    if (now() - seen.at < 60000) return;
+    Log.warn('Skill icon unavailable: ' + path + ' (' + error.message + ')' + (seen.count > 1 ? '; seen ' + seen.count + ' times since the last warning.' : ''));
+    seen.at = now(); seen.count = 0;
   },
   paint(node, icon, attempt = 0) {
     const path = this.iconPath(icon);

@@ -21,6 +21,10 @@ The implementation does not teleport, reset poses, disable collision or promise 
 
 Run `python build-lean.py`, `node --check osb.user.js`, and `node lean.test.cjs`. The integration runner includes `lean.obstacle.test.cjs` with generated-script fixtures. Browser validation uses `node lean.browser.test.cjs <directory-containing-playwright>`. Optional game collision comparison uses `node lean.navigation.native.test.mjs <OpenSRO-checkout>` and requires generated game assets. Test results for the delivered branch are reported separately; these commands are not a claim of live-server verification.
 
+## Unconfirmed release (after OSB 2.0.2)
+
+An abandoned target used to stop hunting when the game did not confirm its release within 5 seconds ("Blocked target release was not confirmed."), and an abandon that could not halt movement within 15 seconds stopped hunting too. Neither stops hunting any more. After the halt, the release is sent; if the target is still selected 5 seconds later it is sent once more; if it is still selected 5 seconds after that, or the 15-second abandon budget runs out, the target is banned for 60 seconds, the hunt target is cleared and ownership is released. The next selection replaces the stale one. A target that dies or despawns during the abandon counts as released. No attack, skill or select is sent to the abandoned target while its release is pending. Protect party members picks targets through the same ban list and the same pursuit checks.
+
 ## Validation on 2026-10-15 (1.2.101)
 
 The final fork build and JavaScript syntax check exited 0. `node lean.test.cjs` passed 345 integration tests, including 30 obstacle/recovery regressions. The isolated headless Edge browser suite exited 0 with zero page errors. The local game collision comparison passed 30 legacy routes and 30 pursuit routes, with six enclosed approach pairs remaining unreachable. `git diff --check` exited 0. Rebuilding in the fork reproduced the reviewed userscript bytes.

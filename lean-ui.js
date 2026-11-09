@@ -217,7 +217,7 @@ const UI = {
     // A light in the button's corner: green while hunting, yellow during a town trip, walk back or other bot work.
     this.runLed = el('span', null, 'run-led'); this.runLed.setAttribute('aria-hidden', 'true'); start.prepend(this.runLed);
     const returnHunt = () => { WalkBack.start(true); if (WalkBack.active || Travel.active) RunIntent.set(true); };
-    const controls = this.row(start, this.button('Return & hunt', returnHunt), this.button('Stop all', () => userStop()), this.button('Session', () => this.showSession()));
+    const controls = this.row(start, this.button('Return & hunt', returnHunt), this.button('Stop all', () => userStop('stopped by you (Stop all)')), this.button('Session', () => this.showSession()));
     controls.classList.add('controls');
     this.nav = el('nav'); this.nav.setAttribute('aria-label', 'Bot settings');
     this.buildNav();
@@ -850,7 +850,9 @@ const UI = {
   section_lootBalance(host) {
     host.append(this.group('Bag and pet space',
       this.check('Balance free slots with the pickup pet', () => ItemRules.cfg().balance, v => ItemRules.cfg().balance = v),
-      el('p', 'While hunting, items with a Sell or Store rule move to the bag or pet, whichever has more free slots. Supplies and the weapons and shield chosen under Combat never move.', 'muted')),
+      el('p', 'While hunting, items with a Sell or Store rule move to the bag or pet, whichever has more free slots. Supplies and the weapons and shield chosen under Combat never move.', 'muted'),
+      this.check('Move pet loot to my bag when the pet is nearly full', () => ItemRules.cfg().petToBag, v => ItemRules.cfg().petToBag = v),
+      el('p', 'Stay at the hunting spot longer: when the pickup pet has almost no room left, its loot moves to your bag one item at a time (keeping two bag slots free), so the pet can keep collecting. The town trip starts once the bag is full too. The weapons and shield chosen under Combat never move.', 'muted')),
       this.group('Wear better gear',
         this.check('On town trips, wear carried gear with better stats; store the replaced piece', () => Settings.profile.items.autoEquip, v => Settings.profile.items.autoEquip = v),
         el('p', 'At the warehouse, a carried equipment piece whose real stats (attack rolls, plus, defence, known blues) beat the worn one in the same slot is worn, and the piece it replaces is deposited, never sold. Weapons follow the worn weapon\'s dominant attack. The chosen weapons and shield, buff-set gear, the alchemy item, Keep-rule items and pieces with an incomplete tooltip or an unmet level requirement are never touched. A swap the game refuses is skipped for the session.', 'muted')));
@@ -914,11 +916,7 @@ const UI = {
         this.select('Recovery kit', () => [[0, 'Choose the merchant\'s pet kits'], ...C().offers.filter(o => o.kind === 'kit').map(o => [o.refObjId, o.name])], () => C().kit.refObjId, v => C().kit.refObjId = Number(v)),
         this.number('Kits low stock ≤', () => C().kit.low, v => C().kit.low = v, 0, 9999),
         this.number('Kits refill to', () => C().kit.target, v => C().kit.target = v, 1, 10000),
-        el('p', 'Pet recovery kits for the attack and pickup pets, bought on the same refill trips as the pet food; a merchant without them skips them with a notice. Using them is set under Automatic potion use.', 'muted'),
-        this.check('Buy Reverse Return Scrolls', () => C().reverse.on, v => C().reverse.on = v),
-        this.number('Reverse scrolls low stock ≤', () => C().reverse.low, v => C().reverse.low = v, 0, 999),
-        this.number('Reverse scrolls refill to', () => C().reverse.target, v => C().reverse.target = v, 1, 9999),
-        el('p', 'Refills Reverse Return Scrolls at the recorded merchant with gold; a merchant without them skips it with a notice (the trip can still walk back).', 'muted'));
+        el('p', 'Pet recovery kits for the attack and pickup pets, bought on the same refill trips as the pet food; a merchant without them skips them with a notice. Using them is set under Automatic potion use.', 'muted'));
       shop.append(el('p', 'Refill targets are total potion counts, including what is already in your bag. Used for low-supply, full-bag and revival trips, and walking-route restock when the town cycle is off. Set MP refill to 1000 for 1,000 MP potions. Changes apply to the next trip.', 'muted'));
       host.append(shop);
   },
@@ -928,7 +926,7 @@ const UI = {
       this.check('Buy from the Item mall', () => M().on, v => M().on = v),
       this.number('Silk budget per bot run (0 = never buy)', () => M().budgetSilk, v => M().budgetSilk = v, 0, 100000),
       this.mallNote = el('p', '', 'muted'),
-      el('p', 'The mall wallet is shared by every character on the account and nothing refills it in the game, so every purchase is bounded by the budget above and one order is in flight at a time. Orders land straight in the bag while hunting; they never interrupt combat or a town trip, and the merchant stays the primary supply. An unconfirmed order blocks mall buying until you re-enter the game (the game itself demands that resync).', 'muted'),
+      el('p', 'The switch above covers the potion bags and battle scrolls below. The mall wallet is shared by every character on the account and nothing refills it in the game, so every purchase is bounded by the budget above and one order is in flight at a time. Orders land straight in the bag while hunting; they never interrupt combat or a town trip, and the merchant stays the primary supply. An unconfirmed order blocks mall buying until you re-enter the game (the game itself demands that resync).', 'muted'),
       this.check('Buy HP potion bags when the total HP stock is low', () => M().hp.on, v => M().hp.on = v),
       this.number('HP low stock ≤', () => M().hp.low, v => M().hp.low = v, 0, 9999),
       this.number('HP refill to', () => M().hp.target, v => M().hp.target = v, 1, 100000),
@@ -941,9 +939,7 @@ const UI = {
       this.check('Buy 20% resistance scrolls', () => M().damageAbs.on, v => M().damageAbs.on = v),
       this.number('Resistance scrolls low stock ≤', () => M().damageAbs.low, v => M().damageAbs.low = v, 0, 999),
       this.number('Resistance scrolls refill to', () => M().damageAbs.target, v => M().damageAbs.target = v, 1, 9999),
-      this.check('Buy Reverse Return Scrolls here (the merchant with gold stays cheaper)', () => M().reverse.on, v => M().reverse.on = v),
-      this.number('Reverse scrolls low stock ≤', () => M().reverse.low, v => M().reverse.low = v, 0, 999),
-      this.number('Reverse scrolls refill to', () => M().reverse.target, v => M().reverse.target = v, 1, 9999),
+      el('p', 'Reverse Return Scrolls are set on the Town page, under Back to the hunting spot. They use this silk budget.', 'muted'),
       el('p', 'Merchant first, mall second: keep these low marks BELOW the potion restock marks above and the merchant refills with gold while the mall only steps in when that was not enough. Raise a mark above the merchant one and the mall spends silk first instead — for wallets that can afford it. One bag or pack is bought per order and the delivered amount is measured from the inventory, so an unknown pack size only means another order. Prices come from the live catalogue, never from remembered addresses.', 'muted')),
       el('p', 'Keeping the scrolls active is set under Automatic potion use above; the switches here only refill the stock.', 'muted'));
   },
@@ -957,7 +953,7 @@ const UI = {
         ['mall_warehouse_ticket', 'Warehouse', () => town().storage ? 'saved' : 'not saved'],
         ['all_potion_03', 'Potions', () => town().vendor ? 'saved' : 'not saved'],
         ['mall_repair_hammer', 'Repair', () => town().smith ? 'saved' : 'not saved'],
-        ['mall_reverse_return_scroll', 'Way back', () => Town.walks() ? 'walks back' : count(0x19ec) ? count(0x19ec) + ' reverse in bag' : 'no reverse: walks back']]) {
+        ['mall_reverse_return_scroll', 'Way back', () => Town.walks() ? 'walks back' : count(0x19ec) ? count(0x19ec) + ' reverse in bag' : MallBuyer.reverseBlocked() ? 'no reverse: walks back' : 'buys one from the Item mall']]) {
         const step = el('li'), slot = el('span', null, 'skill-icon'), note = el('small', detail());
         slot.append(el('span', label[0], 'fallback')); Icons.paint(slot, `item\\etc\\${icon}.ddj`);
         step.append(slot, el('strong', label), note); flow.append(step);
@@ -997,6 +993,13 @@ const UI = {
         el('p', 'Pick your town: the bot saves its arrival point, warehouse, potion merchant, repair merchant and world statue. You do not need to be in town.', 'muted'),
         this.check('Use return scroll → town services → back to the hunting spot', () => town().enabled, v => { town().enabled = v; if (v) Town.fillMissing(this.townPick); this.draw(); }),
         this.select('Back to the hunting spot', [['reverse', 'Reverse return scroll (walks when none is carried)'], ['walk', 'Walk']], () => town().returnBy, v => { town().returnBy = v; this.draw(); }),
+        ...(town().returnBy === 'walk' ? [] : [
+          this.check('Buy Reverse Return Scrolls from the Item mall (silk)', () => Settings.profile.mall.reverse.on, v => { Settings.profile.mall.reverse.on = v; this.draw(); }),
+          this.number('Silk budget per bot run (shared with the Item mall)', () => Settings.profile.mall.budgetSilk, v => Settings.profile.mall.budgetSilk = v, 0, 100000),
+          this.number('Reverse scrolls low stock ≤', () => Settings.profile.mall.reverse.low, v => Settings.profile.mall.reverse.low = v, 0, 999),
+          this.number('Reverse scrolls refill to', () => Settings.profile.mall.reverse.target, v => Settings.profile.mall.reverse.target = v, 1, 9999),
+          this.reverseNote = el('p', '', 'muted'),
+          el('p', 'No merchant sells Reverse Return Scrolls for gold; they come from the Item mall only. While hunting, the bot tops them up when the stock reaches the low mark. On a town trip without one, it buys one after the services, then reverses; if the mall cannot deliver (budget, silk, full bag), the trip walks back.', 'muted')]),
         this.check('Deposit SoX gear in the warehouse (character and pet bags)', () => town().storeSox, v => town().storeSox = v),
         this.check('Sell Star gear too (instead of depositing it)', () => town().sellStar, v => town().sellStar = v),
         this.check('Sell ordinary gear from the character bag too', () => town().sellBag, v => town().sellBag = v),
@@ -1495,6 +1498,10 @@ const UI = {
         ? MallBuyer.message + ' Spent ' + MallBuyer.spentSilk + ' silk this run; wallet ' + (World.gp?.itemMall?.silk ?? '—') + ' silk.'
         : 'Item mall buying off.';
       this.mallNote.textContent = this.mallNote.title = m();
+    }
+    if (this.is('Town') && this.reverseNote?.isConnected) {
+      const count = MallBuyer.count(MALL_REVERSE_REF), blocked = MallBuyer.reverseBlocked();
+      this.reverseNote.textContent = this.reverseNote.title = count + ' in bag. ' + (blocked || (MallBuyer.pending?.ref === MALL_REVERSE_REF ? MallBuyer.message : 'Ready to buy; ' + MallBuyer.spentSilk + ' of ' + MallBuyer.budget() + ' silk spent this run.'));
     }
     if (this.is('Supplies') && this.speedNote) this.speedNote.textContent = SpeedScroll.message;
     if (this.is('Supplies') && this.hammerNote) this.hammerNote.textContent = RepairHammer.message;

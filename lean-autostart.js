@@ -37,7 +37,11 @@ const AutoStart = {
     if (this.armed) { this.armed = false; this.entry = { at: now() }; }
     const entry = this.entry;
     if (!entry) return;
-    if (Reconnect.active()) return this.cancel('Auto-start skipped: reconnect is bringing the bot back.');
+    if (Reconnect.active()) {
+      if (!entry.reconnect) { entry.reconnect = true; Log.info('Auto-start: waiting for the reconnect; it starts the bot if the reconnect does not.'); }
+      entry.at = now(); this.message = 'Auto-start: waiting for the reconnect to finish.';
+      return;
+    }
     if (Hunt.running || Town.trip || WalkBack.active || Travel.active || Trade.run || Alchemy.run || Alchemy.pending || Restock.recording) return this.cancel();
     if (now() - entry.at > AUTO_START_GIVE_UP_MS) return this.cancel('Auto-start gave up: the game did not settle within 2 minutes.');
     if (World.charName && Settings.profileKey !== 'profile:' + World.charName) { this.message = 'Auto-start: waiting for the character settings.'; return; }
@@ -81,10 +85,10 @@ bus.on('phase', (phase, previous, left) => { if (left) { AutoStart.armed = true;
 // portal taken by hand) are final. The same reason twice within 30 minutes, or a fourth try within an hour, stops for
 // good. Leaving the world or changing character forgets it all: reconnect and auto-start own a new entry.
 const RETRY_DELAY_MS = 120000, RETRY_SAME_MS = 30 * 60000, RETRY_MAX_PER_HOUR = 3, RETRY_PLAYER_MS = 30000;
-const RETRY_FINAL = /^(out of HP potions|inventory full|character died|stuck: no progress|character cannot move|hunt area is in another region)|Recovery town services completed|No saved hunting (spot|point)|save a hunting spot first|manual control/i;
+const RETRY_FINAL = /^(out of HP potions|inventory full|character died|stuck: no progress|character cannot move|hunt area is in another region|stopped by you|stopped from outside|settings changed|character changed)|Recovery town services completed|No saved hunting (spot|point)|save a hunting spot first|manual control/i;
 const RETRY_PLAYER_KINDS = new Set(['ground-move', 'move', 'select', 'attack', 'skill', 'pickup', 'cos-attack', 'item-use', 'travel-gate', 'npc-talk']);
 const Retry = {
-  active: false, reason: '', reasonAt: -Infinity, stop: null, history: [], message: '', playerAt: -Infinity,
+  active: false, reason: '', reasonAt: -Infinity, stop: null, history: [], message: '', playerAt: -Infinity, character: null,
   on() { return !!Settings.profile.hunt.retry; },
   status() { return this.on() ? this.message || 'Waits for the bot to stop by itself.' : 'Off.'; },
   reset() { this.active = false; this.stop = null; this.history = []; this.message = ''; this.reasonAt = -Infinity; },
@@ -94,6 +98,7 @@ const Retry = {
   busy() { return !!(Hunt.running || Town.trip || WalkBack.active || Travel.active || Controller.resumeAfterRevive); },
   key(reason) { return String(reason).replace(/\d+/g, '#').trim().toLowerCase(); },
   give(text) { this.message = text; Log.warn(text); UI.toast(text, 'warn', 10000); },
+  hold(text) { this.message = text; Log.info(text); },
   why(reason) { return reason ? ' (' + reason + ')' : ''; },
   tick() {
     if (this.busy()) { this.active = true; this.stop = null; return; }
@@ -101,8 +106,8 @@ const Retry = {
       this.active = false;
       const reason = now() - this.reasonAt < 2000 ? this.reason : '';
       if (!this.on() || RunIntent.stopped()) return;
-      if (this.final(reason)) { this.message = 'Stopped: ' + reason + '. Not started again: that stop is final.'; return; }
-      if ((!reason || reason === 'world change') && now() - this.playerAt < RETRY_PLAYER_MS) { this.message = 'Stopped right after your own action in the game; not started again.'; return; }
+      if (this.final(reason)) return this.hold('Stopped: ' + reason + '. Not started again: that stop is final.');
+      if ((!reason || reason === 'world change') && now() - this.playerAt < RETRY_PLAYER_MS) return this.hold('Stopped right after your own action in the game; not started again.');
       const key = this.key(reason);
       this.history = this.history.filter(h => now() - h.at < 3600000);
       if (this.history.some(h => h.key === key && now() - h.at < RETRY_SAME_MS)) return this.give('The bot stopped again for the same reason' + this.why(reason) + '; not starting it again. Check the character.');
@@ -121,7 +126,7 @@ const Retry = {
       return;
     }
     this.stop = null;
-    if (World.isDead() && !Town.autoRevive() && Hunt.cfg().onDeath === 'stop') { this.message = 'Not started again: the character is dead and On death is set to Stop.'; return; }
+    if (World.isDead() && !Town.autoRevive() && Hunt.cfg().onDeath === 'stop') return this.hold('Not started again: the character is dead and On death is set to Stop.');
     this.history.push({ key: s.key, at: now() });
     if (World.isDead()) Hunt.start(); else Controller.resumeHunting('Started again');
     this.active = this.busy();
@@ -137,5 +142,5 @@ const Retry = {
 }
 // Registered before the boot handlers, so the reason is noted before their stopAll.
 bus.on('phase', (phase, previous, left) => { if (left) Retry.reset(); else if (phase !== 'world') Retry.note('world change'); });
-bus.on('character', () => Retry.reset());
+bus.on('character', name => { if (name !== Retry.character) { Retry.character = name; Retry.reset(); } });
 Hook.observers.push(command => { if (command?.kind === 'gameplay' && RETRY_PLAYER_KINDS.has(command.command?.kind)) Retry.playerAt = now(); });

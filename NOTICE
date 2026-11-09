@@ -1,8 +1,8 @@
 OSB is a modified version of nixxane/opensro-bot-lean
 (https://github.com/nixxane/opensro-bot-lean), which was adapted from TSK's OpenSRO Assistant.
 
-Base: nixxane/opensro-bot-lean commit 497ecc7245fe51b7a2f0d739635545330ffabc9a (version 1.2.224),
-taken on 2026-11-03. OSB 2.0.0 started from version 1.2.212 and has since taken upstream's changes up to this commit.
+Base: nixxane/opensro-bot-lean commit 8eb011a62de1623c3b88115440ab5eae0fabd4d8 (version 1.2.227),
+taken on 2026-11-08. OSB 2.0.0 started from version 1.2.212 and has since taken upstream's changes up to this commit.
 The record of the last upstream commit OSB took is UPSTREAM.json.
 
 Copyright nixxane and the contributors of opensro-bot-lean. Changes in OSB: Copyright Corevider.
@@ -26,5 +26,8 @@ Changes made by OSB (GPL-2.0-or-later, section 2a), 2026-11-02:
 - Wear better gear (OSB-only fixes, 2026-11-03): it runs before the weapon merchant sells, each piece competes only for its own worn slot, and a piece the game refuses to wear is kept unsold. The "Pick up drops" checkbox is the first control on the Loot page.
 - Gear level requirement (OSB-only fix, 2026-11-04): a requirement given as a mastery level (types 257-259, 273-276, 513-518) is read as that level, so wear better gear and the level deposit rule see such gear.
 - The upstream port of 1.2.222 to 1.2.224 leaves out the report rate-limit change in lean-reports.js, because it belonged to the upstream report endpoint, which OSB does not use. The OSB server applies its own limits.
+- The upstream port of 1.2.225 to 1.2.227 adapts two changes: loot moved from a nearly full pet to the bag is remembered and stored
+  or sold on the next town trip like pet loot, and the share format is 2 so that older share codes keep the reverse scroll numbers
+  they were made with. An old merchant reverse switch also carries its numbers to the Item mall switch.
 
 Each port of upstream changes updates the base commit, the version and the date above, and UPSTREAM.json.

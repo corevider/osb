@@ -143,7 +143,7 @@ Hunt.tick = function () {
 
 // Stops everything, for the player and for the bot itself. A pending auto-start survives it: only the player's own
 // Stop (userStop) cancels that.
-function stopAll() {
+function stopAll(reason = 'all activities stopped') {
   Town.record('stop');
   Alchemy.stop();
   Trade.cancel();
@@ -159,7 +159,7 @@ function stopAll() {
   const active = townActive || Hunt.running || Restock.trip || WalkBack.active || Travel.active || Loot.active;
   Travel.cancel();
   WalkBack.cancel('', false);
-  if (Hunt.running) Hunt.stop();
+  if (Hunt.running) Hunt.stop(reason);
   Restock.trip = null;
   Loot.suspend();
   if (active && World.inWorld() && !World.isDead()) Cmd.move(World.pose());
@@ -340,7 +340,7 @@ const Controller = {
       else if (Hunt.running) { if (!Trace.tick()) Hunt.tick(); this.mode = Restock.trip ? 'shopping' : Hunt.state; }
       else { this.guard('Idle pet pickup', () => Loot.idleTick()); this.mode = 'idle'; }
     } catch (e) {
-      stopAll();
+      stopAll('internal error');
       if (now() - this.lastErrorAt > 5000) { this.lastErrorAt = now(); Log.error(e.message || String(e)); UI.toast('Bot stopped: ' + e.message, 'warn'); }
       this.mode = 'error';
     } finally {

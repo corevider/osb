@@ -2,7 +2,7 @@
 // town and merchant points, walking routes, buff weapon sets, the chosen weapons and shield, and the wardrobe stay out. Importing never runs
 // anything: the text is parsed as data, every field is checked against the defaults, and a preview lists the changes
 // before anything is applied. The previous settings are kept so one press undoes an import.
-const SHARE = { apps: ['osb', 'nixxane-bot', 'sro-bot-lean'], format: 1, maxChars: 300000, maxNodes: 20000,
+const SHARE = { apps: ['osb', 'nixxane-bot', 'sro-bot-lean'], format: 2, maxChars: 300000, maxNodes: 20000,
   plain: 'osb0:', packed: 'osb1:', legacyPlain: 'nixxane0:', legacyPacked: 'nixxane1:' };
 const ProfileShare = {
   pending: null, code: '', message: '', note: null, view: null, box: null,
@@ -137,7 +137,12 @@ const ProfileShare = {
     try { data = JSON.parse(await this.decode(input)); } catch (e) { throw Error(/share|paste|large|browser/i.test(e.message) ? e.message : 'That is not an OSB settings share.'); }
     if (!this.isMap(data) || !SHARE.apps.includes(data.app) || !this.isMap(data.profile)) throw Error('That is not an OSB settings share.');
     if (!this.safe(data.profile)) throw Error('That settings share contains values that are not allowed.');
-    return data.profile;
+    return this.oldDefaults(data);
+  },
+  oldDefaults(data) {
+    const profile = data.profile, current = (Number(data.format) || 1) >= 2 || data.app === 'nixxane-bot' && Updates.newer(String(data.version), '1.2.226');
+    if (current || !this.isMap(profile.mall?.reverse)) return profile;
+    return { ...profile, mall: { ...profile.mall, reverse: { low: 10, target: 50, ...profile.mall.reverse } } };
   },
   // path -> value for every setting, so two profiles can be compared one setting at a time.
   flat(value, path = '', out = new Map()) {
@@ -163,7 +168,7 @@ const ProfileShare = {
     if (Hunt.running) { UI.toast('Stop hunting before importing settings.', 'warn'); return false; }
     const next = p.preset ? this.overlay(p.preset) : this.build(p.imported);
     Store.set(this.backupKey(), { at: Date.now(), profile: this.clone(Settings.profile) });
-    stopAll();
+    stopAll('settings changed');
     Settings.profile = next; Settings.saveProfile();
     this.pending = null; this.message = `Imported ${p.rows.length} setting${p.rows.length === 1 ? '' : 's'}. Your previous settings are kept: press Undo last import to go back.`;
     bus.emit('profile'); UI.toast(this.message); return true;
@@ -172,7 +177,7 @@ const ProfileShare = {
     const backup = Store.get(this.backupKey(), null);
     if (!backup?.profile) { UI.toast('There is no import to undo.', 'warn'); return false; }
     if (Hunt.running) { UI.toast('Stop hunting before undoing an import.', 'warn'); return false; }
-    stopAll();
+    stopAll('settings changed');
     Settings.profile = botProfile(backup.profile); Settings.saveProfile();
     Store.set(this.backupKey(), null); this.pending = null; this.message = 'Your settings from before the import are back.';
     bus.emit('profile'); UI.toast(this.message); return true;

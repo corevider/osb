@@ -845,6 +845,48 @@ test('chosen primary and secondary gear is protected and balance moves rule item
   assert.equal(cmd.kind, 'cos-transfer'); assert.equal(cmd.toCos, true); assert.equal(cmd.source, 20, 'the rule item goes to the roomier pet');
   assert.ok(free >= 0);
 });
+test('pet to bag moves any pet loot to the bag when the pet is nearly full and the bag has room', () => {
+  const f = townFixture(), pet = f.pet;
+  pet.inventory.length = 0; pet.inventory.push({ slot: 0, refObjId: 3001, typeFlags: 108, quantity: 1 });
+  pet.status = 1; const n = f.commands.length;
+  f.ItemRules.balanceTick(); assert.equal(f.commands.length, n, 'off by default');
+  f.ItemRules.cfg().petToBag = true; f.ItemRules.balanceTick();
+  const cmd = f.commands.at(-1);
+  assert.equal(cmd.kind, 'cos-transfer'); assert.equal(cmd.toCos, false, 'a pet item with no rule goes to the bag'); assert.equal(cmd.source, 0);
+  pet.status = 40; f.ItemRules.balancing = null; const m = f.commands.length; f.ItemRules.balanceTick();
+  assert.equal(f.commands.length, m, 'a pet with room is left alone');
+});
+test('loot moved out of a nearly full pet is sold or stored on the next trip like pet loot, even with bag selling off', () => {
+  const f = townFixture(), gp = f.World.gp, pet = f.pet, sells = () => f.commands.filter(c => c.kind === 'shop-sell').map(c => c.slot);
+  const powder = { slot: 1, refObjId: 1001, typeFlags: 5484, quantity: 1, name: 'Powder' };
+  pet.inventory = [{ ...powder }]; pet.status = 2; f.ItemRules.cfg().petToBag = true;
+  f.ItemRules.balanceTick(); const move = f.commands.at(-1);
+  assert.equal(move.kind, 'cos-transfer'); assert.equal(move.toCos, false); assert.equal(move.source, 1);
+  gp.inventory.push({ ...powder, slot: move.destination }); pet.inventory = [];
+  f.advance(500); f.ItemRules.balanceTick();
+  const moved = f.World.items().find(i => i.slot === move.destination);
+  assert.equal(f.ItemRules.fromPet(moved), true, 'the bot remembers what it moved');
+  const own = { ...powder, slot: f.Town.free(gp.inventory, 13, gp.inventorySlotCount) }; gp.inventory.push(own);
+  assert.equal(f.ItemRules.fromPet(own), false, 'an identical item of your own is not pet loot');
+  assert.equal(f.Town.cfg().sellBag, false);
+  f.Town.begin(); f.Town.enter('sell'); gp.target = 62; gp.shop = { npc: 62 };
+  for (let n = 0; n < 6 && f.Town.trip?.phase === 'sell'; n++) {
+    f.Town.tick(); const c = f.commands.at(-1);
+    if (c?.kind === 'shop-sell') gp.inventory = gp.inventory.filter(i => i.slot !== c.slot);
+    f.advance(1000);
+  }
+  assert.deepEqual(sells(), [move.destination], 'only the moved loot is sold; your own copy stays');
+  assert.ok(f.World.items().some(i => i.slot === own.slot));
+  gp.inventory.push({ ...powder, slot: move.destination }); f.ItemRules.pruneDrained();
+  assert.equal(f.ItemRules.fromPet(f.World.items().find(i => i.slot === move.destination)), false, 'a sold slot is forgotten');
+  const g = townFixture(), gg = g.World.gp, elixir = { slot: 0, refObjId: 1000, typeFlags: 3436, quantity: 2, name: 'Elixir' };
+  const mine = { ...elixir, slot: g.Town.free(gg.inventory, 13, gg.inventorySlotCount) }; gg.inventory.push(mine);
+  const loot = { ...elixir, slot: g.Town.free(gg.inventory, 13, gg.inventorySlotCount) }; gg.inventory.push(loot);
+  g.ItemRules.drained.add(g.ItemRules.drainKey(loot));
+  g.Town.begin(); g.Town.enter('store'); gg.storage = { npc: 60, phase: 'open', capacity: 30, items: [] }; gg.target = 60;
+  g.Town.store(); const deposit = g.commands.at(-1);
+  assert.equal(deposit.kind, 'storage-move'); assert.equal(deposit.move.source, loot.slot, 'moved elixirs go to the warehouse like pet elixirs; your own stay for alchemy');
+});
 test('the chosen weapons and shield stay listed when worn, carried elsewhere or changed by alchemy', () => {
   const f = townFixture(), gp = f.World.gp, worn = gp.inventory[0];
   f.Items.name = id => 'Item ' + id;
@@ -3846,12 +3888,102 @@ test('battle scrolls are re-used only when their buff runs out', () => {
   f.ScrollBuff.tick();
   assert.match(f.ScrollBuff.message, /off/);
 });
-test('reverse return scrolls join the merchant restock list', () => {
+test('reverse return scrolls have one switch: the Item mall one; an old merchant switch carries over', () => {
   const f = fixture();
-  assert.equal(f.Restock.offerKind({ refObjId: 3795 }), 'reverse', 'the merchant offer is classified');
-  assert.equal(f.Restock.supplies().some(s => s.kind === 'reverse'), false, 'off by default');
   f.Settings.profile.potion.restock.reverse.on = true;
-  assert.deepEqual(JSON.parse(JSON.stringify(f.Restock.supplies().find(s => s.kind === 'reverse'))), { kind: 'reverse', on: true, refObjId: 3795, low: 10, target: 50 });
+  assert.equal(f.Restock.supplies().some(s => s.kind === 'reverse'), false, 'no merchant sells them for gold: never a restock supply or a trip reason');
+  const migrated = f.botProfile({ potion: { restock: { reverse: { on: true, low: 10, target: 50 } } } });
+  assert.equal(migrated.mall.reverse.on, true, 'the old merchant switch turns the mall switch on');
+  assert.equal(migrated.potion.restock.reverse.on, false);
+  assert.equal(f.botProfile({}).mall.reverse.on, false, 'off by default');
+});
+test('reverse scrolls buy from the mall with the general mall switch off, at the low mark inclusive', () => {
+  const f = mallFixture();
+  f.Settings.profile.mall.on = false;
+  f.Settings.profile.mall.reverse = { on: true, low: 1, target: 3 };
+  f.World.gp.inventory = [{ slot: 16, refObjId: 3795, typeFlags: 0x19ec, quantity: 1, name: 'Reverse' }];
+  f.Hunt.start(); f.MallBuyer.tick();
+  assert.deepEqual(JSON.parse(JSON.stringify(mallBuys(f).map(c => c.request.packageId))), [19974], 'one in the bag is "low stock ≤ 1"');
+  const g = mallFixture(); g.Settings.profile.mall.on = false; g.Settings.profile.mall.reverse.on = false;
+  g.Hunt.start(); g.MallBuyer.tick();
+  assert.equal(mallBuys(g).length, 0, 'HP bags still need the general switch');
+});
+test('the mall prefers a single-item package over a bundle or a pricier listing of the same item', () => {
+  const f = mallFixture();
+  f.World.gp.itemMall.offers = [
+    { group: 852, shop: 1, tab: 0, slot: 0, packageId: 500, name: 'Travel bundle', silk: 10, giftSilk: 0, purchaseLimit: 5, itemIds: [3795, 61] },
+    { group: 852, shop: 2, tab: 9, slot: 1, packageId: 501, name: 'Reverse (hot)', silk: 20, giftSilk: 0, purchaseLimit: 5, itemIds: [3795] },
+    { group: 852, shop: 2, tab: 1, slot: 5, packageId: 19974, name: 'Reverse Return Scroll', silk: 14, giftSilk: 0, purchaseLimit: 5, itemIds: [3795] },
+  ];
+  assert.equal(f.MallBuyer.offerFor(3795).packageId, 19974);
+});
+test('a town trip without a reverse scroll buys one from the mall, then reverses; a blocked mall walks back', () => {
+  const setup = () => {
+    const f = townFixture(), gp = f.World.gp;
+    gp.inventory = gp.inventory.filter(i => i.slot !== 14);
+    gp.inventory.find(i => i.refObjId === 15).quantity = 50; gp.inventory.find(i => i.slot === 6).durability = 10;
+    f.Settings.profile.mall = { on: false, budgetSilk: 100, hp: { on: false, low: 1, target: 2 }, mp: { on: false, low: 1, target: 2 }, damageInc: { on: false, low: 1, target: 2 }, damageAbs: { on: false, low: 1, target: 2 }, reverse: { on: true, low: 1, target: 5 } };
+    gp.itemMall = { tabs: [], silk: 50, giftSilk: 0, points: 0, pending: false, revision: 1,
+      offers: [{ group: 852, shop: 2, tab: 1, slot: 5, packageId: 19974, name: 'Reverse Return Scroll', silk: 14, giftSilk: 0, purchaseLimit: 5, itemIds: [3795] }] };
+    f.Town.begin();
+    return f;
+  };
+  let f = setup(), gp = f.World.gp;
+  assert.equal(f.Town.closeNext('close-smith'), 'mall-reverse', 'the mall is tried before walking');
+  f.MallBuyer.tick();
+  f.Town.enter('mall-reverse'); f.advance(2000); f.Town.tick();
+  assert.deepEqual(JSON.parse(JSON.stringify(mallBuys(f).map(c => c.request.packageId))), [19974], f.Town.message);
+  assert.equal(f.Town.trip.phase, 'mall-reverse', 'waits for the delivery');
+  f.advance(1000);
+  f.World.applyGameplay({ ...gp, inventory: [...gp.inventory, { slot: 20, refObjId: 3795, typeFlags: 0x19ec, quantity: 1, name: 'Reverse' }], itemMall: { ...gp.itemMall, revision: 2, silk: 36 } });
+  f.Town.tick();
+  assert.equal(f.Town.trip.phase, 'walk-gate', 'with the scroll bought the trip goes to reverse');
+  assert.equal(f.MallBuyer.spentSilk, 14);
+
+  f = setup(); f.Settings.profile.mall.budgetSilk = 0;
+  assert.equal(f.Town.closeNext('close-smith'), 'leave', 'no budget: straight to the walk back');
+  f = setup(); f.World.gp.itemMall.silk = 5;
+  f.Town.enter('mall-reverse'); f.advance(2000); f.Town.tick();
+  assert.equal(f.Town.trip.phase, 'leave', 'an empty wallet walks back'); assert.match(f.notices.join(' | '), /silk.*Walking back/);
+  f = setup();
+  f.Town.enter('mall-reverse'); f.advance(2000); f.Town.tick();
+  assert.equal(mallBuys(f).length, 1);
+  f.advance(500);
+  f.World.applyGameplay({ ...f.World.gp, itemMall: { ...f.World.gp.itemMall, revision: 2, error: 'Mall purchase rejected: 128' } });
+  f.Town.tick(); f.Town.tick();
+  assert.equal(f.Town.trip.phase, 'leave', 'a refusal walks back'); assert.match(f.notices.join(' | '), /refused.*Walking back/);
+  f = setup(); f.Town.cfg().returnBy = 'walk';
+  assert.equal(f.Town.closeNext('close-smith'), 'leave', 'Walk never buys');
+});
+test('an old merchant reverse switch carries its numbers over unless the mall one was already on', () => {
+  const f = fixture();
+  const only = f.botProfile({ potion: { restock: { reverse: { on: true, low: 2, target: 6 } } }, mall: { reverse: { on: false, low: 10, target: 50 } } });
+  assert.deepEqual(plain(only.mall.reverse), { on: true, low: 2, target: 6 }, 'the switch that was on owns the numbers');
+  assert.equal(only.potion.restock.reverse.on, false);
+  const both = f.botProfile({ potion: { restock: { reverse: { on: true, low: 2, target: 6 } } }, mall: { reverse: { on: true, low: 3, target: 9 } } });
+  assert.deepEqual(plain(both.mall.reverse), { on: true, low: 3, target: 9 });
+  assert.deepEqual(plain(f.botProfile({ mall: { reverse: { on: false, low: 10, target: 50 } } }).mall.reverse), { on: false, low: 10, target: 50 }, 'a saved profile keeps its own numbers');
+  assert.deepEqual(plain(f.botProfile(plain(only)).mall.reverse), plain(only.mall.reverse), 'upgrading twice changes nothing');
+  const u = fixture(); u.storage.set('sroBotLean:v1:backup:profile:default', JSON.stringify({ at: 1, profile: { potion: { restock: { reverse: { on: true } } } } }));
+  assert.equal(u.ProfileShare.undo(), true); assert.equal(u.Settings.profile.mall.reverse.on, true, 'an old backup too');
+  assert.equal(u.Settings.profile.potion.restock.reverse.on, false);
+});
+test('share codes made before the reverse change keep the reverse numbers they meant', async () => {
+  const f = fixture(), code = (app, format, version, profile) => JSON.stringify({ app, format, version, profile });
+  const reverse = async text => plain((await f.ProfileShare.preview(text)).next.mall.reverse);
+  assert.deepEqual(await reverse(code('osb', 1, '2.0.2', { mall: { budgetSilk: 50, reverse: { on: true } } })), { on: true, low: 10, target: 50 }, 'an older OSB code left them at the old defaults');
+  assert.deepEqual(await reverse(code('osb', 1, '2.0.2', { mall: { reverse: { on: true, target: 20 } } })), { on: true, low: 10, target: 20 });
+  assert.deepEqual(await reverse(code('nixxane-bot', 1, '1.2.220', { mall: { reverse: { on: true } } })), { on: true, low: 10, target: 50 }, 'an older code from the previous bot too');
+  assert.deepEqual(await reverse(code('nixxane-bot', 1, '1.2.227', { mall: { reverse: { on: true } } })), { on: true, low: 1, target: 5 }, 'the previous bot changed the defaults in 1.2.227');
+  assert.deepEqual(await reverse(code('osb', 2, '2.0.2', { mall: { reverse: { on: true } } })), { on: true, low: 1, target: 5 }, 'a current code uses the new defaults');
+  assert.deepEqual(await reverse(code('osb', 1, '2.0.2', { hunt: { radius: 250 } })), { on: false, low: 1, target: 5 }, 'a code without the setting does not touch it');
+  const merchant = (await f.ProfileShare.preview(await f.ProfileShare.encode(code('osb', 1, '2.0.2', { potion: { restock: { reverse: { on: true } } } })))).next;
+  assert.deepEqual(plain(merchant.mall.reverse), { on: true, low: 10, target: 50 }, 'an old merchant switch in a code turns the mall one on');
+  assert.equal(merchant.potion.restock.reverse.on, false);
+  f.Settings.profile.mall.reverse.on = true;
+  assert.equal(JSON.parse(f.ProfileShare.text(true)).format, 2);
+  const g = fixture(); g.ProfileShare.pending = await g.ProfileShare.preview(await f.ProfileShare.encode(f.ProfileShare.text(true))); g.ProfileShare.apply();
+  assert.deepEqual(plain(g.Settings.profile.mall.reverse), { on: true, low: 1, target: 5 }, 'share round trip');
 });
 test('the mall buyer also refills MP bags and reverse scrolls from the live catalogue', () => {
   const f = mallFixture();
@@ -7430,10 +7562,35 @@ test('auto-start waits out manual control and gives way to the player and to a r
   assert.equal(f.Hunt.running, false); assert.match(f.AutoStart.message, /cancelled/);
   f = autoStartFixture(); f.Controller.tick(); f.toggleBot(); assert.equal(f.Hunt.running, true);
   f.Controller.tick(); assert.equal(f.AutoStart.entry, null, 'started by the player: nothing left to do');
-  const r = reconnectFixture(); autoStartFixture(r.f); r.f.Hunt.stop(); r.lose(); r.back();
+  const r = reconnectFixture(); autoStartFixture(r.f); r.f.userStop(); r.lose(); r.back();
   for (let i = 0; i < 6; i++) { r.f.advance(4000); r.f.Controller.tick(); }
-  assert.equal(r.f.Hunt.running, false, 'the player had stopped the bot; the reconnect owns this entry and does not start it');
-  assert.match(r.f.AutoStart.message, /reconnect/);
+  assert.equal(r.f.Hunt.running, false, 'the player had stopped the bot: neither the reconnect nor auto-start starts it');
+});
+function tidyReconnect() {
+  const r = reconnectFixture(), center = r.f.Hunt.cfg().center;
+  r.f.Settings.useCharacter('Tester'); Object.assign(r.f.Settings.profile.hunt, { autoStart: true, center });
+  return r;
+}
+test('auto-start waits for a reconnect and starts the bot when the reconnect does not resume hunting', () => {
+  const r = tidyReconnect(); r.f.Hunt.stop('Town cycle stopped: test.'); r.f.Controller.tick();
+  r.lose(); r.f.Reconnect.intent.hunting = false; r.f.AutoStart.armed = true;
+  r.back(); const settle = r.f.Reconnect.back; r.f.Reconnect.back = () => {};
+  r.f.Controller.tick(); assert.ok(r.f.AutoStart.pending(), 'not skipped for good while the reconnect runs');
+  assert.match(r.f.AutoStart.message, /waiting for the reconnect/);
+  assert.ok(r.f.Log.lines.some(l => /Auto-start: waiting for the reconnect/.test(l.text)));
+  r.f.advance(200000); r.f.Controller.tick(); assert.ok(r.f.AutoStart.pending(), 'a long reconnect does not use up the 2-minute auto-start wait');
+  r.f.Reconnect.back = settle; r.f.Reconnect.backAt = 0;
+  r.f.Controller.tick(); r.f.advance(4000); r.f.Controller.tick();
+  assert.equal(r.f.Reconnect.active(), false); assert.equal(r.f.Hunt.running, false, 'the reconnect itself did not resume hunting');
+  for (let i = 0; i < 3; i++) { r.f.advance(3000); r.f.Controller.tick(); }
+  assert.equal(r.f.Hunt.running, true, 'auto-start took over');
+  assert.match(r.f.AutoStart.message, /hunting started/);
+});
+test('when the reconnect resumes hunting itself, auto-start does not start it a second time', () => {
+  const r = tidyReconnect(); r.lose(); r.f.AutoStart.armed = true; r.back(); r.f.Controller.tick();
+  assert.equal(r.f.Reconnect.intent.hunting, true); assert.ok(r.f.AutoStart.pending());
+  for (let i = 0; i < 4; i++) { r.f.advance(4000); r.f.Controller.tick(); }
+  assert.equal(r.f.Hunt.running, true); assert.equal(r.f.AutoStart.entry, null);
 });
 function heroAutoStart() {
   const f = autoStartFixture(), center = f.Hunt.cfg().center;
@@ -7561,7 +7718,7 @@ test('a pending retry is dropped by Stop all, a character change or leaving the 
   }
 });
 test('a stop on a world change is retried, unless the player had just acted in the game', () => {
-  const change = f => { f.bus.emit('phase', 'entering-world', 'world', false); f.stopAll(); f.Controller.tick(); };
+  const change = f => { f.bus.emit('phase', 'entering-world', 'world', false); f.stopAll('world change'); f.Controller.tick(); };
   let { f } = retryFixture(); change(f);
   assert.equal(f.Retry.stop.reason, 'world change'); f.advance(121000); f.Controller.tick(); assert.equal(f.Hunt.running, true);
   ({ f } = retryFixture()); f.advance(60000);
@@ -7574,6 +7731,98 @@ test('the retry also follows a walk back that failed after a town trip', () => {
   f.WalkBack.start(true); assert.ok(f.WalkBack.active); f.Controller.tick();
   f.WalkBack.cancel('Walk back stopped: path blocked or travel timed out.'); f.Controller.tick();
   assert.match(f.Retry.message, /path blocked or travel timed out\.\); starting again in/);
+});
+const stopLines = f => f.Log.lines.filter(l => /^Hunting stopped/.test(l.text)).map(l => l.text);
+test('every stop of hunting says why in the log', () => {
+  const cases = [
+    [f => f.stopAll(), /^Hunting stopped: all activities stopped$/],
+    [f => f.userStop(), /^Hunting stopped: stopped by you$/],
+    [f => f.toggleBot('stopped by you (F8)'), /^Hunting stopped: stopped by you \(F8\)$/],
+    [f => f.BuffGear.fail('Weapon change failed.'), /^Hunting stopped: Weapon change failed\.$/],
+    [f => { f.World.isDead = () => true; f.BuffGear.fail('Weapon change failed.'); }, /^Hunting stopped: Weapon change failed\.$/],
+    [f => { f.Hunt.tick = () => { throw new Error('boom'); }; f.Controller.tick(); }, /^Hunting stopped: internal error$/],
+    [f => { f.World.gp.pose.x = 1800; f.WalkBack.start(true); }, /^Hunting stopped: walking back to the hunting spot$/],
+  ];
+  for (const [stop, line] of cases) {
+    const f = fixture(); f.Hunt.start(); stop(f);
+    assert.equal(f.Hunt.running, false, String(line));
+    assert.deepEqual(stopLines(f).length, 1, String(line)); assert.match(stopLines(f)[0], line);
+  }
+});
+test('a stop the bot makes by itself is started again; the player\'s own stop never is', () => {
+  let { f } = retryFixture(); const tick = f.Hunt.tick;
+  f.Hunt.tick = () => { throw new Error('boom'); }; f.Controller.tick(); f.Hunt.tick = tick; f.Controller.tick();
+  assert.equal(f.Hunt.running, false); assert.match(f.Retry.stop.reason, /internal error/);
+  assert.ok(f.Log.lines.some(l => /stopped by itself \(internal error\); starting again in 2 minutes/.test(l.text)));
+  assert.ok(f.Log.lines.some(l => l.level === 'error' && /boom/.test(l.text)), 'the error itself stays in the local log');
+  assert.doesNotMatch(f.Diagnostics.report(), /boom/, 'the bug report keeps fixed wording');
+  f.advance(121000); f.Controller.tick(); assert.equal(f.Hunt.running, true, 'an error stop is recovered');
+  ({ f } = retryFixture()); f.stopAll('world change'); f.Controller.tick(); f.advance(121000); f.Controller.tick();
+  assert.equal(f.Hunt.running, true, 'a world change is recovered');
+  for (const stop of [f => f.userStop(), f => f.toggleBot('stopped by you (F8)'), f => f.userStop('stopped by you (Stop all)'), f => f.userStop('stopped from outside the panel')]) {
+    ({ f } = retryFixture()); stop(f); f.Controller.tick(); f.advance(130000); f.Controller.tick();
+    assert.equal(f.Hunt.running, false, 'a stop by the player, even with no character name to remember it by');
+    assert.match(f.Retry.message, /final/);
+    assert.ok(f.Log.lines.some(l => /Not started again: that stop is final/.test(l.text)), 'the decision is in the log');
+  }
+});
+test('the retry logs why it does not start again after the player acted in the game', () => {
+  const { f } = retryFixture(); f.advance(60000);
+  f.Hook.observers.forEach(fn => fn({ kind: 'gameplay', command: { kind: 'item-use', slot: 13 } }));
+  f.stopAll('world change'); f.Controller.tick();
+  assert.ok(f.Log.lines.some(l => /Stopped right after your own action in the game; not started again/.test(l.text)));
+});
+test('the game naming the same character again keeps a pending restart', () => {
+  const { f, stop } = retryFixture(); f.bus.emit('character', 'Hero'); f.Controller.tick();
+  stop('Town cycle stopped: Inventory transaction timed out.'); assert.ok(f.Retry.stop);
+  f.bus.emit('character', 'Hero'); assert.ok(f.Retry.stop, 'a bootstrap for the same character is not a character change');
+  f.advance(121000); f.Controller.tick(); assert.equal(f.Hunt.running, true);
+  f.Hunt.stop('Town cycle stopped: other.'); f.Controller.tick(); assert.ok(f.Retry.stop);
+  f.bus.emit('character', 'Other'); assert.equal(f.Retry.stop, null, 'another character forgets it');
+});
+test('the same inventory refusal is logged at most once a minute, with a count', () => {
+  const f = fixture(), refusals = () => f.Log.lines.filter(l => l.code === 'game-refusal');
+  for (let i = 0; i < 40; i++) {
+    f.bus.emit('command', { kind: i % 2 ? 'item-use' : 'skill', skillId: 500 + i });
+    f.bus.emit('game-error', 'Inventory rejected: 2'); f.advance(250);
+  }
+  assert.equal(refusals().length, 1, 'many refusals a second, one line');
+  assert.equal(refusals()[0].repeatCount, 40);
+  assert.equal(f.Activity.userMessage(refusals()[0]), 'The game refused an inventory action (code 2).');
+  f.bus.emit('game-error', 'Inventory rejected: 3'); assert.equal(refusals().length, 2, 'another code has its own line');
+  f.advance(45000); f.bus.emit('game-error', 'Inventory rejected: 2'); assert.equal(refusals().length, 2);
+  assert.equal(refusals()[0].repeatCount, 41);
+  f.advance(6000); f.bus.emit('game-error', 'Inventory rejected: 2'); assert.equal(refusals().length, 3, 'a minute later: a new line');
+});
+test('a missing skill icon is warned about at most once a minute, with a count', async () => {
+  const f = fixture(); f.Icons.request = () => Promise.reject(new Error('not found in the game packs'));
+  const path = '/assets/images/Media_extracted/icon/xxx.png', warnings = () => f.Log.lines.filter(l => /Skill icon unavailable/.test(l.text));
+  await f.Icons.url(path); assert.equal(warnings().length, 1);
+  f.advance(31000); await f.Icons.url(path); assert.equal(warnings().length, 1, 'the 30 s retry is not logged again');
+  f.advance(31000); await f.Icons.url(path); assert.equal(warnings().length, 2);
+  assert.match(warnings()[1].text, /seen 2 times since the last warning/);
+});
+test('protect never locks the bot onto a monster it cannot reach, and an unconfirmed release does not stop hunting', () => {
+  const { f, mob, hit } = protectFixture(); f.Settings.profile.hunt.retry = true;
+  const wolf = mob(31, 160); f.Navigation.attackRoute = () => ({ status: 'unreachable', route: [] });
+  f.Combat.fight = () => {};
+  let dropped = false;
+  for (let i = 0; i < 80 && !dropped; i++) {
+    hit(31, 5);
+    const last = f.commands.at(-1);
+    f.World.gp = { ...f.World.gp, target: last?.kind === 'select' ? last.gid : f.World.gp.target };
+    f.advance(500); f.Controller.tick();
+    dropped = f.Hunt.banned(f.Hunt.ban, 31);
+  }
+  assert.ok(dropped, 'the unreachable attacker was dropped');
+  assert.ok(f.commands.some(c => c.kind === 'release-target'));
+  assert.equal(f.Hunt.running, true, 'hunting goes on');
+  assert.equal(f.Retry.stop, null);
+  const sent = f.commands.length;
+  for (let i = 0; i < 10; i++) { hit(31, 5); f.advance(500); f.Controller.tick(); }
+  assert.equal(f.commands.slice(sent).some(c => c.gid === wolf.gid && ['select', 'attack', 'skill'].includes(c.kind)), false, 'protect does not pick the banned monster again');
+  assert.equal(f.Protect.pick(null), null);
+  assert.equal(f.Hunt.running, true);
 });
 test('a walk that starts on a blocked tile or against a wall steps out to open ground first, never through the wall', () => {
   const wall = { x: 0, y: 0, z: 0, yaw: 0, mesh: { vertices: [200,0,0,200,0,1920], edges: [0,1,0,65535,3,0] } };
@@ -7629,6 +7878,53 @@ test('a town walk that is stuck goes to the town start first, then on to the ser
   assert.equal(g.Town.trip.phase, 'walk-vendor'); assert.match(g.Town.message, /waiting; retrying collision route/);
   assert.equal(g.Log.lines.filter(l => /going to the town start first/.test(l.text)).length, 1);
 });
+test('a town NPC that shows up late is waited for: the trip retries instead of stopping the bot', () => {
+  const f = townFixture(), gp = f.World.gp, npc = f.World.ents.get(60);
+  f.Town.begin(); f.Town.enter('open-storage'); gp.pose = { regionId: 1, x: 130, y: 0, z: 100 };
+  gp.targetCapabilities = 4;
+  f.World.ents.delete(60);
+  f.advance(16000); f.Town.tick();
+  assert.equal(f.Town.trip?.phase, 'service-wait', f.Town.message); assert.equal(f.Hunt.running, true, 'the bot keeps running');
+  assert.match(f.Town.message, /warehouse/); assert.match(f.Town.message, /try 2 of 3/);
+  f.advance(30000); f.Town.tick(); assert.equal(f.Town.trip.phase, 'service-wait', 'waits the whole minute');
+  f.World.ents.set(60, npc);
+  f.advance(31000); f.Town.tick(); assert.equal(f.Town.trip.phase, 'walk-storage', 'walks back to the service first');
+  for (let n = 0; n < 10 && f.Town.trip?.phase !== 'store'; n++) {
+    const sent = f.commands.length; f.advance(1000); f.Town.tick();
+    if (f.Town.trip.phase === 'open-storage') gp.target = 60;
+    if (f.commands.slice(sent).some(c => c.kind === 'storage-open')) gp.storage = { npc: 60, phase: 'open', capacity: 30, items: [] };
+  }
+  assert.equal(f.Town.trip?.phase, 'store', f.Town.message);
+});
+test('a town NPC that never opens stops the trip after three tries, and each service counts its own', () => {
+  const f = townFixture(), gp = f.World.gp;
+  f.Town.begin(); f.Town.enter('open-storage'); gp.pose = { regionId: 1, x: 130, y: 0, z: 100 };
+  f.World.ents.delete(60);
+  for (let n = 0; n < 150; n++) { f.advance(1000); f.Town.tick(); }
+  assert.ok(f.Town.trip, 'still trying after two and a half minutes'); assert.equal(f.Hunt.running, true);
+  for (let n = 0; n < 30 && f.Town.trip; n++) { f.advance(1000); f.Town.tick(); }
+  assert.equal(f.Town.trip, null); assert.equal(f.Hunt.running, false); assert.match(f.Town.message, /Could not open storage/);
+  const g = townFixture(), trips = g.Town;
+  trips.begin(); trips.enter('open-storage'); trips.openFailed('storage', 'x'); trips.enter('open-storage'); trips.openFailed('storage', 'x');
+  trips.enter('open-vendor'); trips.openFailed('vendor', 'x');
+  assert.equal(trips.trip?.phase, 'service-wait', 'a failed warehouse does not use up the merchant tries');
+});
+test('a town open that got no answer closes the window, sends nothing else, and survives a changed selection', () => {
+  const f = townFixture(), gp = f.World.gp, count = kind => f.commands.filter(c => c.kind === kind).length;
+  f.Town.begin(); f.Town.enter('open-storage'); gp.pose = { regionId: 1, x: 130, y: 0, z: 100 }; gp.target = 60; gp.targetCapabilities = 4;
+  f.advance(1000); f.Town.tick(); assert.equal(count('storage-open'), 1);
+  f.advance(16000); f.Town.tick(); assert.equal(f.Town.trip.phase, 'service-wait');
+  f.advance(1000); f.Town.tick(); assert.equal(count('npc-close'), 1);
+  f.advance(1000); f.Town.tick(); assert.equal(count('npc-close'), 1, 'closes are spaced out');
+  gp.target = 0; f.advance(5000); f.Town.tick(); assert.equal(count('npc-close'), 1, 'nothing left to close');
+  gp.storage = { npc: 60, phase: 'open', capacity: 30, items: [] }; f.advance(1000); f.Town.tick();
+  assert.equal(count('npc-close'), 2, 'an answer that arrives late is closed too'); assert.equal(count('storage-open'), 1);
+  const g = townFixture(), gg = g.World.gp;
+  g.Town.begin(); g.Town.enter('open-storage'); gg.pose = { regionId: 1, x: 130, y: 0, z: 100 }; gg.target = 60; gg.targetCapabilities = 4;
+  g.advance(1000); g.Town.tick(); gg.target = 61; g.advance(1000); g.Town.tick();
+  assert.equal(g.Town.trip?.phase, 'service-wait', g.Town.message); assert.equal(g.Hunt.running, true);
+});
+
 
 
 function buffGearFixture() {
