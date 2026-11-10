@@ -102,7 +102,7 @@ const Equip = {
     if (this.protected(item) || this.bad.has(BuffGear.key(item))) return null;
     const stats = this.stats(item), slots = this.slots(item);
     if (!stats || !slots.length) return null;
-    const need = Town.requiredLevel(item);
+    const need = Leveling.reqLevel(item);
     if (!Number.isInteger(need) || need > level || !Town.masteriesMet(item)) return null;
     const family = worn.filter(w => this.family(w) === this.family(item) && slots.includes(w.slot));
     if (!family.length) return null;

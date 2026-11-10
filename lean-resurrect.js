@@ -8,15 +8,55 @@
 // (sent when a player comes into view). The server does not send HP for a selected player, so it decides by taking or
 // refusing the Rebirth; a refusal (nearly dead, not dead) waits for the answer window like an unanswered offer.
 const RES_ALIVE_MS = 30000; // a standing member the server reports alive is checked again after this
+const RES_REFUSED_MS = 10 * 60000;
+const RES_REFUSAL_MS = 3000;
+const RES_NAMES_MAX = 20;
 const Resurrect = {
   sent: {},           // member id -> time of the unanswered proposal
   checked: {},        // member id -> time until which a standing member counts as alive
+  refused: {},
+  lastCast: null,
   nextAt: -Infinity,  // earliest next attempt
   holdUntil: 0,
   trip: null,
   windowMs: 31000,    // the server's answer window plus one tick
   message: 'No fallen party member.',
-  reset() { this.cancelTrip('', true); this.sent = {}; this.checked = {}; this.nextAt = -Infinity; this.holdUntil = 0; this.message = 'No fallen party member.'; },
+  reset() {
+    this.cancelTrip('', true); this.sent = {}; this.checked = {}; this.refused = {}; this.lastCast = null;
+    this.nextAt = -Infinity; this.holdUntil = 0; this.message = 'No fallen party member.';
+  },
+  names() { return Party.names(Settings.profile.party.resNames).slice(0, RES_NAMES_MAX); },
+  lower(name) { return String(name || '').trim().toLowerCase(); },
+  key(name) { return 'name:' + this.lower(name); },
+  outsiderDead(e) { return e.appearanceState?.[0] === 2 || World.hpOf(e.gid) === 0; },
+  outsiders(social, names) {
+    if (!names.length) return [];
+    const party = new Set(social.members.map(m => this.lower(m?.name)).filter(Boolean)), me = this.lower(social.localName), out = [];
+    for (const e of World.ents.values()) {
+      if (!e || e.kind !== 'player' || !e.name) continue;
+      const name = this.lower(e.name);
+      if (names.includes(name) && name !== me && !party.has(name)) out.push(e);
+    }
+    return out;
+  },
+  fallen(a, party) {
+    const body = World.ents.get(a.gid), social = World.gp?.social;
+    if (!body || body.name !== a.name) return false;
+    if (a.outsider) return !!social && this.outsiders(social, this.names()).some(e => e.gid === a.gid) && this.outsiderDead(body);
+    const member = party.find(m => m.id === a.member && m.name === a.name);
+    return !!member && (member.status & 15) === 0 && this.dead(body);
+  },
+  noteRefusal(text) {
+    const match = String(text).match(/^Cast rejected:\s*(\d+)\s*$/i), last = this.lastCast;
+    if (!match || Number(match[1]) === 5 || !last || now() - last.at > RES_REFUSAL_MS) return;
+    this.lastCast = null;
+    this.refused[last.key] = now() + RES_REFUSED_MS;
+    delete this.sent[last.key];
+    this.holdUntil = 0;
+    if (this.trip && this.trip.member === last.key) this.returnTrip();
+    this.message = 'The game refused Rebirth on ' + last.name + ' (not in the party); skipping them for 10 minutes.';
+    Log.warn(this.message);
+  },
   // Whether a party member at 0 HP in the party list is dead: a corpse, or a standing body without known HP above 0.
   dead(e) {
     if (e.appearanceState?.[0] === 2) return true;
@@ -39,10 +79,9 @@ const Resurrect = {
   travelTick(skill, members) {
     const a = this.trip, pose = World.pose();
     if (!a || !pose) return false;
-    const member = members.find(m => m.id === a.member && m.name === a.name);
     const body = World.ents.get(a.gid);
     if (a.phase === 'cast') this.returnTrip();
-    if (a.phase === 'approach' && (!member || (member.status & 15) !== 0 || !body || body.name !== a.name || !this.dead(body) ||
+    if (a.phase === 'approach' && (!this.fallen(a, members) ||
         !Number.isFinite(dist2D(a.home, body)) || dist2D(a.home, body) > Settings.profile.party.resRadius)) {
       this.returnTrip('Resurrection target unavailable or outside the configured radius; returning.');
     }
@@ -66,7 +105,7 @@ const Resurrect = {
     if (move.error && !move.waiting) {
       if (a.phase === 'approach') {
         this.sent[a.member] = now() + 30000;
-        this.returnTrip('No walkable route to the party member; returning.');
+        this.returnTrip('No walkable route to ' + a.name + '; returning.');
       } else {
         this.cancelTrip(move.error, true);
         if (Hunt.running) Hunt.stop(move.error);
@@ -98,8 +137,8 @@ const Resurrect = {
     return mastery * 1000 + (s.level ?? 0);
   },
   tick() {
-    const c = Settings.profile.party;
-    if (!c.autoRes) { this.cancelTrip('', true); this.holdUntil = 0; this.message = 'Auto-resurrect off.'; return false; }
+    const c = Settings.profile.party, names = this.names();
+    if (!c.autoRes && !names.length) { this.cancelTrip('', true); this.holdUntil = 0; this.message = 'Auto-resurrect off.'; return false; }
     if (!World.inWorld() || World.isDead()) { this.cancelTrip(); this.holdUntil = 0; this.message = 'Waiting for a living character.'; return false; }
     if (now() - Manual.lastAt < Hunt.cfg().manualPauseS * 1000) { this.cancelTrip('Manual control: resurrection travel cancelled.'); this.holdUntil = 0; return false; }
     if (now() < this.holdUntil || this.holdUntil && World.isCasting()) return true;
@@ -107,36 +146,49 @@ const Resurrect = {
     const social = World.gp?.social, members = social?.members;
     if (!Array.isArray(members)) { this.cancelTrip('', true); return false; }
     const party = members.filter(m => m && m.id && m.name && m.name !== social.localName);
+    const outsiders = this.outsiders(social, names);
     const t = now();
     for (const list of [this.sent, this.checked]) for (const id of Object.keys(list)) {
+      if (id.startsWith('name:')) {
+        const e = outsiders.find(x => this.key(x.name) === id);
+        if (!names.includes(id.slice(5)) || e && !this.outsiderDead(e)) delete list[id];
+        continue;
+      }
       const m = party.find(x => x.id === Number(id));
       if (!m || (m.status & 15) !== 0) delete list[id];
     }
-    const offered = party.find(m => this.sent[m.id]);
-    this.message = offered ? 'Resurrection offered: ' + offered.name + '; waiting for the answer.' : 'Watching for fallen party members.';
+    for (const id of Object.keys(this.refused)) if (this.refused[id] <= t || !names.includes(id.slice(5))) delete this.refused[id];
+    const wanted = [
+      ...party.filter(m => c.autoRes || names.includes(this.lower(m.name))).map(m => ({ key: m.id, name: m.name, member: m })),
+      ...outsiders.map(e => ({ key: this.key(e.name), name: e.name, body: e, outsider: true })),
+    ];
+    const offered = wanted.find(w => this.sent[w.key]);
+    this.message = offered ? 'Resurrection offered: ' + offered.name + '; waiting for the answer.' :
+      c.autoRes ? 'Watching for fallen party members.' : 'Watching for fallen players on the resurrect list.';
     const skill = this.skill();
     if (!skill) { this.cancelTrip('', true); this.message = 'No learned resurrection skill (Rebirth) was found.'; return; }
     if (this.trip && this.travelTick(skill, party)) return true;
     if (t < this.nextAt || World.gp.targetPending || !Cmd.canCast(skill.id)) return !!this.trip;
     if (World.isCasting() || World.isSitting() || World.local()?.mountedOn || World.gp.inventoryPending ||
         now() - Combat.lastCastAt < Settings.profile.macro.castGapMs || !Combat.mpOk(skill.id, World.me())) return !!this.trip;
-    for (const m of party) {
-      if ((m.status & 15) !== 0 || this.sent[m.id] && t - this.sent[m.id] < this.windowMs || this.checked[m.id] > t) continue;
+    for (const w of wanted) {
+      const m = w.member;
+      if (m && (m.status & 15) !== 0 || this.sent[w.key] && t - this.sent[w.key] < this.windowMs || this.checked[w.key] > t || this.refused[w.key] > t) continue;
       // The corpse must be in view as an entity to aim the select at.
-      const e = [...World.ents.values()].find(x => x && x.kind === 'player' && x.name === m.name);
+      const e = w.body || [...World.ents.values()].find(x => x && x.kind === 'player' && x.name === m.name);
       if (!e) continue;
-      if (!this.dead(e)) { this.checked[m.id] = t + RES_ALIVE_MS; continue; }
+      if (w.outsider ? !this.outsiderDead(e) : !this.dead(e)) { if (!w.outsider) this.checked[w.key] = t + RES_ALIVE_MS; continue; }
       if (this.trip && e.gid !== this.trip.gid) continue;
       const distance = dist2D(World.pose(), e);
       const home = this.trip?.home || (Hunt.running && Settings.profile.hunt.center) || World.pose();
       if (!Number.isFinite(distance) || dist2D(home, e) > c.resRadius) continue;
-      if (e.appearanceState?.[0] !== 2 && this.sent[m.id] === undefined) Log.info(m.name + ' is at 0 HP in the party list but shown standing; offering resurrection.');
+      if (!w.outsider && e.appearanceState?.[0] !== 2 && this.sent[w.key] === undefined) Log.info(m.name + ' is at 0 HP in the party list but shown standing; offering resurrection.');
       if (Loot.active && !Loot.active.petGid) {
         if (!Cmd.move(World.pose())) return false;
         Loot.suspend();
       }
       if (distance > Math.max(1, (skill.range || 150) - 5)) {
-        if (!this.trip) this.trip = { phase: 'approach', member: m.id, gid: e.gid, name: e.name, home: { ...home },
+        if (!this.trip) this.trip = { phase: 'approach', member: w.key, gid: e.gid, name: e.name, outsider: !!w.outsider, home: { ...home },
           at: t, progressAt: t, lastPose: { ...World.pose() }, sentAt: -Infinity };
         return this.travelTick(skill, party);
       }
@@ -144,15 +196,19 @@ const Resurrect = {
       if (!Cmd.skill(skill.id, e.gid)) return !!this.trip;
       if (this.trip) this.trip.phase = 'cast';
       Combat.lastCastAt = t; Combat.lastCastId = skill.id; Stats.count('casts');
+      this.lastCast = w.outsider ? { key: w.key, name: e.name, at: t } : null;
       // Keep combat/loot movement from replacing the approach or cast before
       // the worker has published it. Continue holding any observed cast.
       this.holdUntil = t + Math.max(1000, skill.actionMs || 6000) + 500;
       this.nextAt = t + 700;
-      const first = this.sent[m.id] === undefined;
-      this.sent[m.id] = t;
-      this.message = 'Resurrection offered: ' + m.name + '; waiting for the answer.';
-      if (first) UI.toast('Resurrection offered: ' + m.name, 'info', 3000);
+      const first = this.sent[w.key] === undefined;
+      this.sent[w.key] = t;
+      const label = e.name + (w.outsider ? ' (not in the party)' : '');
+      this.message = 'Resurrection offered: ' + label + '; waiting for the answer.';
+      if (first) UI.toast('Resurrection offered: ' + label, 'info', 3000);
+      if (first && w.outsider) Log.info('Resurrection offered: ' + label + '.');
       return true;
     }
   },
 };
+bus.on('game-error', text => Resurrect.noteRefusal(text));

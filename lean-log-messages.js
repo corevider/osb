@@ -42,7 +42,10 @@ Activity.userMessage = function( entry ) {
 			buy: "Buying supplies.", "close-vendor": "Finished buying supplies.",
 			"walk-smith": "Walking to the repair merchant.", "open-smith": "Opening the repair shop.",
 			sell: "Selling loot.", ammo: "Buying ammunition.", repair: "Repairing equipment.",
-			"close-smith": "Finished at the repair merchant.", "walk-gate": "Walking to the return point.",
+			"close-smith": "Finished at the repair merchant.", gear: "Buying better gear.",
+			"walk-armor": "Walking to the armour merchant.", "open-armor": "Opening the armour shop.", "close-armor": "Finished at the armour merchant.",
+			"walk-accessory": "Walking to the accessory merchant.", "open-accessory": "Opening the accessory shop.", "close-accessory": "Finished at the accessory merchant.",
+			"walk-gate": "Walking to the return point.",
 			"open-gate": "Opening return travel.", reverse: "Preparing to return to the hunting area.",
 			"mall-reverse": "Buying a Reverse Return Scroll from the Item mall.", "reverse-wait": "Returning to the hunting area…",
 			leave: "Finished town services; walking back to the hunting spot."

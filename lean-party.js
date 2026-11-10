@@ -139,8 +139,10 @@ const Party = {
   helperNearby() {
     const social = World.gp?.social;
     return !!social?.members?.some(m => m && m.name && m.name !== social.localName && (m.status & 15) !== 0 &&
-      [...World.ents.values()].some(e => e.kind === 'player' && e.name === m.name && e.appearanceState?.[0] !== 2));
+      [...World.ents.values()].some(e => e.kind === 'player' && e.name === m.name && e.appearanceState?.[0] !== 2)) ||
+      !!Settings.profile.party.acceptResAny && [...World.ents.values()].some(e => e.kind === 'player' && e.name && e.name !== social?.localName && World.isAlive(e));
   },
+  accepting() { const c = Settings.profile.party; return !!(c.acceptRes || c.acceptResAny); },
   helperSeenAt: -Infinity,
   // With Accept resurrection on and a helper at hand, wait longer before the bot revives itself. A helper seen in the
   // last 15 seconds still counts, so a moment out of view or a death far from the party does not cut the wait short.
@@ -150,13 +152,13 @@ const Party = {
   },
   reviveDelay() {
     const wait = Math.min(600, Math.max(5, Number(Settings.profile.party.reviveWaitS) || 20)) * 1000;
-    return Settings.profile.party.acceptRes && this.helping() ? wait : 5000;
+    return this.accepting() && this.helping() ? wait : 5000;
   },
   // One plain sentence for the log when the character dies.
   waitNote() {
-    if (!Settings.profile.party.acceptRes) return 'reviving in 5 s (Accept resurrection from party members is off).';
-    const wait = this.reviveDelay();
-    return wait > 5000 ? `waiting ${Math.round(wait / 1000)} s for a party member to resurrect before reviving.` : 'no party member in view, reviving in 5 s.';
+    if (!this.accepting()) return 'reviving in 5 s (Accept resurrection from party members is off).';
+    const wait = this.reviveDelay(), who = Settings.profile.party.acceptResAny ? 'player' : 'party member';
+    return wait > 5000 ? `waiting ${Math.round(wait / 1000)} s for a ${who} to resurrect before reviving.` : `no ${who} in view, reviving in 5 s.`;
   },
   // Never revive while an offer is open or an acceptance was just sent.
   resBusy() { return !!World.gp?.social?.resurrection || now() - this.consentAt < 4000; },
@@ -176,23 +178,26 @@ const Party = {
     this.resumeHunt = this.huntAtDeath = null;
     Controller.resumeHunting('Resurrected');
   },
-  // A dead character gets a Yes/No resurrection question from a caster's Rebirth skill. Only party members
-  // are answered, and only while dead; other questions (including mutation proposals) are left to the player.
+  // A dead character gets a Yes/No resurrection question from a caster's Rebirth skill. Party members are answered with
+  // the party option, any player with the any-player option, and only while dead; mutation proposals are left to the player.
   acceptResurrection() {
     const c = Settings.profile.party, social = World.gp?.social, question = social?.resurrection;
-    if (!c.acceptRes || !question || question.mutation || !World.inWorld() || !World.isDead() || !Array.isArray(social.members)) return;
+    if (!this.accepting() || !question || question.mutation || !World.inWorld() || !World.isDead() || !Array.isArray(social.members)) return;
     const caster = World.ents.get(question.gid);
-    if (!caster?.name || !social.members.some(m => m?.name === caster.name && m.name !== social.localName)) return;
+    if (!caster?.name || caster.name === social.localName) return;
+    const member = social.members.some(m => m?.name === caster.name);
+    if (member ? !c.acceptRes && !c.acceptResAny : !c.acceptResAny || caster.kind !== 'player') return;
     if (!Cmd.spaced('resurrection-consent')) return;
     if (Cmd.raw({ kind: 'resurrection-consent', accept: true }, 'Accept resurrection from ' + caster.name)) {
       this.consentAt = now();
       this.resumeHunt = this.huntAtDeath && !Hunt.running && now() - this.huntAtDeath.at < 15 * 60000 ? { at: now() } : null;
+      Log.info('Accepted resurrection from ' + caster.name + (member ? ' (party member).' : ' (not in the party).'));
       UI.toast('Accepted resurrection from ' + caster.name, 'info', 3000);
     }
   },
   tick() {
     this.acceptResurrection();
-    if (World.inWorld() && Settings.profile.party.acceptRes) this.helping();
+    if (World.inWorld() && this.accepting()) this.helping();
     const c = Settings.profile.party;
     // Optional: party joining, leaving, recruiting and accepting wait until the bot is running (default: they work while stopped).
     if (c.onlyWhileRunning && !Hunt.running) { this.joinMessage = ''; this.message = 'Waiting for the bot to be started.'; return; }

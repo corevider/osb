@@ -1235,10 +1235,13 @@ const UI = {
         this.check('Only join and accept parties while the bot is running', () => party().onlyWhileRunning, v => { party().onlyWhileRunning = v; Party.reset(); }),
         el('p', 'Off by default: Auto-recruit, Auto-accept and joining the party leader also work while hunting is stopped. Turn this on to make all of them wait until you press Start. Resurrection is not affected.', 'muted'),
         this.check('Accept resurrection from party members', () => party().acceptRes, v => party().acceptRes = v),
+        this.check('Accept resurrection from any player', () => party().acceptResAny, v => party().acceptResAny = v),
         this.number('Wait for a party resurrection (s)', () => party().reviveWaitS, v => party().reviveWaitS = v, 5, 600),
-        el('p', 'When you are dead and a party member casts Rebirth on you, the bot answers Yes. Works during hunting and while stopped; resurrection offers from other players are left to you. With a living party member in view it waits this long after dying before reviving itself in town (20 s by default).', 'muted'),
+        el('p', 'When you are dead and a party member casts Rebirth on you, the bot answers Yes. Works during hunting and while stopped. Offers from other players are left to you unless Accept resurrection from any player is on (off by default). With a living party member in view, or any living player when that option is on, it waits this long after dying before reviving itself in town (20 s by default). The log names who resurrected you.', 'muted'),
         this.check('Auto-resurrect party members', () => party().autoRes, v => { party().autoRes = v; Resurrect.reset(); }),
+        this.text('Also resurrect these players (not in the party)', () => party().resNames, v => { party().resNames = v; Resurrect.reset(); }, 'names, comma separated'),
         this.number('Maximum res distance from hunt spot (m)', () => party().resRadius / 10, v => party().resRadius = v * 10, 1, 100),
+        el('p', 'For helpers outside the party, such as a lure while the party is full. Up to 20 names, any letter case. A listed player is resurrected like a party member, even with Auto-resurrect party members off; nobody else outside the party is. If the game refuses Rebirth on one of them, the bot logs it and skips that player for 10 minutes.', 'muted'),
         el('p', 'Works during hunting and while stopped. Walks into skill range for visible dead members within the maximum radius, casts Rebirth, then returns. During hunting the radius is measured from the saved hunt spot; while stopped it uses your starting position. Collision data is required for walking. Travel stops after 30 seconds or 12 seconds without progress per leg. The member must accept the revival. Travel, shopping and manual control take priority.', 'muted')));
   },
   section_combatLure(host) { Lure.draw(host); },
@@ -1334,8 +1337,23 @@ const UI = {
       host.append(this.group('Recent activity', this.button('Pop out session totals and log', () => this.showSession(true)), this.activityPanel(this.logs, 'Settings')));
   },
   // The wide window shows a page as two columns. Plain grid rows leave a gap under every box that is shorter than its
-  // neighbour, so the boxes are dealt into two stacks instead: each one goes under the shorter stack, in page order.
+  // neighbour, so the boxes are dealt into two stacks instead, split as evenly as the heights allow, in page order.
   // Wide boxes (the map, the item table, the member list, the trip pictures) and loose notes keep the full width.
+  splitMask(heights) {
+    const BALANCE_EXACT = 12, n = heights.length;
+    if (n > BALANCE_EXACT) {
+      let l = 0, r = 0, mask = 0;
+      heights.forEach((h, i) => { if (l <= r) l += h; else { r += h; mask |= 1 << i; } });
+      return mask;
+    }
+    let best = 0, bestDiff = Infinity;
+    for (let mask = 0; mask < 1 << n; mask += 2) {
+      let diff = 0;
+      heights.forEach((h, i) => { diff += mask & (1 << i) ? -h : h; });
+      if (Math.abs(diff) < bestDiff) { bestDiff = Math.abs(diff); best = mask; }
+    }
+    return best;
+  },
   balance() {
     if (!this.wide || !this.pane) return;
     const full = el => el.tagName !== 'FIELDSET' || el.matches('.map-box, :has(.trip-flow), :has(.members), :has(.item-table)');
@@ -1350,8 +1368,8 @@ const UI = {
     for (const { run: group, before } of segments) {
       if (group.length < 2) continue;
       const row = el('div', null, 'pane-cols'), left = el('div', null, 'pane-col'), right = el('div', null, 'pane-col');
-      let l = 0, r = 0;
-      for (const b of group) { if (l <= r) { left.append(b); l += heights.get(b) + 8; } else { right.append(b); r += heights.get(b) + 8; } }
+      const mask = this.splitMask(group.map(b => heights.get(b) + 8));
+      for (const [i, b] of group.entries()) (mask & (1 << i) ? right : left).append(b);
       row.append(left, right); this.pane.insertBefore(row, before);
     }
   },
@@ -1487,7 +1505,7 @@ const UI = {
     if (this.is('Party') && this.partyNote) {
       const notes = [Settings.profile.party.autoRecruit ? Party.message : 'Auto-recruit off.'];
       if (Settings.profile.party.joinMain && Party.joinMessage) notes.push(Party.joinMessage);
-      if (Settings.profile.party.autoRes) notes.push(Resurrect.message);
+      if (Settings.profile.party.autoRes || Resurrect.names().length) notes.push(Resurrect.message);
       this.partyNote.textContent = notes.join(' ');
     }
     if (!this.status) return;

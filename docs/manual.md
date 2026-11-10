@@ -201,9 +201,17 @@ Tick **Auto-resurrect party members** on the **Party** page to cast your learned
 
 A member who died while out of view is often drawn standing when you get back to them, because the game only shows deaths it saw. A standing member at 0 in the party list therefore counts as dead, unless the HP the server sent when the player came into view says otherwise. The bot casts Rebirth and the server decides: a nearly dead member refuses it, and the offer is not repeated within its 30-second answer window. A member the server's HP shows alive is checked again after 30 seconds.
 
+### Players outside the party
+
+**Also resurrect these players (not in the party)** takes up to 20 character names, comma separated, in any letter case. It is meant for a helper who cannot join, such as a lure character next to a full party of 8. A listed player is resurrected with the same rules as a party member: in view, within **Maximum res distance from hunt spot (m)**, walk into range, cast Rebirth, walk back. It works during hunting and while stopped, and even with **Auto-resurrect party members** off. A listed player who is in your party is handled as a party member. Nobody else outside the party is ever targeted.
+
+The game keeps no party list entry for an outsider, so the bot reads their death from the body alone: a corpse, or a server HP of 0 (sent when the player came into view). A standing outsider without known HP counts as alive, so one who died out of view is resurrected once the game draws the corpse or sends their HP. If the game refuses Rebirth on a listed player (a cast refusal right after the cast), the Activity log says so once and the bot skips that player for 10 minutes. An unanswered offer is repeated after its 30-second answer window, as for party members.
+
 ## Accepting resurrection
 
 Tick **Accept resurrection from party members** on the **Party** page. When you are dead and a party member casts Rebirth on you, the bot answers Yes, whether or not hunting is running. Offers from players outside your party, and mutation offers, are left to you. The switch is off by default and saved per character.
+
+Tick **Accept resurrection from any player** to also answer Yes to a Rebirth from a player outside your party, for example when your character helps a party from outside it. Mutation offers are still left to you. It is off by default. The Activity log names who resurrected you and whether they were in your party.
 
 If hunting was running when the character died, it resumes after a resurrection you accepted, whatever **On death** is set to: at the hunting spot it simply starts, otherwise it walks back first, however far the spot is (up to about 14 km, walked in short legs), and only stops when the spot is out of reach, in another world or in a dungeon. The memory lasts 15 minutes; a revive you or the bot does yourselves resumes nothing. While this switch is on and an online party member is in view, a bot set to revive (or the town cycle's revive) waits up to 20 seconds instead of 5 before reviving itself, and never revives while a resurrection offer is open.
 
@@ -307,14 +315,27 @@ If something stalls, use **Settings → Send bug report**, which opens a draggab
 
 Inside OSB Manager the Manager handles usage statistics and OSB shows "Usage statistics are handled by OSB Manager." Reports still go directly and only when you press Send. The full list of requests and the state names is in [telemetry.md](telemetry.md). Privacy contact: privacy@osb.lol.
 
+## Zero-setup leveling
+
+On the **Setup** page, **Zero-setup leveling → Level up by itself** lets a character level with no hunting spot or gear planning. It is off by default and saved per character, so nothing changes for existing settings until you turn it on. Turning it on also sets **No XP → Move to the next level spot** and, if town trips are off, sets up the town picked on the Setup page.
+
+- **Hunting spots:** the bot picks a spot from the game's own monster spawn data (built into OSB, nothing is downloaded): ordinary monsters at most 5 levels under yours, within **Spots at most this far from town** (400 m by default) of the town your return scroll lands in. Higher level wins first, then more monsters, then nearer. It keeps the spot until one at least 3 levels better is available, then walks there. A spot that gives no XP for the set time is passed over for the rest of the session. The saved **Spot by level** list (Map page) is not used while this is on. Untick **Pick hunting spots for my level** to keep your own spots.
+- **Gear:** on any town trip, the bot buys the next tier of NPC gear: the same weapon type, the same armour material and part (empty parts are filled), and with **Also buy earrings, necklaces and rings** the accessories. It wears each piece at once in the shop and, with **Sell the replaced piece back**, sells the old one there. Weapons and shields come from the repair merchant after the sale; armour and accessories add a stop at those merchants before the way back. Only ordinary worn pieces up to +3 are replaced: Seal gear, rare items, your chosen primary/secondary weapon and shield, buff-set gear and items with a Keep rule are never touched. **Always keep this much gold** (5,000 by default) is never spent. When a new tier is affordable, the bot starts a town trip for it by itself, once per plan.
+- A piece the game will not let you wear is sold back and not bought again that session. A purchase the merchant refuses is skipped and the trip carries on.
+- **Skills and stats** (with **Raise my weapon mastery, learn its skills and use them**, on by default): once per character, in the game, the bot sets up what is not set up yet: **Auto mastery** raises the mastery of your weapon (a sword or blade trains Bicheon, a two-handed staff Wizard, and so on) up to your level and, with **Skills to upgrade: Every skill of my chosen masteries**, learns each of its skills as soon as the game allows; **Auto stat points** go to Strength, or to Intelligence for a caster (a Wizard, Warlock, Bard or Cleric weapon, or a character that already has more Intelligence than Strength). Masteries or a stat share you already chose are kept. Each newly learned attack skill of those masteries joins your normal attack rotation, and each new self buff your buffs, once: a skill you take out stays out. Share codes do not carry what was already set up, so an imported code sets up the importing character again.
+
+Limits: the spot distance is measured from your town, so a character that outlevels the area around its town keeps the last spot in reach; bind your return scroll to the next town and press **Set up town** again. Spots come from spawn positions, not from live crowding.
+
 ## Auto mastery and skills
 
 Under **Settings → Auto mastery and skills** the bot can spend skill points for you, one confirmed level at a time. It is off by default and saved per character.
 
+**Skills to upgrade** can be only the skills in your rotations, buffs and imbue, all skills you have learned, or **Every skill of my chosen masteries**, which also learns new skills of the ticked masteries as soon as their requirements are met.
+
 - **Masteries:** tick **Raise selected masteries automatically** and tick the masteries you want, in the order you want them raised. A mastery stops at your character level (or 120) minus **Keep this many levels below my level**. Level 0 is free; otherwise the price is the table cost of its current level.
 - **Skills:** tick **Upgrade my rotation and buff skills automatically** to learn the next level of the attack, buff and imbue skills you already use. It applies the game's own requirements: the skill must be trainable and the next level of its group, and your mastery levels, prerequisite skills, STR, INT and skill points must be enough. Skills outside your rotations, buffs and imbue are never touched.
 - **Reserve:** **Keep this many skill points unspent** is never spent on masteries or skills, for example to save points for something you will learn by hand.
-- **Max every skill:** the **Max every skill now** button (same page, below the options) learns and upgrades every skill, level by level, including skill lines you have not started, as fast as the game answers. It raises a mastery only when that mastery is what blocks a skill (up to your character level, or 120), ignores the gap and reserve settings, and when nothing more is allowed it stops and says what is left (for example skill points, strength or intelligence). **Stop** ends it early.
+- **Max every skill:** a switch (same page, below the options), off by default and saved per character. While it is on, the bot learns and upgrades every skill, level by level, including skill lines you have not started, as fast as the game answers. It raises a mastery only when that mastery is what blocks a skill (up to your character level, or 120), ignores the gap and reserve settings, and when nothing more is allowed it says what is left (for example skill points, strength or intelligence). It then stays on and spends new skill points as you get them, after a level up for example; a pass that finds nothing new stays quiet, and a level the game refused waits a minute. Turn it off to stop.
 - **Order:** **Spend skill points on** chooses masteries first, skills first, or alternating after each confirmed level.
 
 It works while hunting is stopped and does nothing while you are dead or during a town trip. If the server refuses a level (for example its mastery total limit) the bot waits a minute before trying that one again.
@@ -353,7 +374,7 @@ When the pickup pet is ready but collects nothing, the status line says why, cou
 
 ## Waiting for a party resurrection
 
-With **Accept resurrection from party members** on, the bot waits **Wait for a party resurrection (s)** (20 seconds by default) after dying before it revives itself whenever a living party member is in view (seen in the last 15 seconds counts), so the member has time to resurrect it. Without a helper in view it revives after 5 seconds. The Activity log says which when the character dies, and an open resurrection offer is always answered first.
+With **Accept resurrection from party members** on, the bot waits **Wait for a party resurrection (s)** (20 seconds by default) after dying before it revives itself whenever a living party member is in view (seen in the last 15 seconds counts), so the member has time to resurrect it. With **Accept resurrection from any player** on, any living player in view counts as a helper. Without a helper in view it revives after 5 seconds. The Activity log says which when the character dies, and an open resurrection offer is always answered first.
 
 ## A character that cannot move
 

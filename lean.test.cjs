@@ -3,7 +3,7 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const source = fs.readFileSync(__dirname + '/osb.user.js', 'utf8');
 const isolated = source.slice(0, source.lastIndexOf('installWorkerHook();')) +
-  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Assets, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Protect, Town, Travel, Quest, QuestData, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, SellStar, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, Equip, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, LevelSpot, ScrollBuff, boot, Ticker, Sound, LeanMap, Telemetry, Rotations};\n})();';
+  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Assets, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Protect, Town, Travel, Quest, QuestData, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, SellStar, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, Equip, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, LevelSpot, ScrollBuff, boot, Ticker, Sound, LeanMap, Telemetry, Rotations, Leveling};\n})();';
 function fixture(document, sharedStorage) {
   let time = 100000;
   const storage = sharedStorage || new Map(), commands = [], notices = [], intervals = [], timers = [];
@@ -543,6 +543,27 @@ test('auto trade refills potions at the town potion merchant before buying goods
   assert.equal(f.Trade.run, null, f.Trade.message);
   assert.deepEqual([...t.stats.potions], [90], 'topped up from 10 to the 100 target, once, before the goods');
   assert.equal(t.stats.buys.length, 3);
+});
+test('zero-setup leveling settings load off from old files, and share codes keep the set-up record of the importer', async () => {
+  const f = fixture(), L = f.Settings.profile.leveling, plain = v => JSON.parse(JSON.stringify(v));
+  assert.deepEqual(plain(f.botProfile({ party: { autoRes: true } }).leveling), { on: false, spots: true, gear: true, accessories: true, sellOld: true, reserve: 5000, maxM: 400, skills: true, prepared: '', added: [] });
+  Object.assign(L, { on: true, maxM: 800, prepared: 'Sharer', added: [5, 6] });
+  const share = JSON.parse(f.ProfileShare.text(true)).profile.leveling;
+  assert.equal(share.on, true); assert.equal(share.maxM, 800); assert.equal(share.prepared, undefined, 'no character name in a share'); assert.equal(share.added, undefined);
+  assert.equal(JSON.parse(f.ProfileShare.text(false)).profile.leveling.prepared, 'Sharer', 'the full backup keeps it');
+  const g = fixture(); Object.assign(g.Settings.profile.leveling, { prepared: 'Mine', added: [9] });
+  g.ProfileShare.pending = await g.ProfileShare.preview(await g.ProfileShare.encode(JSON.stringify({ app: 'osb', format: 2, profile: { leveling: { on: true, prepared: 'Sharer', added: [1] } } })));
+  assert.equal(g.ProfileShare.apply(), true);
+  assert.equal(g.Settings.profile.leveling.on, true); assert.equal(g.Settings.profile.leveling.prepared, 'Mine'); assert.deepEqual(plain(g.Settings.profile.leveling.added), [9]);
+});
+test('the wide window splits boxes into the two most even columns, first box on the left', () => {
+  const f = fixture(), split = h => f.UI.splitMask(h);
+  assert.equal(split([100, 100, 200]), 4, 'the tall box alone on the right');
+  assert.equal(split([300, 100, 100, 100]) & 1, 0, 'the first box stays left');
+  assert.equal(split([300, 100, 100, 100]), 14);
+  assert.equal(split([50]), 0);
+  const many = Array.from({ length: 14 }, () => 10);
+  assert.equal(split(many), 0b10101010101010, 'past 12 boxes each goes under the shorter stack');
 });
 test('WalkBack.startTo walks to any point, reports arrival inside the wider radius and failures to the caller', () => {
   const f = fixture(); let done = 0, failed = '';
@@ -2596,6 +2617,107 @@ test('auto-resurrect leaves a standing member alone when the server reports it a
   assert.deepEqual(casts(f), [], 'not looked at again for 30 s');
   f.advance(11000); f.Controller.tick(); assert.deepEqual(casts(f), ['select 50', 'skill 10067 50'], 'then the server HP of 0 counts');
 });
+function outsiderRes(f, names = 'Lure, Spare') {
+  resurrection(f); f.Settings.profile.party.autoRes = false; f.Settings.profile.party.resNames = names;
+  f.World.gp.social.members[1].status = 10; f.World.ents.get(50).appearanceState = [0, 0, 0];
+  f.World.ents.set(60, { gid: 60, kind: 'player', name: 'Lure', regionId: 1, x: 120, y: 0, z: 100, appearanceState: [2, 0, 0] });
+  return f.World.ents.get(60);
+}
+test('a dead player on the resurrect list who is not in the party is resurrected, matched without case', () => {
+  const f = fixture(); outsiderRes(f, ' lURE ');
+  f.Controller.tick(); assert.deepEqual(casts(f), ['select 60', 'skill 10067 60']);
+  assert.ok(f.Log.lines.some(l => /Resurrection offered: Lure \(not in the party\)\./.test(l.text)));
+  assert.ok(f.notices.some(n => /Resurrection offered: Lure \(not in the party\)/.test(n)));
+  f.advance(2000); f.Controller.tick(); assert.equal(casts(f).length, 2, 'one offer per answer window');
+  f.advance(30000); f.Controller.tick(); assert.equal(casts(f).length, 4, 'unanswered: offered again after the window');
+  f.World.ents.get(60).appearanceState = [0, 0, 0]; f.advance(31000); f.Controller.tick(); assert.equal(casts(f).length, 4, 'revived: nothing more');
+  assert.equal(f.Resurrect.sent['name:lure'], undefined, 'the offer is forgotten once they stand again');
+  const g = fixture(); outsiderRes(g); g.World.ents.get(60).appearanceState = [1, 0, 0];
+  g.Controller.tick(); assert.deepEqual(casts(g), [], 'standing without known HP counts as alive');
+  g.World.applyEvent({ kind: 'hp-seed', gid: 60, hp: 0 }); g.Controller.tick(); assert.deepEqual(casts(g), ['select 60', 'skill 10067 60'], 'the server HP of 0 counts');
+  const h = fixture(); outsiderRes(h); h.Hunt.start(); h.Controller.tick(); assert.deepEqual(casts(h), ['select 60', 'skill 10067 60'], 'also while hunting');
+  const solo = fixture(); outsiderRes(solo); solo.World.gp.social.members = []; solo.Controller.tick(); assert.deepEqual(casts(solo), ['select 60', 'skill 10067 60'], 'also without a party');
+});
+test('the resurrect list never reaches a player who is not on it, and a listed party member follows the list', () => {
+  const f = fixture(); outsiderRes(f, 'Spare'); f.Controller.tick(); assert.deepEqual(casts(f), [], 'a dead stranger is ignored');
+  const g = fixture(); outsiderRes(g, ''); g.Settings.profile.party.autoRes = true; g.Controller.tick();
+  assert.deepEqual(casts(g), [], 'auto-resurrect party members does not reach outsiders');
+  const h = fixture(); outsiderRes(h, ''); h.Controller.tick(); assert.deepEqual(casts(h), []); assert.match(h.Resurrect.message, /Auto-resurrect off/);
+  const m = fixture(); outsiderRes(m, 'mate'); m.World.ents.delete(60); m.World.gp.social.members[1].status = 0; m.World.ents.get(50).appearanceState = [2, 0, 0];
+  m.Controller.tick(); assert.deepEqual(casts(m), ['select 50', 'skill 10067 50'], 'a listed party member counts with the party switch off');
+  const n = fixture(); outsiderRes(n, Array.from({ length: 20 }, (_, i) => 'Name' + i).join(',') + ',Lure'); n.Controller.tick();
+  assert.deepEqual(casts(n), [], 'the list holds 20 names');
+  assert.equal(n.Resurrect.names().length, 20);
+});
+test('a listed outsider beyond the maximum radius is left alone, and one beyond skill range is walked to', () => {
+  const f = fixture(); outsiderRes(f); f.Settings.profile.party.resRadius = 100; f.World.ents.get(60).x = 250;
+  f.Controller.tick(); assert.deepEqual(casts(f), []); assert.equal(f.Resurrect.trip, null);
+  const g = fixture(); outsiderRes(g); g.Hunt.start(); Object.assign(g.World.skill(10067), { range: 100, actionMs: 1000 }); g.World.ents.get(60).x = 350;
+  g.Controller.tick(); assert.equal(g.Resurrect.trip.phase, 'approach'); assert.equal(g.Resurrect.trip.outsider, true); assert.equal(g.commands.at(-1).kind, 'move');
+  g.World.gp.pose.x = 270; g.advance(1000); g.Controller.tick(); assert.deepEqual(casts(g), ['select 60', 'skill 10067 60']);
+  const h = fixture(); outsiderRes(h); h.Hunt.start(); Object.assign(h.World.skill(10067), { range: 100, actionMs: 1000 }); h.World.ents.get(60).x = 350;
+  h.Controller.tick(); h.Settings.profile.party.resNames = 'Spare'; h.World.gp.pose.x = 200; h.advance(1000); h.Controller.tick();
+  assert.equal(h.Resurrect.trip.phase, 'return', 'taken off the list during the walk: back to the hunting spot'); assert.deepEqual(casts(h), []);
+});
+test('a Rebirth the game refuses on a listed outsider is logged once and that player is skipped for 10 minutes', () => {
+  const f = fixture(); outsiderRes(f);
+  f.Controller.tick(); assert.deepEqual(casts(f), ['select 60', 'skill 10067 60']);
+  f.bus.emit('game-error', 'Cast rejected: 5'); assert.equal(f.Resurrect.refused['name:lure'], undefined, 'a cooldown is not a refusal');
+  f.bus.emit('game-error', 'Cast rejected: 12');
+  assert.ok(f.Resurrect.refused['name:lure'] > 100000); assert.equal(f.Resurrect.holdUntil, 0);
+  assert.equal(f.Log.lines.filter(l => /The game refused Rebirth on Lure \(not in the party\); skipping them for 10 minutes\./.test(l.text)).length, 1);
+  f.bus.emit('game-error', 'Cast rejected: 13'); assert.equal(f.Log.lines.filter(l => /refused Rebirth on Lure/.test(l.text)).length, 1, 'logged once');
+  f.advance(60000); f.Controller.tick(); assert.equal(casts(f).length, 2, 'skipped');
+  f.advance(9 * 60000); f.Controller.tick(); assert.equal(casts(f).length, 4, 'tried again after 10 minutes');
+  const g = fixture(); outsiderRes(g); g.Controller.tick(); g.advance(4000); g.bus.emit('game-error', 'Cast rejected: 12');
+  assert.equal(g.Resurrect.refused['name:lure'], undefined, 'a late refusal belongs to something else');
+  const p = fixture(); resurrection(p); p.Controller.tick(); p.bus.emit('game-error', 'Cast rejected: 12');
+  assert.deepEqual(Object.keys(p.Resurrect.refused), [], 'party members keep the answer window');
+});
+test('resurrection from any player is accepted only with its switch on, and the log names the caster', () => {
+  const setup = (change = {}) => {
+    const f = fixture(); f.Settings.profile.party.acceptResAny = true; f.World.isDead = () => true;
+    f.World.ents.set(77, { gid: 77, kind: 'player', name: 'Healer' }); f.World.ents.set(78, { gid: 78, kind: 'player', name: 'Stranger' });
+    f.World.ents.set(79, { gid: 79, kind: 'monster', name: 'Mob' });
+    f.World.gp.social = { localName: 'Me', self: 10, leader: 10, options: 1, members: [{ id: 10, name: 'Me' }, { id: 11, name: 'Healer' }], resurrection: { gid: 78 }, ...change };
+    return f;
+  };
+  const answers = f => f.commands.filter(c => c.kind === 'resurrection-consent');
+  let f = setup(); f.Controller.tick(); assert.equal(answers(f).length, 1, 'a stranger with the switch on');
+  assert.ok(f.Log.lines.some(l => /Accepted resurrection from Stranger \(not in the party\)\./.test(l.text)));
+  f = setup({ resurrection: { gid: 77 } }); f.Controller.tick(); assert.equal(answers(f).length, 1, 'a party member too');
+  assert.ok(f.Log.lines.some(l => /Accepted resurrection from Healer \(party member\)\./.test(l.text)));
+  f = setup(); f.Settings.profile.party.acceptResAny = false; f.Controller.tick(); assert.equal(answers(f).length, 0, 'switch off');
+  f = setup(); f.Settings.profile.party.acceptResAny = false; f.Settings.profile.party.acceptRes = true; f.Controller.tick(); assert.equal(answers(f).length, 0, 'the party switch alone leaves strangers to you');
+  f = setup({ resurrection: { gid: 78, mutation: true } }); f.Controller.tick(); assert.equal(answers(f).length, 0, 'never a mutation offer');
+  f = setup({ resurrection: { gid: 79 } }); f.Controller.tick(); assert.equal(answers(f).length, 0, 'only a player');
+  f = setup({ resurrection: { gid: 999 } }); f.Controller.tick(); assert.equal(answers(f).length, 0, 'an unknown caster');
+  f = setup(); f.World.isDead = () => false; f.Controller.tick(); assert.equal(answers(f).length, 0, 'only while dead');
+  f = setup(); f.Party.consentAt = -Infinity; f.Controller.tick(); assert.equal(f.Party.resBusy(), true, 'the town revive waits for the answer');
+});
+test('with resurrection from any player on, a living player in view holds the town revive for the wait', () => {
+  const f = fixture(), P = f.Settings.profile.party; P.acceptResAny = true;
+  f.World.gp.social = { localName: 'Me', members: [] };
+  f.World.ents.set(61, { gid: 61, kind: 'player', name: 'Passer', appearanceState: [0] });
+  assert.equal(f.Party.reviveDelay(), 20000); assert.match(f.Party.waitNote(), /waiting 20 s for a player to resurrect/);
+  f.World.ents.get(61).appearanceState = [2]; f.advance(16000); assert.equal(f.Party.reviveDelay(), 5000, 'a dead player cannot help');
+  assert.match(f.Party.waitNote(), /no player in view, reviving in 5 s/);
+  P.acceptResAny = false; f.World.ents.get(61).appearanceState = [0]; assert.equal(f.Party.reviveDelay(), 5000, 'off: strangers do not hold it');
+});
+test('resurrect list and accept from any player persist, travel in shares and backups, and old files load with them off', async () => {
+  const f = fixture(), p = f.Settings.profile.party;
+  const old = f.botProfile({ party: { autoRes: true, acceptRes: true } }).party;
+  assert.equal(old.acceptResAny, false); assert.equal(old.resNames, '');
+  Object.assign(p, { acceptResAny: true, resNames: 'Lure, Spare' }); f.Settings.saveProfile();
+  const saved = f.botProfile(JSON.parse(JSON.stringify(f.Settings.profile))).party;
+  assert.equal(saved.acceptResAny, true); assert.equal(saved.resNames, 'Lure, Spare');
+  const backup = JSON.parse(f.ProfileShare.text(false)); assert.equal(backup.profile.party.acceptResAny, true); assert.equal(backup.profile.party.resNames, 'Lure, Spare');
+  const code = await f.ProfileShare.encode(f.ProfileShare.text(true)), g = fixture();
+  g.ProfileShare.pending = await g.ProfileShare.preview(code); assert.equal(g.ProfileShare.apply(), true);
+  assert.equal(g.Settings.profile.party.acceptResAny, true); assert.equal(g.Settings.profile.party.resNames, 'Lure, Spare');
+  const u = fixture(); u.storage.set('sroBotLean:v1:backup:profile:default', JSON.stringify({ at: 1, profile: { party: { acceptRes: true } } }));
+  assert.equal(u.ProfileShare.undo(), true); assert.equal(u.Settings.profile.party.acceptResAny, false); assert.equal(u.Settings.profile.party.resNames, '');
+});
 test('auto-resurrect idles without a learned corpse-targeted skill', () => {
   const f = fixture(); resurrection(f);
   f.World.gp.skills = []; f.Controller.tick(); assert.equal(f.commands.length, 0);
@@ -3108,6 +3230,67 @@ test('auto skill upper learns the next level of skills in the rotation, one conf
   const buffs = skillFixture(); buffs.Settings.profile.macro.rotations.normal = []; buffs.Settings.profile.macro.buffs = [{ id: 1001, group: 100 }];
   buffs.Controller.tick(); assert.deepEqual(skillTrains(buffs), [1002], 'buff skills are upgraded too');
 });
+test('Skills to upgrade can cover every skill of the chosen masteries, learning new ones', () => {
+  const f = skillFixture({}, []);
+  f.Settings.profile.mastery.ids = [257]; f.Settings.profile.mastery.scope = 'masteries';
+  f.World.rebuildCatalog([...f.World.catalog.values(), { id: 3001, group: 300, level: 1, trainable: true, spCost: 10, masteries: [{ ID: 273, Level: 1 }], prerequisites: [], reqStr: 0, reqInt: 0 }]);
+  f.Settings.profile.macro.rotations.normal = [];
+  assert.deepEqual([...f.AutoMastery.masteryGroups()], [100], 'only skills that need the chosen mastery');
+  f.Controller.tick();
+  assert.deepEqual(skillTrains(f), [1001], 'an unlearned skill of the mastery is learned');
+  f.World.applyGameplay({ ...f.World.gp, skills: [1001] }); f.advance(2000); f.Controller.tick();
+  assert.deepEqual(skillTrains(f), [1001, 1002], 'then raised like any other');
+});
+function levelingSkillFixture(weaponTid4 = 2, stats = { strength: 20, intellect: 20 }) {
+  const f = skillFixture({ stats }, []);
+  const M = f.Settings.profile.mastery;
+  M.enabled = false; M.ids = []; M.skills = false; M.scope = 'rotation';
+  f.Settings.profile.leveling.on = true; f.World.charName = 'Tester';
+  f.World.applyGameplay({ ...f.World.gp, inventory: [{ slot: 6, refObjId: 71, typeFlags: 44 | (6 << 7) | (weaponTid4 << 11), quantity: 1 }] });
+  f.World.rebuildCatalog([...f.World.catalog.values()].map(s => ({ ...s, targetRequired: true, active: true })));
+  f.Settings.profile.macro.rotations.normal = [];
+  return f;
+}
+test('zero-setup leveling sets up the weapon mastery, its skills and stat points once per character', () => {
+  let f = levelingSkillFixture();
+  f.Leveling.skillTick();
+  const M = f.Settings.profile.mastery, S = f.Settings.profile.statPoints;
+  assert.deepEqual([...M.ids], [257], 'a sword trains Bicheon');
+  assert.equal(M.enabled, true); assert.equal(M.skills, true); assert.equal(M.scope, 'masteries');
+  assert.deepEqual([S.enabled, S.str, S.int], [true, 1, 0], 'a Chinese melee character puts points into Strength');
+  assert.match(f.Leveling.message, /Bicheon mastery/);
+  M.ids = [258]; f.advance(6000); f.Leveling.skillTick();
+  assert.deepEqual([...M.ids], [258], 'once done, the player\'s later changes stay');
+  f = levelingSkillFixture(11);
+  f.Leveling.skillTick();
+  assert.deepEqual([...f.Settings.profile.mastery.ids], [514], 'a two-handed staff trains Wizard');
+  assert.deepEqual([f.Settings.profile.statPoints.str, f.Settings.profile.statPoints.int], [0, 1], 'a caster puts points into Intelligence');
+  f = levelingSkillFixture(2, { strength: 20, intellect: 40 });
+  f.Leveling.skillTick();
+  assert.equal(f.Settings.profile.statPoints.int, 1, 'more Intelligence than Strength already: Intelligence');
+  f = levelingSkillFixture();
+  Object.assign(f.Settings.profile.mastery, { enabled: true, ids: [259] });
+  Object.assign(f.Settings.profile.statPoints, { enabled: true, str: 2, int: 1 });
+  f.Leveling.skillTick();
+  assert.deepEqual([...f.Settings.profile.mastery.ids], [259], 'masteries the player chose are kept');
+  assert.deepEqual([f.Settings.profile.statPoints.str, f.Settings.profile.statPoints.int], [2, 1], 'and their stat share');
+  f = levelingSkillFixture(); f.Settings.profile.leveling.skills = false;
+  f.Leveling.skillTick();
+  assert.equal(f.Settings.profile.mastery.enabled, false, 'the skills switch off: nothing is set up');
+});
+test('newly learned attack skills of the mastery join the rotation once; one the player removes stays out', () => {
+  const f = levelingSkillFixture();
+  f.Leveling.skillTick();
+  assert.deepEqual([...f.Settings.profile.macro.rotations.normal], [], 'nothing learned yet');
+  f.World.applyGameplay({ ...f.World.gp, skills: [1001] });
+  f.advance(6000); f.Leveling.skillTick();
+  assert.deepEqual(f.Settings.profile.macro.rotations.normal.map(e => e.group), [100], 'the new attack skill is used');
+  assert.match(f.Leveling.message, /New skills in use/);
+  f.Settings.profile.macro.rotations.normal = [];
+  f.World.applyGameplay({ ...f.World.gp, skills: [1001, 1002] });
+  f.advance(6000); f.Leveling.skillTick();
+  assert.deepEqual([...f.Settings.profile.macro.rotations.normal], [], 'taken out by the player: it stays out, even after a new level');
+});
 test('Max every skill learns every skill group, unlearned ones too, one confirmed level at a time, then says what is left', () => {
   const f = skillFixture({}, []);
   f.Settings.profile.mastery.skills = false; f.Settings.profile.mastery.reserve = 1000; f.Settings.profile.mastery.gap = 25;
@@ -3139,6 +3322,29 @@ test('Max every skill stops by itself when the game world is left', () => {
   f.World.inWorld = () => false;
   f.intervals.at(-1).fn();
   assert.equal(f.AutoMastery.maxAll, false, 'the fast loop does not spin outside the world');
+});
+test('Max every skill is a saved switch: it starts on its own, stays on and spends new skill points later', () => {
+  const f = skillFixture({}, []);
+  f.Settings.profile.mastery.skills = false;
+  assert.equal(f.Settings.profile.mastery.max, false, 'off by default');
+  f.Controller.tick(); assert.deepEqual(skillTrains(f), [], 'nothing while off');
+  f.Settings.profile.mastery.max = true;
+  assert.equal(f.AutoMastery.active(), true);
+  f.Controller.tick(); assert.equal(f.AutoMastery.maxAll, true, 'switching on starts a pass without a button');
+  f.Controller.tick(); assert.deepEqual(skillTrains(f), [1001]);
+  f.World.applyGameplay({ ...f.World.gp, skills: [1001], progression: { ...f.World.gp.progression, skillPoints: 0 } }); f.Controller.tick();
+  assert.equal(f.AutoMastery.maxAll, false, 'the pass ends when nothing more is allowed');
+  assert.match(f.AutoMastery.maxMessage, /Stays on/);
+  const toasts = f.notices.length;
+  f.advance(1000); f.Controller.tick(); assert.equal(f.AutoMastery.maxAll, false, 'no new pass straight away');
+  f.advance(5000); f.Controller.tick(); f.Controller.tick();
+  assert.equal(f.AutoMastery.maxAll, false, 'a pass with nothing to do ends quietly');
+  assert.equal(f.notices.length, toasts, 'and does not toast every few seconds');
+  f.World.applyGameplay({ ...f.World.gp, progression: { ...f.World.gp.progression, skillPoints: 500 } });
+  f.advance(6000); f.Controller.tick(); f.Controller.tick();
+  assert.deepEqual(skillTrains(f).slice(-1), [1002], 'new skill points are spent later without pressing anything');
+  f.Settings.profile.mastery.max = false; f.AutoMastery.stopMax('', true);
+  f.advance(6000); f.Controller.tick(); assert.equal(f.AutoMastery.maxAll, false, 'switched off stays off');
 });
 test('Max every skill sees a refusal at once, does not repeat it and leaves other skills alone', () => {
   const f = skillFixture({}, []);
@@ -3832,6 +4038,168 @@ test('the hunting spot follows the character level and walks to the new spot', (
   f.Settings.profile.hunt.levelSpots.on = true; f.Hunt.stop();
   f.advance(4000);
   assert.equal(f.LevelSpot.tick(), false, 'only while hunting');
+});
+test('zero-setup leveling picks a spot for the level from the game data, keeps it for a while and moves on', () => {
+  const f = mallFixture(), H = f.Settings.profile.hunt;
+  f.Town.cfg().arrival = { regionId: 1, x: 100, y: 0, z: 100 };
+  // [regionId, x, y, z, level, lowest, highest, spawn points]
+  f.Leveling.spots = [[1, 300, 0, 300, 6, 6, 6, 9], [1, 400, 0, 100, 9, 8, 10, 6], [1, 900, 0, 900, 9, 9, 9, 3], [1, 1000, 0, 100, 12, 12, 12, 9], [1, 100, 0, 9000, 30, 30, 30, 9]];
+  f.Settings.profile.leveling.on = true;
+  f.World.gp.progression = { ...(f.World.gp.progression || {}), level: 10 };
+  const pick = f.Leveling.spot(10);
+  assert.equal(pick.level, 9, 'the highest level at or below the character');
+  assert.equal(pick.center.x, 400, 'more spawns and nearer win between equal levels');
+  f.Leveling.reset();
+  assert.equal(f.Leveling.spot(3), null, 'nothing under the lowest spot');
+  f.Settings.profile.leveling.maxM = 50; f.Town.cfg().arrival = { regionId: 1, x: 100, y: 0, z: 5000 };
+  f.Leveling.reset();
+  assert.equal(f.Leveling.spot(10), null, 'spots beyond the distance limit are never used');
+  f.Settings.profile.leveling.maxM = 400; f.Town.cfg().arrival = { regionId: 1, x: 100, y: 0, z: 100 }; f.Leveling.reset();
+  f.Hunt.start();
+  f.advance(4000);
+  assert.equal(f.LevelSpot.tick(), true, 'the spot is applied with the level spot rules');
+  assert.equal(H.center.x, 400);
+  f.World.gp.progression.level = 11;
+  f.Leveling.spots.push([1, 500, 0, 100, 11, 11, 11, 9]);
+  f.advance(4000);
+  assert.equal(f.LevelSpot.tick(), false, 'a spot two levels better is not worth the walk yet');
+  assert.equal(H.center.x, 400);
+  f.Leveling.spots.pop();
+  f.World.gp.progression.level = 13;
+  f.advance(4000);
+  assert.equal(f.LevelSpot.tick(), true, 'three levels better is');
+  assert.equal(H.center.x, 1000);
+  f.World.gp.progression.level = 15;
+  f.Leveling.spots.push([1, 1100, 0, 100, 15, 15, 15, 9]);
+  f.advance(4000);
+  f.WalkBack.active = null; f.Hunt.start(); // arrived at the level 12 spot; hunting resumes
+  assert.equal(f.LevelSpot.tick(), true, 'a clearly better spot moves hunting');
+  assert.equal(H.center.x, 1100);
+  assert.equal(f.LevelSpot.advanceOnNoXp(), true, 'no XP passes over the spot');
+  assert.equal(H.center.x, 1000, 'and takes the next best one');
+  f.Settings.profile.leveling.on = false;
+  assert.equal(f.LevelSpot.spotFor(15), null, 'off: the saved list (empty here) is used again');
+});
+function gearFixture() {
+  const f = townFixture(), gp = f.World.gp;
+  f.pet.inventory = [];
+  gp.inventory.find(i => i.slot === 15).quantity = 40; // enough MP potions: no other reason for a trip
+  f.Settings.profile.leveling.on = true; f.Settings.profile.leveling.reserve = 1000; f.Settings.profile.leveling.accessories = false;
+  f.Leveling.town = () => ({ key: 'T', name: 'Test' });
+  // [refObjId, shop, TID3, TID4, country, sex, level, price]
+  f.Leveling.gear = { T: [[71, 'smith', 6, 2, 0, 2, 1, 900], [74, 'smith', 6, 2, 0, 2, 8, 3500], [75, 'smith', 6, 3, 0, 2, 8, 3500],
+    [395, 'armor', 3, 3, 0, 1, 1, 520], [396, 'armor', 3, 3, 0, 1, 8, 2000], [397, 'armor', 3, 3, 0, 0, 8, 2000], [400, 'armor', 3, 4, 0, 1, 6, 1500],
+    [1799, 'accessory', 5, 3, 0, 2, 1, 365]] };
+  f.Leveling.shopsData = { T: { armor: { refObjId: 640, regionId: 1, x: 400, y: 0, z: 100 } } };
+  f.Leveling.index = null;
+  const sword = gp.inventory.find(i => i.slot === 6);
+  Object.assign(sword, { refObjId: 71, typeFlags: 44 | (6 << 7) | (2 << 11), plus: 0, tooltip: { fields: { ...sword.tooltip.fields, rarity: 0, reqLevelType1: 1, requiredLevel: 1 } } });
+  gp.inventory.push({ slot: 1, refObjId: 395, typeFlags: 44 | (3 << 7) | (3 << 11), plus: 0, magic: [], tooltip: { fields: { canRepair: 0, rarity: 0, reqLevelType1: 1, requiredLevel: 1 } } });
+  gp.progression = { ...(gp.progression || {}), level: 8, gold: '10000' };
+  return f;
+}
+test('the gear plan buys the next tier of the same kind, fills empty armour parts and stays inside the gold', () => {
+  const f = gearFixture(), gp = f.World.gp;
+  const plan = () => f.Leveling.plan().map(w => w.socket + ':' + w.row[0]).join(' ');
+  assert.equal(plan(), '6:74 1:396 4:400', 'same weapon type, same material and sex, the empty legs are filled');
+  f.Settings.profile.leveling.accessories = true; gp.progression.gold = '8000';
+  assert.equal(plan(), '6:74 1:396 4:400', 'accessories are bought only while the gold lasts');
+  gp.progression.gold = '100000';
+  assert.equal(plan(), '6:74 1:396 4:400 11:1799 12:1799', 'both ring hands are filled');
+  f.Settings.profile.leveling.accessories = false;
+  gp.progression.gold = '5000';
+  assert.equal(plan(), '6:74', 'what the gold above the reserve cannot pay for waits');
+  gp.progression.gold = '100000';
+  gp.inventory.find(i => i.slot === 6).plus = 5;
+  assert.equal(plan().includes('6:'), false, 'an enhanced weapon is never replaced');
+  gp.inventory.find(i => i.slot === 6).plus = 0;
+  gp.inventory.find(i => i.slot === 6).tooltip.fields.rarity = 2;
+  assert.equal(plan().includes('6:'), false, 'a Seal weapon is never replaced');
+  gp.inventory.find(i => i.slot === 6).tooltip.fields.rarity = 0;
+  gp.progression.level = 7;
+  assert.equal(plan(), '4:400', 'level 7: only the empty legs, nothing above the worn tier yet');
+  f.Settings.profile.leveling.gear = false;
+  f.Leveling.checkAt = 0;
+  assert.equal(f.Leveling.due(), '', 'gear buying off: no trip');
+});
+test('a gear plan starts one town trip and visits the armour merchant before the way back', () => {
+  const f = gearFixture(), gp = f.World.gp;
+  gp.progression.gold = '100000';
+  assert.match(f.Town.reason(), /better gear to buy/);
+  f.Town.begin();
+  assert.deepEqual([...f.Town.trip.gear.map(w => w.row[0])], [74, 396, 400]);
+  f.Town.arrived();
+  assert.deepEqual([...f.Town.trip.order], ['storage', 'vendor', 'smith', 'armor', 'gate'], 'the armour merchant is visited before the statue');
+  assert.equal(f.Town.point('armor').refObjId, 640, 'its place comes from the game data, not from the saved town');
+  assert.equal(f.Town.cfg().armor, undefined, 'and nothing is saved in the town settings');
+  f.Town.trip = null; f.Leveling.checkAt = 0;
+  assert.doesNotMatch(f.Town.reason() || '', /better gear/, 'the same plan never starts a second trip');
+});
+function smithShop(f, price) {
+  const gp = f.World.gp;
+  gp.progression.gold = '100000';
+  f.Town.begin(); f.Town.arrived();
+  f.Town.trip.gear = f.Town.trip.gear.filter(w => w.role === 'smith');
+  gp.target = 62;
+  gp.shop = { npc: 62, name: 'smith', offers: [{ tab: 0, slot: 4, refObjId: 74, name: 'Sword', price, currency: 1, maxStack: 1 }] };
+  f.Restock.activeShop = () => gp.shop;
+}
+test('in the shop the bot buys, wears and sells back the old piece, one confirmed step at a time', () => {
+  const f = gearFixture(), gp = f.World.gp;
+  smithShop(f, '3500');
+  f.Town.enter('sell'); f.Town.afterSell();
+  assert.equal(f.Town.trip.phase, 'gear');
+  f.Leveling.shop(f.Town.trip);
+  assert.deepEqual({ ...f.commands.at(-1) }, { kind: 'shop-buy', tab: 0, slot: 4, quantity: 1 });
+  f.Leveling.shop(f.Town.trip);
+  assert.equal(f.commands.filter(c => c.kind === 'shop-buy').length, 1, 'nothing is sent again before the result');
+  gp.inventory.push({ slot: 20, refObjId: 74, typeFlags: 44 | (6 << 7) | (2 << 11), plus: 0, quantity: 1 });
+  f.advance(600); f.Leveling.shop(f.Town.trip);
+  f.Leveling.shop(f.Town.trip);
+  assert.deepEqual({ ...f.commands.at(-1) }, { kind: 'inventory-move', source: 20, destination: 6, quantity: 0 });
+  const bought = gp.inventory.find(i => i.slot === 20), old = gp.inventory.find(i => i.slot === 6);
+  bought.slot = 6; old.slot = 20;
+  old.codename = 'ITEM_CH_SWORD_01_A'; old.tooltip.fields.canSell = 1;
+  f.advance(600); f.Leveling.shop(f.Town.trip);
+  f.Leveling.shop(f.Town.trip);
+  assert.deepEqual({ ...f.commands.at(-1) }, { kind: 'shop-sell', slot: 20, quantity: 1 }, 'the old sword goes back to the merchant');
+  gp.inventory = gp.inventory.filter(i => i.slot !== 20);
+  f.advance(600); f.Leveling.shop(f.Town.trip);
+  f.Leveling.shop(f.Town.trip);
+  assert.equal(f.Town.trip.phase, 'repair', 'then the smith repairs as before');
+});
+test('a piece the game will not let the character wear is sold back and never bought again', () => {
+  const f = gearFixture(), gp = f.World.gp;
+  smithShop(f, '3500');
+  f.Town.enter('gear'); f.Town.trip.gearRole = 'smith';
+  f.Leveling.shop(f.Town.trip);
+  gp.inventory.push({ slot: 20, refObjId: 74, codename: 'ITEM_CH_SWORD_02_A', typeFlags: 44 | (6 << 7) | (2 << 11), plus: 0, quantity: 1, tooltip: { fields: { canSell: 1, rarity: 0 } } });
+  f.advance(600); f.Leveling.shop(f.Town.trip);
+  f.Leveling.shop(f.Town.trip);
+  assert.equal(f.commands.at(-1).kind, 'inventory-move');
+  gp.error = 'Requirement not met'; f.advance(600); f.Leveling.shop(f.Town.trip);
+  gp.error = ''; f.Leveling.shop(f.Town.trip);
+  assert.deepEqual({ ...f.commands.at(-1) }, { kind: 'shop-sell', slot: 20, quantity: 1 }, 'the unwearable piece goes back');
+  assert.equal(f.Leveling.plan().some(w => w.row[0] === 74), false, 'and is left out of every later plan');
+});
+test('a refused or unaffordable purchase is skipped and the trip carries on', () => {
+  const f = gearFixture();
+  smithShop(f, '99500');
+  f.Town.enter('gear'); f.Town.trip.gearRole = 'smith';
+  f.Leveling.shop(f.Town.trip);
+  assert.equal(f.commands.some(c => c.kind === 'shop-buy'), false, 'the live price above the gold and reserve is not paid');
+  assert.match(f.Leveling.message, /not enough gold/);
+  f.Leveling.shop(f.Town.trip);
+  assert.equal(f.Town.trip.phase, 'repair');
+  const g = gearFixture();
+  smithShop(g, '3500');
+  g.Town.enter('gear'); g.Town.trip.gearRole = 'smith';
+  g.Leveling.shop(g.Town.trip);
+  g.World.gp.error = 'Not enough room'; g.advance(600); g.Leveling.shop(g.Town.trip);
+  assert.match(g.Leveling.message, /refused/);
+  g.World.gp.error = ''; g.Leveling.shop(g.Town.trip);
+  assert.equal(g.Town.trip?.phase, 'repair', 'the trip goes on without it');
+  assert.equal(g.commands.filter(c => c.kind === 'shop-buy').length, 1, 'never sent twice');
 });
 test('icon paths accept names with or without the .ddj extension (setup checklist icons were blank)', () => {
   const f = fixture(), base = '/assets/images/Media_extracted/icon/';
