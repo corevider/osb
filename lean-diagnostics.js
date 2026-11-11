@@ -159,6 +159,7 @@ const Diagnostics = {
     if (Travel.active && !WalkBack.active) return Travel.status();
     if (WalkBack.active) return WalkBack.status();
     if (Restock.trip || Resurrect.trip) return 'Travelling; waiting to reach the destination.';
+    if (Leveling.move) return String(Leveling.message || 'Zero-setup leveling: moving to the next town.').slice(0, 200);
     if (!Hunt.running) return AutoStart.pending() ? AutoStart.message || 'Auto-start: waiting.' : Retry.stop && Retry.message ? Retry.message : 'Bot stopped.';
     if (now() - Manual.lastAt < Hunt.cfg().manualPauseS * 1000) return 'Hunting paused after manual control.';
     if (Restock.activeShop() || World.gp?.storage) return 'Hunting paused: close shop or storage.';
@@ -200,6 +201,7 @@ const Diagnostics = {
       joinRequest: !!matching?.request, acceptanceSent: !!matching?.request && Party.answered === `${matching.request.a}:${matching.request.b}:${matching.request.expires}`,
       requestRemainingMs: Number.isFinite(World.simNow()) && Number.isFinite(matching?.request?.expires) ? Math.max(0, matching.request.expires - World.simNow()) : null,
       townActive: !!Town.trip,
+      levelingOn: !!c.leveling?.on, levelingMove: ['walk', 'select', 'menu', 'appoint'].includes(Leveling.move?.phase) ? Leveling.move.phase : null, levelingBuild: Leveling.build()?.key || null,
       townPhase: ['recall', 'recall-wait', 'revive-arrival', 'walk-arrival', 'service-wait', 'walk-storage', 'open-storage', 'store', 'close-storage', 'walk-vendor', 'open-vendor', 'buy', 'close-vendor', 'walk-smith', 'open-smith', 'sell', 'gear', 'repair', 'close-smith', 'walk-armor', 'open-armor', 'close-armor', 'walk-accessory', 'open-accessory', 'close-accessory', 'walk-gate', 'open-gate', 'mall-reverse', 'reverse', 'reverse-wait', 'leave', 'settle'].includes(Town.trip?.phase) ? Town.trip.phase : null,
       scrollAttempts: this.number(Town.trip?.scrollAttempts), scrollAccepted: !!Town.trip?.scrollRequest?.accepted,
       returnScroll: !!Town.scroll(0x09ec), reverseScroll: !!Town.scroll(0x19ec),

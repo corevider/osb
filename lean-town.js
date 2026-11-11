@@ -173,7 +173,27 @@ const Town = {
       UI.toast(this.message, 'warn', 6000); return null;
     }
     if (!(c.arrival && this.detect(c.arrival)?.key === town.key)) overwrite = true;
-    const saved = [];
+    const { saved, unverified } = this.fill(town, overwrite, here);
+    this.message = saved.length ? `Automatic setup for ${town.name}: saved ${saved.join(', ')}.` + (unverified ? ' Walkable spots could not be checked without collision data; the first trip will tell.' : '')
+      : `Automatic setup for ${town.name}: everything was already saved.`;
+    Settings.saveProfile(); UI.toast(this.message, 'info', 6000); UI.draw();
+    return { town: town.name, saved, unverified };
+  },
+  follow(here = World.pose()) {
+    const c = this.cfg(), town = here && this.detect(here), saved = this.detect(c.vendor || c.storage || c.arrival || {});
+    if (!Leveling.cfg().on || !town || saved?.key === town.key) return false;
+    this.fill(town, true, here);
+    this.lastScrollPoint = null; this.deathPoint = null;
+    Leveling.reset();
+    const t = this.trip;
+    if (t) { Leveling.begin(t); t.config = JSON.stringify(c); }
+    this.message = 'Leveling: the character is in ' + town.name + ', so its town services are used now' + (saved ? ' instead of ' + saved.name : '') + '.';
+    Log.info(this.message); UI.toast(this.message, 'info', 8000);
+    Settings.saveProfile(); UI.draw();
+    return true;
+  },
+  fill(town, overwrite, here) {
+    const c = this.cfg(), saved = [];
     if (overwrite || !c.arrival) { c.arrival = { ...(town.arrival || here) }; saved.push('arrival point'); }
     let unverified = 0;
     for (const [role, label] of [['storage', 'warehouse'], ['vendor', 'potion merchant'], ['smith', 'repair merchant'], ['gate', 'world statue']]) {
@@ -184,10 +204,7 @@ const Town = {
         npc: { regionId: s.regionId, x: s.x, y: s.y, z: s.z } };
       saved.push(label);
     }
-    this.message = saved.length ? `Automatic setup for ${town.name}: saved ${saved.join(', ')}.` + (unverified ? ' Walkable spots could not be checked without collision data; the first trip will tell.' : '')
-      : `Automatic setup for ${town.name}: everything was already saved.`;
-    Settings.saveProfile(); UI.toast(this.message, 'info', 6000); UI.draw();
-    return { town: town.name, saved, unverified };
+    return { saved, unverified };
   },
   setupBlocked() { return Hunt.running || this.trip || Restock.recording || !World.inWorld(); },
   // Choosing a town sets it up. While setup is blocked the pick is remembered and applied when the town cycle is switched on.
@@ -330,6 +347,7 @@ const Town = {
     return Number.isInteger(tf) && ItemType.isEquipment(tf) && [1, 2, 3, 4, 5, 6, 9, 10, 11, 12].includes((tf >>> 7) & 15) &&
       /^ITEM_(CH|EU)_/.test(code);
   },
+  sellsBag() { return !!this.cfg().sellBag || !!Leveling.cfg().on; },
   // Whether a trip could empty any of the pet's slots (sell or store something). A pet full of protected items would
   // otherwise send the bot to town again and again for nothing.
   petClearable(pet) { return pet.rec.inventory.some(i => this.sellable(i) || this.eligible(i)); },
@@ -349,6 +367,8 @@ const Town = {
     if (c.broken && this.weaponBroken()) return 'weapon broken';
     const worn = c.wear?.on ? this.wear() : null;
     if (worn && worn.pct < c.wear.pct) return `gear durability low (${worn.name} at ${Math.floor(worn.pct)}%)`;
+    const move = Leveling.moveDue();
+    if (move) return move;
     const gear = Leveling.due();
     if (gear) return gear;
     if (this.noXpDue()) return `no XP for ${c.noXp.minutes} minutes`;
@@ -384,7 +404,7 @@ const Town = {
   // Already standing in a known town (all four services in range): no return scroll is needed or wanted.
   inTown(revival = false) { return !revival && !!World.pose() && !!this.detect(World.pose()); },
   // The way back after the services: the reverse scroll when that is the choice and one is carried, otherwise a walk.
-  walks() { return this.cfg().returnBy === 'walk'; },
+  walks() { return this.cfg().returnBy === 'walk' || !!Leveling.cfg().on; },
   reverses() { return !this.walks() && !!this.scroll(0x19ec); },
   validate(revival = false) {
     const c = this.cfg(), supplies = this.supplies();
@@ -413,6 +433,7 @@ const Town = {
     return false;
   },
   begin(revival = false) {
+    if (World.inWorld() && !World.isDead()) this.follow();
     const error = this.validate(revival);
     if (error) return this.fail(error);
     // The death spot is used only when it lies inside the hunting area: hunting starts again only from there. A death
@@ -435,7 +456,7 @@ const Town = {
     this.trip = { phase: 'recall', at: now(), started: now(), origin: { ...origin }, revival, inTown, reverseChoice, why,
       huntArea: (revival || inTown) && !(reverseChoice === TOWN_REVERSE.death && this.deathPoint) && Hunt.cfg().center ? { center: { ...Hunt.cfg().center }, radius: Hunt.cfg().radius } : null,
       manualAt: Manual.lastAt, character: World.charName, petRef: Loot.pet()?.rec.refObjId,
-      config: JSON.stringify(this.cfg()), supplies: this.supplies(), sellFirst: !!this.cfg().sellBag };
+      config: JSON.stringify(this.cfg()), leveling: !!Leveling.cfg().on, supplies: this.supplies(), sellFirst: this.sellsBag() };
     Leveling.begin(this.trip);
     Hunt.targetGid = Hunt.lootGid = 0;
     // Bag selling reads codenames from the item catalogue: start loading it now, well before the merchant.
@@ -454,12 +475,13 @@ const Town = {
     const t = this.trip, full = World.freeBagSlots() < 1;
     t.scrollAttempts = 0; t.scrollRequest = null;
     // With bag selling on, the trip sells first, so a full bag can still make room for refills.
-    if (full && !t.sellFirst) return this.fail('Returned to town; free a character bag slot for storage and refills.');
+    if (full && !t.sellFirst && !(this.cfg().storage && World.items().some(i => this.storesFromBag(i)))) return this.fail('Returned to town; free a character bag slot for storage and refills.');
     t.order = this.order(full);
     // A dead pet is brought back first, before the services, so it carries loot again for the rest of the trip.
     if (this.cfg().revivePet && this.deadCollar() && this.grass()) { this.enter('pet-revive'); return; }
-    this.enter('walk-' + t.order[0]);
+    this.enter(this.firstStop());
   },
+  firstStop() { const t = this.trip; return t.order[0] ? 'walk-' + t.order[0] : this.closeNext('close-'); },
   // The services in visiting order. Potions come before repair and selling, unless bag selling is on, which sells and
   // repairs first so a full bag has room to buy. A full bag also sells before the warehouse: pet loot reaches the
   // warehouse through a free bag slot.
@@ -468,7 +490,25 @@ const Town = {
     const order = !sellFirst ? ['storage', 'vendor', 'smith', 'gate'] : full ? ['smith', 'storage', 'vendor', 'gate'] : ['storage', 'smith', 'vendor', 'gate'];
     const shops = ['armor', 'accessory'].filter(role => this.trip?.shops?.[role]);
     order.splice(order.indexOf('gate'), 0, ...shops);
-    return order.filter(role => (role !== 'storage' || this.cfg().storage) && (role !== 'gate' || !this.walks()));
+    const route = order.filter(role => (role !== 'storage' || this.cfg().storage) && (role !== 'gate' || !this.walks()));
+    const skipped = route.filter(role => !this.needs(role));
+    if (skipped.length) Log.info('Town: nothing to do at the ' + skipped.map(r => this.role(r)).join(', ') + '; skipped.');
+    return route.filter(role => !skipped.includes(role));
+  },
+  storesFromBag(i, t = this.trip) { return !!(this.depositItem(i, true) || this.stone(i) || t?.equippedOut?.includes(BuffGear.key(i)) || ItemRules.fromPet(i) && this.eligible(i)); },
+  needs(role) {
+    const t = this.trip, pet = Loot.pet(), bag = World.items(), petItems = pet?.rec.inventory || [];
+    try {
+      if (role === 'storage') return bag.some(i => this.storesFromBag(i)) || petItems.some(i => this.eligible(i)) || Equip.on() && !!Equip.pick();
+      if (role === 'vendor') {
+        const scrolls = bag.filter(i => (i.typeFlags & 0xfffc) === 0x09ec).reduce((n, i) => n + (i.quantity ?? 1), 0);
+        return (t?.supplies || this.supplies()).some(s => Restock.count(s.refObjId) < s.target) || scrolls < 2;
+      }
+      if (role === 'smith') return petItems.some(i => this.sellable(i)) || !!t?.sellFirst && bag.some(i => this.sellableBag(i)) || bag.some(i => this.sellableDrained(i)) ||
+        !!this.cfg().sellExcess && !!this.excess() || this.ammoSupplies().some(s => this.ammoCount(s.refObjId) < s.target) ||
+        this.damaged().length > 0 || Leveling.wants(t || {}, 'smith').length > 0;
+    } catch { return true; }
+    return true;
   },
   // The service to walk to after closing a window. After the last one: the world statue to reverse; without a reverse
   // scroll, first an Item mall purchase when that switch is on, otherwise the walk back.
@@ -502,6 +542,7 @@ const Town = {
     if (World.freeBagSlots() <= 1) return this.fail('Returned to town; free at least two character bag slots before hunting again.');
     if (!Hunt.cfg().center) return this.fail('No saved hunting spot to walk back to.');
     this.trip = null; Hunt.targetGid = Hunt.lootGid = 0; this.restartClocks();
+    if (t.move && Leveling.startMove(t.move)) { this.message = 'Town service complete; moving to the next town.'; return; }
     WalkBack.start(true);
     if (!WalkBack.active && !Travel.active) { this.message = 'Town cycle stopped: the walk back to the hunting spot did not start.'; Hunt.stop(this.message); return; }
     this.message = 'Town service complete; walking back to the hunting spot.';
@@ -535,7 +576,11 @@ const Town = {
     const t = this.trip, pose = World.pose();
     // Permit a reachable nearby approach, but always stay in service range.
     const radius = Math.max(0, Math.min(60, 190 - dist2D(dest, dest.npc || dest)));
-    if (dist2D(pose, dest) <= Math.max(12, radius) && dist2D(pose, dest.npc || dest) <= 200) return true;
+    if (dist2D(pose, dest) <= Math.max(12, radius) && dist2D(pose, dest.npc || dest) <= 200) {
+      const role = t.phase.slice(5), swapped = t.stand?.[role];
+      if (swapped && dest === swapped && this.cfg()[role]) { this.cfg()[role] = { ...swapped }; Settings.saveProfile(); t.config = JSON.stringify(this.cfg()); Log.info('Town: the saved spot of the ' + this.role(t.phase) + ' was replaced by one that works.'); }
+      return true;
+    }
     if (!Number.isFinite(dist2D(pose, dest))) { this.fail('Town service is in another world.'); return false; }
     if (!t.lastPose || dist2D(t.lastPose, pose) > 3) { t.lastPose = { ...pose }; t.progressAt = now(); }
     if (now() < t.retryAt) return false;
@@ -546,6 +591,13 @@ const Town = {
     }
     if (!World.isSitting() && Navigation.watch(t, pose, t.movedAt, t.travel?.route[t.travel.index] || dest) === 'giveup') {
       if (this.viaArrival()) return false;
+      const role = t.phase.slice(5);
+      if (role !== 'arrival' && this.nextStand(role, dest)) {
+        t.travel = null; t.stall = null; t.avoid = []; t.progressAt = now();
+        this.message = 'Town movement to the ' + this.role(t.phase) + ': blocked, trying another spot beside the merchant.';
+        Log.info(this.message); UI.toast(this.message, 'warn', 4000);
+        return false;
+      }
       // The warehouse is optional: a blocked walk to it skips the deposit so the potions, repairs and the way back still happen.
       if (t.phase === 'walk-storage') {
         this.enter(this.closeNext('close-storage'));
@@ -569,7 +621,26 @@ const Town = {
     else if (Cmd.move(step.point)) t.movedAt = now();
     return false;
   },
-  point(role) { return this.cfg()[role] || this.trip?.shops?.[role] || null; },
+  point(role) { return this.trip?.stand?.[role] || this.cfg()[role] || this.trip?.shops?.[role] || null; },
+  nextStand(role, dest) {
+    const t = this.trip, npc = dest.npc || dest, tried = (t.tried ||= {})[role] ||= [{ ...dest }];
+    if (tried.length > 6) return false;
+    const from = this.cfg().arrival || World.pose(), toward = regionDelta(npc, from) || [1, 0], base = Math.atan2(toward[1], toward[0]);
+    let pick = null;
+    for (const distance of [30, 50, 70, 90]) for (const turn of [0, 0.5, -0.5, 1, -1, 1.5, -1.5, 2, -2, 2.5, -2.5, Math.PI]) {
+      const angle = base + turn, x = npc.x + Math.cos(angle) * distance, z = npc.z + Math.sin(angle) * distance;
+      const sx = Math.floor(x / SECTOR), sz = Math.floor(z / SECTOR);
+      const point = { regionId: ((npc.regionId & 255) + sx) | (((npc.regionId >>> 8) + sz) << 8), x: x - sx * SECTOR, y: npc.y, z: z - sz * SECTOR };
+      if (tried.some(p => dist2D(p, point) < 30)) continue;
+      const local = Navigation.scene && Navigation.local(point);
+      if (local && !Navigation.open(local.x, local.z)) continue;
+      pick = point; break;
+    }
+    if (!pick) return false;
+    tried.push(pick);
+    (t.stand ||= {})[role] = { ...dest, ...pick, npc: { ...npc } };
+    return true;
+  },
   serviceEntity(role, entity) { return !!entity && (entity.kind === 'npc' || role === 'gate' && entity.kind === 'teleport'); },
   npc(role) {
     const saved = this.point(role);
@@ -687,7 +758,7 @@ const Town = {
     if (t.staged && !bagItem) return this.fail('Staged pet item changed unexpectedly.');
     // Gear the character picked up is deposited straight from the bag, then pet loot is staged through it.
     ItemRules.pruneDrained();
-    const bagSox = bagItem ? null : World.items().find(i => this.depositItem(i, true) || this.stone(i) || t.equippedOut?.includes(BuffGear.key(i)) || ItemRules.fromPet(i) && this.eligible(i));
+    const bagSox = bagItem ? null : World.items().find(i => this.storesFromBag(i, t));
     const direct = bagItem || bagSox;
     const item = direct || pet?.rec.inventory.find(i => this.eligible(i));
     if (!item) {
@@ -818,10 +889,10 @@ const Town = {
   // that cannot be brought back is never fatal to the trip: the town services continue without it.
   revivePet() {
     const t = this.trip, gp = World.gp;
-    const finish = () => { t.petStep = null; this.enter('walk-' + t.order[0]); };
+    const finish = () => { t.petStep = null; this.enter(this.firstStop()); };
     const giveUp = (text, stepName) => {
       t.petStep = null; this.petReviveFailedAt = now();
-      this.enter('walk-' + t.order[0]);
+      this.enter(this.firstStop());
       this.message = text; Log.warn(text); UI.toast(text, 'warn', 6000);
       Activity.emit({ category: 'town', code: 'pet-revive-failed', text, outcome: 'refused', details: { step: stepName } });
     };
@@ -954,7 +1025,7 @@ const Town = {
       if (!this.trip) return true;
     }
     const t = this.trip, gp = World.gp;
-    if (!c.enabled || !Hunt.running || t.character !== World.charName || t.config !== JSON.stringify(c)) { this.fail('Settings or character changed during the trip.'); return true; }
+    if (!c.enabled || !Hunt.running || t.character !== World.charName || t.config !== JSON.stringify(c) || t.leveling !== !!Leveling.cfg().on) { this.fail('Settings or character changed during the trip.'); return true; }
     if (Manual.lastAt !== t.manualAt) { this.fail('Manual control interrupted the trip.'); return true; }
     // Movement may wait indefinitely for collision coverage. Individual service
     // and transaction phases still enforce their own confirmation timeouts.
@@ -994,7 +1065,10 @@ const Town = {
       // stand, say), adopt the spot the character settled on after a confirmed trip, but only in the saved services' town.
       if (t.phase === 'recall-wait' && t.transition && dist2D(World.pose(), c.arrival) > radius && !gp.inventoryPending && !gp.returnScroll) {
         const here = World.pose(), town = this.detect(here), saved = this.detect(c.vendor || c.storage || c.arrival);
-        if (!town || !saved || town.key !== saved.key) t.landed = null;
+        if (town && saved && town.key !== saved.key && Leveling.cfg().on) {
+          if (!t.landed || dist2D(t.landed.pose, here) > 3) t.landed = { pose: { ...here }, at: now() };
+          else if (now() - t.landed.at >= 3000) { t.landed = null; this.follow(here); }
+        } else if (!town || !saved || town.key !== saved.key) t.landed = null;
         else if (!t.landed || dist2D(t.landed.pose, here) > 3) t.landed = { pose: { ...here }, at: now() };
         else if (now() - t.landed.at >= 3000) {
           c.arrival = { ...here }; t.config = JSON.stringify(c); t.landed = null; Settings.saveProfile();

@@ -28,7 +28,7 @@ The **Setup** page checks all this for you and fixes the next missing thing.
 - Optional pickup-pet slot balancing, and a primary/secondary weapon and shield that are never sold, stored or dropped
 - Town trips by return scroll: potions, repair, warehouse, selling, reverse back
 - Optional selling of ordinary gear from the character bag on town trips (off by default)
-- Zero-setup leveling (off by default): picks hunting spots for your level and buys the next tier of NPC gear on town trips
+- Zero-setup leveling (off by default): picks hunting spots for your level, buys the next tier of NPC gear on town trips and moves on to the next town; pick a character build or leave it on Auto, and skills that root the character, like Crystal Wall and Fire Wall, are never used
 - Item alchemy, auto mastery and skills, stat points
 - Auto trade: buy specialty goods in one town, walk to another and sell them (needs a trader suit and a transport)
 - Automatic reconnect, optional start on entering the game, walk-back after death, anti-stuck, obstacle detours

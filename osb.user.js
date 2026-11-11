@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         OSB
 // @namespace    https://github.com/corevider/osb
-// @version      2.0.8
+// @version      2.0.9
 // @homepageURL  https://github.com/corevider/osb
 // @supportURL   https://github.com/corevider/osb/issues
 // @updateURL    https://raw.githubusercontent.com/corevider/osb/main/osb.meta.js
@@ -25,7 +25,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[OSB] Another SRO assistant is active. Disable it and reload to use OSB.');
   return;
 }
-const VERSION = '2.0.8';
+const VERSION = '2.0.9';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });
@@ -247,7 +247,7 @@ const DEFAULT_PROFILE = {
     // Attribute percentages: the lowest variance value (0 to 31) wanted per NATTR_ name, 0 or missing = leave it alone.
     attr: { targets: {}, limit: 100 } },
   statPoints: { enabled: false, str: 1, int: 0, reserve: 0 },
-  leveling: { on: false, spots: true, gear: true, accessories: true, sellOld: true, reserve: 5000, maxM: 400, skills: true, prepared: '', added: [] },
+  leveling: { on: false, spots: true, gear: true, accessories: true, sellOld: true, move: true, reserve: 5000, skills: true, prepared: '', added: [], elements: '', imbued: [], pet: '', build: 'auto', weapon: null },
   // Auto Quest: learned tokens bind a quest codename (QNO_...) to its refId, and learned targets
   // name the monster types whose kills advance each refId. Both fill themselves while playing.
   quest: { on: false, accept: true, picked: [], include: '', exclude: '', skip: [], learned: {}, targets: {} },
@@ -258,7 +258,7 @@ const DEFAULT_PROFILE = {
   pet: { attack: { on: false, recall: true, radius: 15, timeout: 3, resend: 5 } },
   scroll: { damageInc: false, damageAbs: false },
   mall: { on: false, budgetSilk: 0, hp: { on: false, low: 10, target: 1000 }, mp: { on: false, low: 10, target: 1000 }, damageInc: { on: false, low: 5, target: 20 }, damageAbs: { on: false, low: 5, target: 20 }, reverse: { on: false, low: 1, target: 5 } },
-  party: { autoAcceptMatching: false, autoRecruit: false, joinMain: false, mainName: '', leaveIfNotLeader: false, onlyWhileRunning: false, acceptNames: '', autoRes: false, acceptRes: false, acceptResAny: false, resNames: '', reviveWaitS: 20, resRadius: 300, resWaitS: 31, resMax: 0, title: 'Hunting party', min: 1, max: 90, purpose: 0, expShare: true, itemShare: true,
+  party: { autoAcceptMatching: false, autoRecruit: false, joinMain: false, mainName: '', leaveIfNotLeader: false, onlyWhileRunning: false, acceptNames: '', autoInvite: false, inviteNames: '', inviteAnyone: false, inviteRadius: 300, autoRes: false, acceptRes: false, acceptResAny: false, resNames: '', reviveWaitS: 20, resRadius: 300, resWaitS: 31, resMax: 0, title: 'Hunting party', min: 1, max: 90, purpose: 0, expShare: true, itemShare: true,
     support: { enabled: false, whileStopped: false, range: 30, heal: { id: 0, group: 0, pct: 60, self: false }, group: { id: 0, group: 0, pct: 60, count: 2 }, buffs: [] },
     protect: { enabled: false, all: false, names: [], range: 40, whileNoAttack: false } },
   wardrobe: { on: true, phantom: true, realAnim: true, hideAvatars: false,
@@ -359,6 +359,10 @@ function botProfile(input) {
   if (typeof P.petWhileStopped !== 'boolean') P.petWhileStopped = pickupDefaults.petWhileStopped;
   P.petInputHoldS = Number.isFinite(P.petInputHoldS) ? clamp(Math.round(P.petInputHoldS), 0, 30) : pickupDefaults.petInputHoldS;
   P.petIdleRadius = Number.isFinite(P.petIdleRadius) ? clamp(Math.round(P.petIdleRadius / 10) * 10, 50, 500) : pickupDefaults.petIdleRadius;
+  const party = result.party, partyDefaults = DEFAULT_PROFILE.party;
+  party.autoInvite = party.autoInvite === true; party.inviteAnyone = party.inviteAnyone === true;
+  if (typeof party.inviteNames !== 'string') party.inviteNames = partyDefaults.inviteNames;
+  party.inviteRadius = Number.isFinite(party.inviteRadius) ? clamp(Math.round(party.inviteRadius / 10) * 10, 10, 1000) : partyDefaults.inviteRadius;
   const protect = result.party.protect;
   for (const key of ['enabled', 'all', 'whileNoAttack']) protect[key] = protect[key] === true;
   protect.range = Number.isFinite(protect.range) ? clamp(Math.round(protect.range), 5, 100) : DEFAULT_PROFILE.party.protect.range;
@@ -451,12 +455,57 @@ const Sound = {
     });
     bus.on('profile', () => { this.level = null; });
   },
+  customKinds: ['sox'],
+  customMaxBytes: 1024 * 1024,
+  buffers: {},
+  customKey(kind) { return 'sound:' + kind; },
+  custom(kind) { return this.customKinds.includes(kind) ? Store.get(this.customKey(kind), null) : null; },
+  setCustom(kind, file) {
+    return new Promise((resolve, reject) => {
+      if (!this.customKinds.includes(kind)) return reject(new Error('this alert has no custom sound'));
+      if (!file) return reject(new Error('no file'));
+      if (file.size > this.customMaxBytes) return reject(new Error('the file is larger than 1 MB'));
+      const reader = new W.FileReader();
+      reader.onerror = () => reject(new Error('the file could not be read'));
+      reader.onload = async () => {
+        const data = String(reader.result || '');
+        this.unlock();
+        try { await this.decode(data); } catch { return reject(new Error('the browser cannot play that file')); }
+        if (!Store.set(this.customKey(kind), { name: String(file.name || 'sound').slice(0, 80), data })) return reject(new Error('browser storage is full'));
+        delete this.buffers[kind];
+        resolve();
+      };
+      reader.readAsDataURL(file);
+    });
+  },
+  clearCustom(kind) { Store.remove(this.customKey(kind)); delete this.buffers[kind]; },
+  async decode(dataUrl) {
+    const ctx = this.ctx;
+    if (!ctx) throw new Error('no audio');
+    const bytes = Uint8Array.from(W.atob(dataUrl.slice(dataUrl.indexOf(',') + 1)), c => c.charCodeAt(0));
+    return await ctx.decodeAudioData(bytes.buffer);
+  },
+  playBuffer(buffer) {
+    const ctx = this.ctx, source = ctx.createBufferSource(), gain = ctx.createGain();
+    source.buffer = buffer; gain.gain.value = 0.8;
+    source.connect(gain); gain.connect(ctx.destination);
+    source.onended = () => { source.disconnect(); gain.disconnect(); };
+    source.start();
+  },
+  playCustom(kind, custom) {
+    const cached = this.buffers[kind];
+    if (cached?.data === custom.data) { this.playBuffer(cached.buffer); return; }
+    this.decode(custom.data).then(buffer => { this.buffers[kind] = { data: custom.data, buffer }; this.playBuffer(buffer); })
+      .catch(() => { this.clearCustom(kind); this.play(kind); });
+  },
   play(kind) {
     const tone = this.tones[kind];
     if (!tone) return false;
     try {
       const ctx = this.ctx;
       if (!ctx || ctx.state !== 'running') return false;
+      const custom = this.custom(kind);
+      if (custom?.data) { this.playCustom(kind, custom); return true; }
       tone.notes.forEach((frequency, i) => {
         const oscillator = ctx.createOscillator(), gain = ctx.createGain();
         const at = ctx.currentTime + i * tone.gap;
@@ -5467,6 +5516,7 @@ const NAVDATA_AREAS = [
 // falls back to the leg chaining in WalkBack.
 const ROUTE_PAD = 800;        // internal units outside an area's bounds still snap
 const ROUTE_SNAP = 900;       // farthest start/end snap to a graph node
+const ROUTE_REACH_SNAP = 3000;
 const ROUTE_SPACING = 150;    // thinned waypoint spacing
 const ROUTE_SEGMENT = 450;    // never skip a longer gap, so local A* stays cheap
 const ROUTE_VISITED = 150000;
@@ -5701,6 +5751,49 @@ const Route = {
     }
     return null;
   },
+  reach(from, meta = this.areaFor(from)) {
+    const area = meta && this.cache.get(meta.name), here = this.absolute(from);
+    if (!area || !here) return null;
+    const graph = this.graph(area), start = this.nearest(graph, here.x, here.z, ROUTE_REACH_SNAP);
+    if (!start) return null;
+    const banned = this.banned.get(meta.name), dist = new Float64Array(graph.count).fill(Infinity), heap = [];
+    const push = (d, node) => {
+      heap.push([d, node]);
+      for (let i = heap.length - 1; i;) { const up = (i - 1) >> 1; if (heap[up][0] <= heap[i][0]) break; [heap[up], heap[i]] = [heap[i], heap[up]]; i = up; }
+    };
+    const pop = () => {
+      const top = heap[0], last = heap.pop();
+      if (heap.length) {
+        heap[0] = last;
+        for (let i = 0; ;) {
+          const l = i * 2 + 1, r = l + 1; let m = i;
+          if (l < heap.length && heap[l][0] < heap[m][0]) m = l;
+          if (r < heap.length && heap[r][0] < heap[m][0]) m = r;
+          if (m === i) break;
+          [heap[i], heap[m]] = [heap[m], heap[i]]; i = m;
+        }
+      }
+      return top;
+    };
+    dist[start.node] = 0; push(0, start.node);
+    while (heap.length) {
+      const [d, node] = pop();
+      if (d > dist[node]) continue;
+      for (let k = graph.offsets[node]; k < graph.offsets[node + 1]; k++) {
+        const next = graph.neighbours[k];
+        if (banned?.has(node + '>' + next)) continue;
+        const value = d + Math.hypot(graph.x[next] - graph.x[node], graph.z[next] - graph.z[node]);
+        if (value < dist[next]) { dist[next] = value; push(value, next); }
+      }
+    }
+    const covers = p => p.x >= meta.minX - ROUTE_PAD && p.x <= meta.maxX + ROUTE_PAD && p.z >= meta.minZ - ROUTE_PAD && p.z <= meta.maxZ + ROUTE_PAD;
+    return to => {
+      const there = this.absolute(to);
+      if (!there || !covers(there)) return null;
+      const end = this.nearest(graph, there.x, there.z, ROUTE_REACH_SNAP);
+      return end ? dist[end.node] + start.distance + end.distance : Infinity;
+    };
+  },
   pose(x, z, y) {
     const rx = Math.floor(x / SECTOR), rz = Math.floor(z / SECTOR);
     if (rx < 0 || rx > 255 || rz < 0 || rz > 127) return null;
@@ -5779,6 +5872,7 @@ const CHECK_REACH = 60;         // an edge walks when its far end is reached wit
 const CHECK_NODES = 1500;       // lattice search budget for an edge the straight line does not walk
 const CHECK_AROUND = 400;       // the search stays this close to the edge: a longer way round is the graph's to find
 const CHECK_SLICE_MS = 6;       // search time per slice; the game draws between slices
+const CHECK_SLICE_IDLE_MS = 14;
 const CHECK_ROUNDS = 60;        // corridors tried before giving up
 const CHECK_MS = 150000;        // whole check
 const CHECK_REGIONS = 6;        // regions kept in memory
@@ -5786,6 +5880,7 @@ const CHECK_LOAD_MS = 30000;
 
 const RouteCheck = {
   worker: null, queue: Promise.resolve(), regions: new Map(), message: '', locating: null,
+  good: new Map(),
   bootstrap() { return W.document?.querySelector?.('script[type="module"][src*="/assets/"]')?.src || ''; },
   available() { return typeof NativeClipper !== 'undefined' && (!!Hook.assetUrl || !!this.bootstrap()); },
   locate() {
@@ -5848,7 +5943,8 @@ const RouteCheck = {
       Log.warn('Route check (beta): the game\'s asset loader was not found, so the route data is walked unchecked.');
       return null;
     }
-    const walks = new Set(), deadline = now() + CHECK_MS, before = Route.bans(area).size / 2;
+    const walks = this.good.get(area) || new Set(), deadline = now() + CHECK_MS, before = Route.bans(area).size / 2;
+    this.good.set(area, walks);
     let unknown = 0, result = false;
     try {
       for (let round = 0; round < CHECK_ROUNDS && now() < deadline; round++) {
@@ -5903,7 +5999,8 @@ const RouteCheck = {
     for (;;) {
       const started = performance.now();
       let result;
-      while ((result = search.next()).done === false && performance.now() - started < CHECK_SLICE_MS);
+      const slice = WalkBack.active?.source === 'planning' ? CHECK_SLICE_IDLE_MS : CHECK_SLICE_MS;
+      while ((result = search.next()).done === false && performance.now() - started < slice);
       if (result.done) return result.value;
       await new Promise(resolve => setTimeout(resolve, 0));
     }
@@ -5998,6 +6095,7 @@ const WalkBack = {
     if (!dest || !pose || !World.inWorld() || World.isDead()) return false;
     if (!Number.isFinite(dist2D(pose, dest))) { onFail?.('The destination is in another world or dungeon.'); return false; }
     this.cancel();
+    if (!Travel.active && !Trade.run && Travel.begin(pose, dest, false, { label, onDone, onFail })) return true;
     this.launch(dest, [{ ...dest }], pose, false, { label, stop, onDone, onFail });
     return !!this.active;
   },
@@ -6023,23 +6121,39 @@ const WalkBack = {
     const check = RouteCheck.available();
     let planned = null;
     if (!check) { try { planned = Route.plan(pose, dest); } catch { planned = null; } }
-    if (planned) return this.useNav(planned, pose);
+    if (planned) { if (this.ferry(planned)) return; return this.useNav(planned, pose); }
     const a = this.active, token = {};
     a.plan = { at: now(), token, limit: check ? CHECK_MS + 5000 : WALK_PLAN_MS };
     a.source = 'planning';
     Log.info('Route: loading navdata for ' + routeArea.name + (check ? ' and checking it against the game map.' : '.'));
-    Route.checked(pose, dest).then(next => {
+    (Travel.on() ? Travel.load(pose, dest) : Promise.resolve()).then(() => {
+      if (this.active !== a || a.plan?.token !== token || this.ferry(undefined)) return null;
+      return Route.checked(pose, dest);
+    }).then(next => {
       if (this.active !== a || a.plan?.token !== token) return;
+      if (this.ferry(next)) return;
       if (next) this.useNav(next, World.pose());
       else this.useLegs();
     }, () => {
       if (this.active === a && a.plan?.token === token) this.useLegs();
     });
   },
+  ferry(route) {
+    const a = this.active, pose = World.pose();
+    if (!a || !pose || !Travel.on() || Travel.active || Trade.run) return false;
+    const walk = route === undefined ? null : route?.length ? route.length + (dist2D(route.points[route.points.length - 1], a.destination) || 0) : Infinity;
+    const steps = Travel.plan(pose, a.destination, new Set(), Travel.walks(pose, a.destination, walk));
+    if (!steps?.some(s => s.kind === 'hop')) return false;
+    Log.info('Route: ' + (Number.isFinite(walk) ? 'the walk is ' + Math.round(walk / 10) + ' m the long way round' : 'no walk reaches it') + '; taking a ferry or teleport instead.');
+    if (route === undefined) a.plan = null;
+    this.active = null;
+    return Travel.start(steps, a.destination, a.resume, a.onDone || a.onFail ? { label: a.label, onDone: a.onDone, onFail: a.onFail } : {});
+  },
   cancel(reason = '', halt = true) {
     if (!this.active) return;
-    const failed = this.active.onFail;
+    const failed = this.active.onFail, a = this.active;
     this.active = null;
+    if (reason && halt && !failed && a.resume && Leveling.spotsOn() && Leveling.current?.auto && LevelSpot.same(Leveling.current.center, a.destination)) LevelSpot.skipCurrent();
     if (halt && World.inWorld() && !World.isDead()) Cmd.move(World.pose());
     // A caller-owned walk reports its own failures; only a reasoned cancel is a failure, a plain cancel is the caller's.
     if (failed && reason) failed(reason); else if (reason) UI.toast(reason, 'warn', 4000);
@@ -6143,6 +6257,7 @@ const WalkBack = {
       this.active = null;
       if (a.onDone) return a.onDone();
       UI.toast('Back at the hunting spot.', 'info', 2500);
+      Leveling.walkFails = 0;
       if (a.resume) Hunt.start();
       return;
     }
@@ -6827,9 +6942,11 @@ const Party = {
   registration: null,
   lastRegisterAt: -Infinity,
   message: 'Auto-recruit off.',
+  inviteMessage: '', invitedAt: new Map(), lastInviteAt: -Infinity,
   joinMessage: '', joinedKey: '', lastPageAt: -Infinity, lastJoinAt: -Infinity, scanDoneAt: -Infinity, wantPage: 1,
   reset() {
     this.answered = ''; this.registration = null; this.lastRegisterAt = -Infinity; this.message = 'Waiting for party state.';
+    this.inviteMessage = ''; this.invitedAt.clear(); this.lastInviteAt = -Infinity;
     this.joinMessage = ''; this.joinedKey = ''; this.lastPageAt = this.lastJoinAt = this.scanDoneAt = -Infinity; this.wantPage = 1;
   },
   // Comma or line separated character names; empty means everyone.
@@ -7018,13 +7135,43 @@ const Party = {
       UI.toast('Accepted resurrection from ' + caster.name, 'info', 3000);
     }
   },
+  inviteWait(tries) { return Math.min(600000, 30000 * 2 ** (tries - 1)); },
+  autoInvite() {
+    const c = Settings.profile.party, names = this.names(c.inviteNames).slice(0, 20), gp = World.gp, social = gp?.social;
+    if (!c.autoInvite || (!names.length && !c.inviteAnyone)) { this.inviteMessage = ''; return; }
+    if (!social || !Array.isArray(social.members)) { this.inviteMessage = 'Waiting for party state.'; return; }
+    if (World.isDead()) { this.inviteMessage = 'Not while dead.'; return; }
+    const lower = v => String(v || '').trim().toLowerCase(), me = lower(social.localName), main = lower(c.mainName);
+    if (c.joinMain && main && me !== main) { this.inviteMessage = 'Off while joining the party leader.'; return; }
+    if (social.leader ? social.self !== social.leader && !(social.options & 4) : social.members.length > 1) { this.inviteMessage = 'Only the party leader can invite.'; return; }
+    const options = social.leader ? social.options : (gp.partyMatching ? this.options(gp.partyMatching, social) : (c.expShare ? 1 : 0) | (c.itemShare ? 2 : 0));
+    if (!Number.isInteger(options)) { this.inviteMessage = 'Waiting for party options.'; return; }
+    if (social.members.length >= ((options & 1) ? 8 : 4)) { this.inviteMessage = 'Party full.'; return; }
+    const t = now(), members = new Set(social.members.map(m => lower(m?.name)).filter(Boolean)), pose = World.pose();
+    for (const n of members) this.invitedAt.delete(n);
+    const wanted = [...World.ents.values()].filter(e => e.kind === 'player' && e.gid !== gp.localGid && lower(e.name) && lower(e.name) !== me && !members.has(lower(e.name)) &&
+      (names.includes(lower(e.name)) || c.inviteAnyone && dist2D(e, pose) <= c.inviteRadius));
+    let waiting = false, sent = '';
+    for (const e of wanted) {
+      const key = lower(e.name), seen = this.invitedAt.get(key);
+      if (seen) seen.seenAt = t;
+      if (seen && t - seen.at < this.inviteWait(seen.tries)) { waiting = true; continue; }
+      if (sent || t - this.lastInviteAt < 3000 || !Cmd.spaced('party-invite')) continue;
+      if (Cmd.raw({ kind: 'party-invite', gid: e.gid, options }, 'Auto-invite ' + e.name)) {
+        this.invitedAt.set(key, { at: t, seenAt: t, tries: (seen?.tries || 0) + 1 }); this.lastInviteAt = t; sent = e.name;
+        UI.toast('Party invite sent: ' + e.name, 'info', 2500);
+      }
+    }
+    for (const [key, v] of this.invitedAt) if (t - v.seenAt > 30 * 60000) this.invitedAt.delete(key);
+    this.inviteMessage = sent ? 'Invited ' + sent + '.' : waiting ? 'Waiting before inviting again.' : 'Nobody to invite in view.';
+  },
   tick() {
     this.acceptResurrection();
     if (World.inWorld() && this.accepting()) this.helping();
     const c = Settings.profile.party;
     // Optional: party joining, leaving, recruiting and accepting wait until the bot is running (default: they work while stopped).
-    if (c.onlyWhileRunning && !Hunt.running) { this.joinMessage = ''; this.message = 'Waiting for the bot to be started.'; return; }
-    if (World.inWorld()) { this.leaveWrongParty(); this.joinMain(); } else this.joinMessage = '';
+    if (c.onlyWhileRunning && !Hunt.running) { this.joinMessage = this.inviteMessage = ''; this.message = 'Waiting for the bot to be started.'; return; }
+    if (World.inWorld()) { this.leaveWrongParty(); this.joinMain(); this.autoInvite(); } else this.joinMessage = this.inviteMessage = '';
     if (!World.inWorld() || (!c.autoAcceptMatching && !c.autoRecruit)) return;
     const gp = World.gp, matching = gp?.partyMatching, request = matching?.request, social = gp?.social;
     if (!matching || !social || !Array.isArray(social.members)) return;
@@ -7638,7 +7785,27 @@ const Town = {
       UI.toast(this.message, 'warn', 6000); return null;
     }
     if (!(c.arrival && this.detect(c.arrival)?.key === town.key)) overwrite = true;
-    const saved = [];
+    const { saved, unverified } = this.fill(town, overwrite, here);
+    this.message = saved.length ? `Automatic setup for ${town.name}: saved ${saved.join(', ')}.` + (unverified ? ' Walkable spots could not be checked without collision data; the first trip will tell.' : '')
+      : `Automatic setup for ${town.name}: everything was already saved.`;
+    Settings.saveProfile(); UI.toast(this.message, 'info', 6000); UI.draw();
+    return { town: town.name, saved, unverified };
+  },
+  follow(here = World.pose()) {
+    const c = this.cfg(), town = here && this.detect(here), saved = this.detect(c.vendor || c.storage || c.arrival || {});
+    if (!Leveling.cfg().on || !town || saved?.key === town.key) return false;
+    this.fill(town, true, here);
+    this.lastScrollPoint = null; this.deathPoint = null;
+    Leveling.reset();
+    const t = this.trip;
+    if (t) { Leveling.begin(t); t.config = JSON.stringify(c); }
+    this.message = 'Leveling: the character is in ' + town.name + ', so its town services are used now' + (saved ? ' instead of ' + saved.name : '') + '.';
+    Log.info(this.message); UI.toast(this.message, 'info', 8000);
+    Settings.saveProfile(); UI.draw();
+    return true;
+  },
+  fill(town, overwrite, here) {
+    const c = this.cfg(), saved = [];
     if (overwrite || !c.arrival) { c.arrival = { ...(town.arrival || here) }; saved.push('arrival point'); }
     let unverified = 0;
     for (const [role, label] of [['storage', 'warehouse'], ['vendor', 'potion merchant'], ['smith', 'repair merchant'], ['gate', 'world statue']]) {
@@ -7649,10 +7816,7 @@ const Town = {
         npc: { regionId: s.regionId, x: s.x, y: s.y, z: s.z } };
       saved.push(label);
     }
-    this.message = saved.length ? `Automatic setup for ${town.name}: saved ${saved.join(', ')}.` + (unverified ? ' Walkable spots could not be checked without collision data; the first trip will tell.' : '')
-      : `Automatic setup for ${town.name}: everything was already saved.`;
-    Settings.saveProfile(); UI.toast(this.message, 'info', 6000); UI.draw();
-    return { town: town.name, saved, unverified };
+    return { saved, unverified };
   },
   setupBlocked() { return Hunt.running || this.trip || Restock.recording || !World.inWorld(); },
   // Choosing a town sets it up. While setup is blocked the pick is remembered and applied when the town cycle is switched on.
@@ -7795,6 +7959,7 @@ const Town = {
     return Number.isInteger(tf) && ItemType.isEquipment(tf) && [1, 2, 3, 4, 5, 6, 9, 10, 11, 12].includes((tf >>> 7) & 15) &&
       /^ITEM_(CH|EU)_/.test(code);
   },
+  sellsBag() { return !!this.cfg().sellBag || !!Leveling.cfg().on; },
   // Whether a trip could empty any of the pet's slots (sell or store something). A pet full of protected items would
   // otherwise send the bot to town again and again for nothing.
   petClearable(pet) { return pet.rec.inventory.some(i => this.sellable(i) || this.eligible(i)); },
@@ -7814,6 +7979,8 @@ const Town = {
     if (c.broken && this.weaponBroken()) return 'weapon broken';
     const worn = c.wear?.on ? this.wear() : null;
     if (worn && worn.pct < c.wear.pct) return `gear durability low (${worn.name} at ${Math.floor(worn.pct)}%)`;
+    const move = Leveling.moveDue();
+    if (move) return move;
     const gear = Leveling.due();
     if (gear) return gear;
     if (this.noXpDue()) return `no XP for ${c.noXp.minutes} minutes`;
@@ -7849,7 +8016,7 @@ const Town = {
   // Already standing in a known town (all four services in range): no return scroll is needed or wanted.
   inTown(revival = false) { return !revival && !!World.pose() && !!this.detect(World.pose()); },
   // The way back after the services: the reverse scroll when that is the choice and one is carried, otherwise a walk.
-  walks() { return this.cfg().returnBy === 'walk'; },
+  walks() { return this.cfg().returnBy === 'walk' || !!Leveling.cfg().on; },
   reverses() { return !this.walks() && !!this.scroll(0x19ec); },
   validate(revival = false) {
     const c = this.cfg(), supplies = this.supplies();
@@ -7878,6 +8045,7 @@ const Town = {
     return false;
   },
   begin(revival = false) {
+    if (World.inWorld() && !World.isDead()) this.follow();
     const error = this.validate(revival);
     if (error) return this.fail(error);
     // The death spot is used only when it lies inside the hunting area: hunting starts again only from there. A death
@@ -7900,7 +8068,7 @@ const Town = {
     this.trip = { phase: 'recall', at: now(), started: now(), origin: { ...origin }, revival, inTown, reverseChoice, why,
       huntArea: (revival || inTown) && !(reverseChoice === TOWN_REVERSE.death && this.deathPoint) && Hunt.cfg().center ? { center: { ...Hunt.cfg().center }, radius: Hunt.cfg().radius } : null,
       manualAt: Manual.lastAt, character: World.charName, petRef: Loot.pet()?.rec.refObjId,
-      config: JSON.stringify(this.cfg()), supplies: this.supplies(), sellFirst: !!this.cfg().sellBag };
+      config: JSON.stringify(this.cfg()), leveling: !!Leveling.cfg().on, supplies: this.supplies(), sellFirst: this.sellsBag() };
     Leveling.begin(this.trip);
     Hunt.targetGid = Hunt.lootGid = 0;
     // Bag selling reads codenames from the item catalogue: start loading it now, well before the merchant.
@@ -7919,12 +8087,13 @@ const Town = {
     const t = this.trip, full = World.freeBagSlots() < 1;
     t.scrollAttempts = 0; t.scrollRequest = null;
     // With bag selling on, the trip sells first, so a full bag can still make room for refills.
-    if (full && !t.sellFirst) return this.fail('Returned to town; free a character bag slot for storage and refills.');
+    if (full && !t.sellFirst && !(this.cfg().storage && World.items().some(i => this.storesFromBag(i)))) return this.fail('Returned to town; free a character bag slot for storage and refills.');
     t.order = this.order(full);
     // A dead pet is brought back first, before the services, so it carries loot again for the rest of the trip.
     if (this.cfg().revivePet && this.deadCollar() && this.grass()) { this.enter('pet-revive'); return; }
-    this.enter('walk-' + t.order[0]);
+    this.enter(this.firstStop());
   },
+  firstStop() { const t = this.trip; return t.order[0] ? 'walk-' + t.order[0] : this.closeNext('close-'); },
   // The services in visiting order. Potions come before repair and selling, unless bag selling is on, which sells and
   // repairs first so a full bag has room to buy. A full bag also sells before the warehouse: pet loot reaches the
   // warehouse through a free bag slot.
@@ -7933,7 +8102,25 @@ const Town = {
     const order = !sellFirst ? ['storage', 'vendor', 'smith', 'gate'] : full ? ['smith', 'storage', 'vendor', 'gate'] : ['storage', 'smith', 'vendor', 'gate'];
     const shops = ['armor', 'accessory'].filter(role => this.trip?.shops?.[role]);
     order.splice(order.indexOf('gate'), 0, ...shops);
-    return order.filter(role => (role !== 'storage' || this.cfg().storage) && (role !== 'gate' || !this.walks()));
+    const route = order.filter(role => (role !== 'storage' || this.cfg().storage) && (role !== 'gate' || !this.walks()));
+    const skipped = route.filter(role => !this.needs(role));
+    if (skipped.length) Log.info('Town: nothing to do at the ' + skipped.map(r => this.role(r)).join(', ') + '; skipped.');
+    return route.filter(role => !skipped.includes(role));
+  },
+  storesFromBag(i, t = this.trip) { return !!(this.depositItem(i, true) || this.stone(i) || t?.equippedOut?.includes(BuffGear.key(i)) || ItemRules.fromPet(i) && this.eligible(i)); },
+  needs(role) {
+    const t = this.trip, pet = Loot.pet(), bag = World.items(), petItems = pet?.rec.inventory || [];
+    try {
+      if (role === 'storage') return bag.some(i => this.storesFromBag(i)) || petItems.some(i => this.eligible(i)) || Equip.on() && !!Equip.pick();
+      if (role === 'vendor') {
+        const scrolls = bag.filter(i => (i.typeFlags & 0xfffc) === 0x09ec).reduce((n, i) => n + (i.quantity ?? 1), 0);
+        return (t?.supplies || this.supplies()).some(s => Restock.count(s.refObjId) < s.target) || scrolls < 2;
+      }
+      if (role === 'smith') return petItems.some(i => this.sellable(i)) || !!t?.sellFirst && bag.some(i => this.sellableBag(i)) || bag.some(i => this.sellableDrained(i)) ||
+        !!this.cfg().sellExcess && !!this.excess() || this.ammoSupplies().some(s => this.ammoCount(s.refObjId) < s.target) ||
+        this.damaged().length > 0 || Leveling.wants(t || {}, 'smith').length > 0;
+    } catch { return true; }
+    return true;
   },
   // The service to walk to after closing a window. After the last one: the world statue to reverse; without a reverse
   // scroll, first an Item mall purchase when that switch is on, otherwise the walk back.
@@ -7967,6 +8154,7 @@ const Town = {
     if (World.freeBagSlots() <= 1) return this.fail('Returned to town; free at least two character bag slots before hunting again.');
     if (!Hunt.cfg().center) return this.fail('No saved hunting spot to walk back to.');
     this.trip = null; Hunt.targetGid = Hunt.lootGid = 0; this.restartClocks();
+    if (t.move && Leveling.startMove(t.move)) { this.message = 'Town service complete; moving to the next town.'; return; }
     WalkBack.start(true);
     if (!WalkBack.active && !Travel.active) { this.message = 'Town cycle stopped: the walk back to the hunting spot did not start.'; Hunt.stop(this.message); return; }
     this.message = 'Town service complete; walking back to the hunting spot.';
@@ -8000,7 +8188,11 @@ const Town = {
     const t = this.trip, pose = World.pose();
     // Permit a reachable nearby approach, but always stay in service range.
     const radius = Math.max(0, Math.min(60, 190 - dist2D(dest, dest.npc || dest)));
-    if (dist2D(pose, dest) <= Math.max(12, radius) && dist2D(pose, dest.npc || dest) <= 200) return true;
+    if (dist2D(pose, dest) <= Math.max(12, radius) && dist2D(pose, dest.npc || dest) <= 200) {
+      const role = t.phase.slice(5), swapped = t.stand?.[role];
+      if (swapped && dest === swapped && this.cfg()[role]) { this.cfg()[role] = { ...swapped }; Settings.saveProfile(); t.config = JSON.stringify(this.cfg()); Log.info('Town: the saved spot of the ' + this.role(t.phase) + ' was replaced by one that works.'); }
+      return true;
+    }
     if (!Number.isFinite(dist2D(pose, dest))) { this.fail('Town service is in another world.'); return false; }
     if (!t.lastPose || dist2D(t.lastPose, pose) > 3) { t.lastPose = { ...pose }; t.progressAt = now(); }
     if (now() < t.retryAt) return false;
@@ -8011,6 +8203,13 @@ const Town = {
     }
     if (!World.isSitting() && Navigation.watch(t, pose, t.movedAt, t.travel?.route[t.travel.index] || dest) === 'giveup') {
       if (this.viaArrival()) return false;
+      const role = t.phase.slice(5);
+      if (role !== 'arrival' && this.nextStand(role, dest)) {
+        t.travel = null; t.stall = null; t.avoid = []; t.progressAt = now();
+        this.message = 'Town movement to the ' + this.role(t.phase) + ': blocked, trying another spot beside the merchant.';
+        Log.info(this.message); UI.toast(this.message, 'warn', 4000);
+        return false;
+      }
       // The warehouse is optional: a blocked walk to it skips the deposit so the potions, repairs and the way back still happen.
       if (t.phase === 'walk-storage') {
         this.enter(this.closeNext('close-storage'));
@@ -8034,7 +8233,26 @@ const Town = {
     else if (Cmd.move(step.point)) t.movedAt = now();
     return false;
   },
-  point(role) { return this.cfg()[role] || this.trip?.shops?.[role] || null; },
+  point(role) { return this.trip?.stand?.[role] || this.cfg()[role] || this.trip?.shops?.[role] || null; },
+  nextStand(role, dest) {
+    const t = this.trip, npc = dest.npc || dest, tried = (t.tried ||= {})[role] ||= [{ ...dest }];
+    if (tried.length > 6) return false;
+    const from = this.cfg().arrival || World.pose(), toward = regionDelta(npc, from) || [1, 0], base = Math.atan2(toward[1], toward[0]);
+    let pick = null;
+    for (const distance of [30, 50, 70, 90]) for (const turn of [0, 0.5, -0.5, 1, -1, 1.5, -1.5, 2, -2, 2.5, -2.5, Math.PI]) {
+      const angle = base + turn, x = npc.x + Math.cos(angle) * distance, z = npc.z + Math.sin(angle) * distance;
+      const sx = Math.floor(x / SECTOR), sz = Math.floor(z / SECTOR);
+      const point = { regionId: ((npc.regionId & 255) + sx) | (((npc.regionId >>> 8) + sz) << 8), x: x - sx * SECTOR, y: npc.y, z: z - sz * SECTOR };
+      if (tried.some(p => dist2D(p, point) < 30)) continue;
+      const local = Navigation.scene && Navigation.local(point);
+      if (local && !Navigation.open(local.x, local.z)) continue;
+      pick = point; break;
+    }
+    if (!pick) return false;
+    tried.push(pick);
+    (t.stand ||= {})[role] = { ...dest, ...pick, npc: { ...npc } };
+    return true;
+  },
   serviceEntity(role, entity) { return !!entity && (entity.kind === 'npc' || role === 'gate' && entity.kind === 'teleport'); },
   npc(role) {
     const saved = this.point(role);
@@ -8152,7 +8370,7 @@ const Town = {
     if (t.staged && !bagItem) return this.fail('Staged pet item changed unexpectedly.');
     // Gear the character picked up is deposited straight from the bag, then pet loot is staged through it.
     ItemRules.pruneDrained();
-    const bagSox = bagItem ? null : World.items().find(i => this.depositItem(i, true) || this.stone(i) || t.equippedOut?.includes(BuffGear.key(i)) || ItemRules.fromPet(i) && this.eligible(i));
+    const bagSox = bagItem ? null : World.items().find(i => this.storesFromBag(i, t));
     const direct = bagItem || bagSox;
     const item = direct || pet?.rec.inventory.find(i => this.eligible(i));
     if (!item) {
@@ -8283,10 +8501,10 @@ const Town = {
   // that cannot be brought back is never fatal to the trip: the town services continue without it.
   revivePet() {
     const t = this.trip, gp = World.gp;
-    const finish = () => { t.petStep = null; this.enter('walk-' + t.order[0]); };
+    const finish = () => { t.petStep = null; this.enter(this.firstStop()); };
     const giveUp = (text, stepName) => {
       t.petStep = null; this.petReviveFailedAt = now();
-      this.enter('walk-' + t.order[0]);
+      this.enter(this.firstStop());
       this.message = text; Log.warn(text); UI.toast(text, 'warn', 6000);
       Activity.emit({ category: 'town', code: 'pet-revive-failed', text, outcome: 'refused', details: { step: stepName } });
     };
@@ -8419,7 +8637,7 @@ const Town = {
       if (!this.trip) return true;
     }
     const t = this.trip, gp = World.gp;
-    if (!c.enabled || !Hunt.running || t.character !== World.charName || t.config !== JSON.stringify(c)) { this.fail('Settings or character changed during the trip.'); return true; }
+    if (!c.enabled || !Hunt.running || t.character !== World.charName || t.config !== JSON.stringify(c) || t.leveling !== !!Leveling.cfg().on) { this.fail('Settings or character changed during the trip.'); return true; }
     if (Manual.lastAt !== t.manualAt) { this.fail('Manual control interrupted the trip.'); return true; }
     // Movement may wait indefinitely for collision coverage. Individual service
     // and transaction phases still enforce their own confirmation timeouts.
@@ -8459,7 +8677,10 @@ const Town = {
       // stand, say), adopt the spot the character settled on after a confirmed trip, but only in the saved services' town.
       if (t.phase === 'recall-wait' && t.transition && dist2D(World.pose(), c.arrival) > radius && !gp.inventoryPending && !gp.returnScroll) {
         const here = World.pose(), town = this.detect(here), saved = this.detect(c.vendor || c.storage || c.arrival);
-        if (!town || !saved || town.key !== saved.key) t.landed = null;
+        if (town && saved && town.key !== saved.key && Leveling.cfg().on) {
+          if (!t.landed || dist2D(t.landed.pose, here) > 3) t.landed = { pose: { ...here }, at: now() };
+          else if (now() - t.landed.at >= 3000) { t.landed = null; this.follow(here); }
+        } else if (!town || !saved || town.key !== saved.key) t.landed = null;
         else if (!t.landed || dist2D(t.landed.pose, here) > 3) t.landed = { pose: { ...here }, at: now() };
         else if (now() - t.landed.at >= 3000) {
           c.arrival = { ...here }; t.config = JSON.stringify(c); t.landed = null; Settings.saveProfile();
@@ -9577,6 +9798,7 @@ const TRAVEL_TABLE = {"nodes":[{"id":1,"refObjId":2094,"name":"SN_ZONE_22001"},{
 // its menu, send travel-gate type 2 with the destination's teleport id, and confirm the arrival.
 const TRAVEL_HOP = 3000;        // a hop (menu and load screen) weighs like this much walking
 const TRAVEL_WALK = 1.3;        // a walk is longer than the straight line
+const TRAVEL_GOLD = 5;
 const TRAVEL_REACH = 150;       // stop this close to the teleporter: it stands on a dock or a ship; the game talks within 20 m
 const TRAVEL_FIND = 300;        // the teleporter stands within this of its table position
 const TRAVEL_STEP_MS = 15000;   // selecting, the menu, and the hop starting
@@ -9608,7 +9830,7 @@ const Travel = {
   },
   // Cheapest mix of walks and hops (Dijkstra over the start, the goal and every teleporter). Steps alternate between
   // { kind: 'walk', to } and { kind: 'hop', from, to, fee }; null when no mix reaches the goal.
-  plan(from, to, banned = new Set()) {
+  plan(from, to, banned = new Set(), walks = null) {
     if (!from || !to || ((from.regionId | to.regionId) & DUNGEON)) return null;
     const nodes = [...this.nodes().values()], gold = toBigInt(World.gp?.progression?.gold ?? 0);
     const points = [{ pose: from }, { pose: to }, ...nodes.map(node => ({ pose: node.pose, node }))];
@@ -9619,6 +9841,9 @@ const Travel = {
       hops.get(source).push({ destination, fee });
     }
     const cost = points.map(() => Infinity), came = [], done = [];
+    const known = v => v !== null && v !== undefined;
+    const vf = points.map(p => walks?.from ? walks.from(p.pose) : null), vt = points.map(p => walks?.to ? walks.to(p.pose) : null);
+    const apart = (i, j) => [vf, vt].some(v => known(v[i]) && known(v[j]) && Number.isFinite(v[i]) !== Number.isFinite(v[j]));
     cost[0] = 0;
     for (;;) {
       let i = -1;
@@ -9627,11 +9852,18 @@ const Travel = {
       done[i] = true;
       const relax = (j, value, step) => { if (value < cost[j]) { cost[j] = value; came[j] = { from: i, step }; } };
       for (let j = 1; j < points.length; j++) {
-        if (j !== i && !done[j] && this.walkable(points[i].pose, points[j].pose)) relax(j, cost[i] + dist2D(points[i].pose, points[j].pose) * TRAVEL_WALK, { kind: 'walk' });
+        if (j === i || done[j]) continue;
+        let real = i === 0 && j === 1 && Number.isFinite(walks?.direct) ? walks.direct : null;
+        if (!known(real) && i === 0) real = vf[j];
+        if (!known(real) && j === 1) real = vt[i];
+        if (known(real)) { if (Number.isFinite(real)) relax(j, cost[i] + real, { kind: 'walk' }); continue; }
+        if (apart(i, j) || !this.walkable(points[i].pose, points[j].pose)) continue;
+        const floor = Math.max(0, ...[vf, vt].filter(v => Number.isFinite(v[i]) && Number.isFinite(v[j])).map(v => Math.abs(v[i] - v[j])));
+        relax(j, cost[i] + Math.max(dist2D(points[i].pose, points[j].pose) * TRAVEL_WALK, floor), { kind: 'walk' });
       }
       for (const hop of points[i].node ? hops.get(points[i].node.id) || [] : []) {
         const j = index.get(hop.destination);
-        relax(j, cost[i] + TRAVEL_HOP + hop.fee, { kind: 'hop', fee: hop.fee });
+        relax(j, cost[i] + TRAVEL_HOP + hop.fee * TRAVEL_GOLD, { kind: 'hop', fee: hop.fee });
       }
     }
     if (cost[1] === Infinity) return null;
@@ -9644,11 +9876,23 @@ const Travel = {
     return steps;
   },
   // WalkBack asks first: true when the walk needs a teleport or a ferry and the trip has started here instead.
-  begin(pose, dest, resume) {
-    if (!this.on() || !Number.isFinite(dist2D(pose, dest)) || this.walkable(pose, dest)) return false;
-    const steps = this.plan(pose, dest);
+  begin(pose, dest, resume, opts = {}) {
+    if (!this.on() || !Number.isFinite(dist2D(pose, dest))) return false;
+    if (!this.walkable(pose, dest)) return this.start(this.plan(pose, dest), dest, resume, opts);
+    const walks = dist2D(pose, dest) > WALK_LEG ? this.walks(pose, dest) : null;
+    return !!walks && this.start(this.plan(pose, dest, new Set(), walks), dest, resume, opts);
+  },
+  walks(from, to, direct = null) {
+    const a = Route.reach(from), b = Route.reach(to);
+    return a || b || direct !== null ? { from: a || null, to: b || null, direct } : null;
+  },
+  load(from, to) {
+    return Promise.all([from, to].map(p => Route.areaFor(p)).filter(Boolean).map(a => Route.load(a.name).catch(() => null)));
+  },
+  start(steps, dest, resume, opts = {}) {
     if (!steps?.some(s => s.kind === 'hop')) return false;
-    this.active = { dest: { ...dest }, resume, steps, index: 0, phase: '', at: now(), banned: new Set(), replans: 0, manualAt: Manual.lastAt };
+    this.active = { dest: { ...dest }, resume, steps, index: 0, phase: '', at: now(), banned: new Set(), replans: 0, manualAt: Manual.lastAt,
+      label: opts.label || '', onDone: opts.onDone || null, onFail: opts.onFail || null };
     const hops = steps.filter(s => s.kind === 'hop'), fees = hops.reduce((n, s) => n + s.fee, 0);
     Log.info('Travel: the hunting spot needs ' + hops.length + ' teleport' + (hops.length === 1 ? '' : 's') + ' or ferr' + (hops.length === 1 ? 'y' : 'ies') + (fees ? ' (' + fees + ' gold)' : '') + '.');
     this.next();
@@ -9658,14 +9902,16 @@ const Travel = {
     const a = this.active, step = a?.steps[a.index];
     if (!a) return;
     if (!step) {
-      this.active = null; this.message = 'Back at the hunting spot.';
+      this.active = null;
+      if (a.onDone) { this.message = ''; return a.onDone(); }
+      this.message = 'Back at the hunting spot.';
       UI.toast(this.message, 'info', 2500);
       if (a.resume) Hunt.start();
       return;
     }
     a.phase = step.kind === 'walk' ? 'walk' : 'select'; a.at = now(); a.gid = 0; a.talked = false; a.transition = false; a.refused = '';
     if (step.kind === 'hop') { this.message = 'Travel: using ' + step.from.label + (step.fee ? ' (' + step.fee + ' gold).' : '.'); return; }
-    const last = a.index === a.steps.length - 1, label = last ? 'the hunting spot' : step.node?.label || 'the teleporter';
+    const last = a.index === a.steps.length - 1, label = last ? a.label || 'the hunting spot' : step.node?.label || 'the teleporter';
     this.message = 'Travel: walking to ' + label + '.';
     WalkBack.startTo(step.to, { label, stop: last ? 12 : TRAVEL_REACH,
       onDone: () => { if (this.active === a) { a.index++; this.next(); } },
@@ -9736,11 +9982,13 @@ const Travel = {
     return false;
   },
   fail(reason) {
-    if (!this.active) return;
+    const a = this.active;
+    if (!a) return;
     this.active = null;
     WalkBack.cancel('', false);
     this.message = 'Travel stopped: ' + reason + '.';
     Log.warn(this.message); UI.toast(this.message, 'warn', 6000);
+    a.onFail?.(this.message);
   },
   cancel() { this.active = null; },
   status() { return this.active ? this.message : ''; },
@@ -11362,6 +11610,7 @@ const Controller = {
   townReturn() {
     const c = Town.cfg();
     if (!c.enabled) return false;
+    Town.follow();
     const here = Town.detect(), home = Town.detect(c.vendor || c.storage || c.arrival || {});
     if (!here || !home || here.key !== home.key) return false;
     Log.info('Far from the hunting spot, in town: doing town services before going back.');
@@ -11421,6 +11670,7 @@ const Controller = {
       StatPoints.tick();
       this.guard('Level spot', () => LevelSpot.tick());
       this.guard('Leveling skills', () => Leveling.skillTick());
+      this.guard('Leveling town', () => Leveling.moveTick());
       Potion.tick();
       ItemRules.trackGear();
       if (!ItemRules.dropTick()) ItemRules.balanceTick();
@@ -11646,7 +11896,7 @@ const MallBuyer = {
   buyers() {
     const c = this.cfg(), out = [];
     if (c.on) this.generalBuyers(c, out);
-    if (c.reverse?.on) out.push(this.reverseBuyer());
+    if (c.reverse?.on && !Leveling.cfg().on) out.push(this.reverseBuyer());
     return out;
   },
   generalBuyers(c, out) {
@@ -11778,41 +12028,393 @@ bus.on('hunt', running => { if (running) { const poison = MallBuyer.poison; Mall
 
 // Generated by gen-leveling.py from the server data. Do not edit by hand.
 // LEVEL_SPOTS rows: [regionId, x, y, z, level, lowest level, highest level, spawn points].
-const LEVEL_SPOTS = [[27725,174,0,1414,1,1,2,5],[27984,413,252,245,1,1,2,5],[27727,1719,5,759,1,1,1,4],[27211,1876,-3,816,1,1,2,4],[27724,1105,10,391,1,1,2,4],[27980,1254,50,385,1,1,2,4],[27981,337,27,565,1,1,2,4],[27725,1224,0,1728,1,1,2,4],[27726,588,0,1000,1,1,2,4],[27982,1437,103,44,1,1,2,4],[27983,917,83,395,1,1,2,4],[27212,1245,9,1433,1,1,2,3],[27468,390,-2,104,1,1,1,3],[27468,163,0,1476,1,1,2,3],[27725,1105,1,592,1,1,2,3],[24487,330,-24,8,2,1,2,3],[28236,1675,80,83,3,3,4,3],[26700,405,-78,1210,4,3,4,4],[26698,1355,-143,1749,4,3,4,4],[26954,863,-166,1032,4,3,4,4],[27210,1494,22,175,4,3,4,4],[28238,1217,240,24,4,3,4,3],[27982,123,204,1626,4,3,4,3],[26955,1108,-120,727,4,3,4,3],[28233,190,0,104,5,5,7,5],[27977,1191,-108,289,5,5,7,5],[27721,915,-121,461,5,5,7,5],[27208,1858,-156,462,5,5,7,5],[27208,1126,-173,1267,5,5,7,5],[27464,1571,-194,908,5,5,7,3],[28231,807,-71,3,6,6,7,7],[28230,1748,-68,137,6,6,7,6],[28232,1144,45,17,6,5,7,5],[28230,693,-134,213,6,6,7,5],[27976,90,-114,185,6,6,7,5],[26951,435,-7,1184,6,6,8,5],[27973,1773,-184,1777,6,6,7,5],[26695,113,-145,1277,6,6,7,4],[27208,115,-160,738,6,6,7,4],[26952,26,-84,970,6,6,7,4],[25514,524,30,1082,6,5,7,3],[26952,1652,-110,688,7,5,7,6],[27720,1557,-164,138,7,5,7,5],[27207,1690,-177,1607,7,6,7,5],[27465,610,-161,1172,7,5,7,4],[27977,66,5,886,7,5,7,4],[27720,177,-136,1029,7,6,7,4],[27975,1022,-159,419,7,6,7,4],[26950,1833,-5,394,7,6,8,4],[27721,140,-1,1865,7,5,7,3],[28231,1768,2,245,7,6,7,3],[26951,950,-138,313,7,6,7,3],[27207,1014,-91,835,7,6,8,3],[25773,1624,423,1430,8,8,9,7],[27206,1525,44,749,8,8,9,7],[25773,1498,419,276,8,8,9,6],[26029,1447,352,833,8,8,9,5],[25771,1121,240,997,8,8,9,5],[26693,1626,-188,236,8,8,9,5],[26949,1851,-2,948,8,8,9,5],[27207,212,-96,1471,8,8,9,5],[26027,1213,304,281,8,8,9,4],[27461,1488,-5,674,8,8,9,4],[25773,622,236,1394,8,8,9,3],[25515,1168,240,1815,8,8,8,3],[26028,1804,137,74,8,8,9,3],[25771,185,433,354,8,8,9,3],[25772,1822,137,249,8,8,9,3],[27205,1528,9,379,8,8,9,3],[27463,671,-165,1564,8,8,9,3],[27718,1261,-170,651,9,9,10,10],[27462,1169,-159,684,9,9,10,8],[26694,134,-53,1152,9,8,9,6],[26950,742,1,372,9,8,9,6],[27206,594,20,31,9,8,9,6],[27206,567,-11,981,9,8,9,5],[27717,1915,-162,395,9,8,10,5],[25771,65,434,1531,9,8,9,4],[26027,334,434,773,9,8,9,4],[27718,572,-168,1297,9,8,9,4],[27205,1508,13,1509,9,8,9,4],[27462,1519,-162,1541,9,9,10,4],[26028,953,50,607,9,8,9,3],[27973,205,-166,90,11,11,12,5],[27211,287,25,776,11,11,11,3],[26693,300,-86,1177,12,11,12,7],[23456,244,1553,1791,12,12,12,6],[27461,163,0,675,12,11,12,6],[27205,265,0,1616,12,11,12,6],[27205,428,18,172,12,11,12,6],[26949,582,-21,1048,12,11,12,6],[23456,1349,1552,1726,12,12,12,5],[27717,613,-61,856,12,11,12,4],[26697,579,-202,273,12,12,12,3],[26696,770,-150,427,12,12,12,3],[26440,907,-59,1379,12,12,12,3],[26441,343,-3,949,12,12,12,3],[26438,1370,-164,1080,12,12,12,3],[25926,1069,2,981,13,12,13,4],[25925,1621,77,241,13,13,13,3],[25670,1192,175,1877,13,13,13,3],[25927,1429,167,523,13,13,13,3],[25928,375,163,102,13,13,13,3],[25419,1255,-3,290,14,14,16,5],[25931,318,0,557,14,14,16,4],[25418,922,0,936,14,14,16,4],[25676,1582,-69,695,14,14,16,4],[25676,707,-5,1254,14,14,16,4],[25675,91,0,822,14,14,16,4],[26443,1589,0,305,14,14,14,3],[25675,1333,-7,1777,14,14,16,3],[25932,1102,0,373,14,14,16,3],[25420,1631,-19,1425,14,14,16,3],[26183,232,-3,1369,15,15,15,8],[26184,65,17,423,15,15,15,6],[26183,1504,7,1246,15,15,15,6],[26184,1563,-4,1023,15,15,15,5],[26440,987,1,101,15,15,15,5],[26185,66,0,1821,15,15,15,4],[26439,883,-4,368,15,15,15,4],[26183,1030,2,434,15,15,15,4],[25419,546,0,970,16,14,16,5],[25157,1770,275,1052,17,17,19,7],[25669,1024,-13,287,17,17,17,3],[25416,1464,0,1262,17,17,17,3],[25415,752,172,607,17,17,17,3],[25158,734,222,1484,17,17,17,3],[25413,774,89,55,17,17,17,3],[25162,1425,-219,1185,18,18,20,5],[25163,1806,-240,502,18,18,20,3],[25673,1691,0,445,19,17,19,4],[24645,952,857,1341,19,19,19,3],[24646,1782,854,1866,19,19,19,3],[24647,659,850,503,19,19,19,3],[24389,1009,857,924,19,19,19,3],[25157,1211,473,93,19,19,19,3],[25160,1103,56,190,19,17,19,3],[25416,448,146,607,19,17,19,3],[25164,1020,-211,1549,20,18,20,6],[25421,146,-168,13,20,18,20,6],[24906,219,-217,441,20,18,20,4],[25161,1692,-147,259,20,18,20,4],[24904,1756,-198,616,20,18,20,4],[24905,843,-180,430,20,18,20,3],[27231,138,-4,1539,21,21,23,8],[27231,1042,46,1232,21,21,23,6],[26458,904,2,1285,21,21,21,3],[26459,266,55,1858,21,21,23,3],[26459,732,110,766,21,21,23,3],[26458,1812,4,367,21,21,23,3],[26201,562,-13,1543,21,21,23,3],[26202,926,4,524,21,21,23,3],[26201,991,-2,468,21,21,23,3],[27228,75,-18,1251,21,21,23,3],[26713,311,-9,1379,22,21,23,6],[25946,788,0,93,22,21,23,5],[26713,400,-7,415,22,21,23,5],[25691,319,3,527,22,22,23,5],[26460,6,24,1028,22,21,23,4],[26970,1414,-9,1630,22,21,23,4],[26458,16,0,1919,22,21,23,4],[25757,347,-11,768,22,21,22,3],[26970,95,-18,1217,22,21,23,3],[27228,1119,-8,1433,22,21,23,3],[27229,787,-13,1411,22,21,23,3],[27230,285,0,1035,22,22,23,3],[27228,1851,0,726,22,22,23,3],[27229,787,0,69,22,22,23,3],[26972,363,7,1811,22,22,23,3],[26971,864,5,1322,22,22,23,3],[26971,1163,0,122,22,22,23,3],[26714,1362,-4,1420,22,22,23,3],[26970,932,2,822,22,22,23,3],[26715,333,4,1185,22,22,23,3],[25691,1321,0,349,22,22,23,3],[25690,1553,0,1357,22,22,23,3],[25946,1872,1,352,22,21,23,3],[25434,362,123,1912,22,22,23,3],[25689,1477,-18,483,23,22,23,5],[25435,598,0,851,23,22,23,5],[25946,1616,0,1729,23,21,23,5],[25689,1659,1,1488,23,21,23,4],[25434,1385,-3,745,23,22,23,4],[25947,959,6,529,23,22,23,4],[25689,276,-22,1134,23,21,23,3],[25433,1511,-26,1370,23,22,23,3],[25180,710,-11,1454,23,22,23,3],[25435,1495,-6,948,23,22,23,3],[26204,1256,181,921,24,24,26,6],[26719,1422,312,771,24,24,26,5],[25948,958,153,1612,24,24,26,5],[26209,125,307,940,24,24,26,5],[26718,1827,199,1259,24,24,26,4],[26461,1460,180,237,24,24,26,4],[26208,746,571,958,24,24,26,4],[26781,953,97,1341,24,23,26,3],[26973,1854,142,1111,24,24,26,3],[27230,1859,178,39,24,24,26,3],[26977,287,180,1014,24,24,26,3],[25948,1332,164,433,24,24,26,3],[26205,314,155,116,24,24,26,3],[26461,673,205,897,24,24,26,3],[26204,1655,168,1750,24,24,26,3],[26207,60,211,763,24,24,26,3],[25950,1180,125,932,24,24,26,3],[26206,904,181,664,24,24,26,3],[25949,95,173,1078,24,24,26,3],[26460,1440,174,1247,24,24,26,3],[26206,315,233,1452,24,24,26,3],[25692,712,140,1592,24,24,26,3],[25949,924,162,424,24,24,26,3],[25693,655,176,237,24,24,26,3],[25693,1538,180,503,24,24,26,3],[25696,1546,180,760,24,24,26,3],[26207,1072,464,812,24,24,26,3],[24926,750,-39,1792,24,24,26,3],[25949,1185,177,1390,24,24,26,3],[25699,6,180,1331,25,25,27,7],[25184,94,-173,1536,25,24,27,7],[25183,602,-169,1481,25,24,27,7],[25184,936,-175,886,25,24,27,7],[25183,30,-160,52,25,24,27,7],[25698,1047,180,1051,25,25,27,6],[26979,1019,267,1367,25,25,27,5],[26979,126,249,1191,25,25,27,5],[26979,1758,250,590,25,25,27,5],[24928,43,-147,1628,25,24,27,5],[25182,1268,8,1405,25,24,27,5],[25184,1870,-176,802,25,25,27,5],[26721,1619,180,398,25,25,27,4],[25185,1023,34,944,25,25,27,4],[27040,869,-22,804,25,25,26,3],[27233,1058,192,1305,25,25,27,3],[26978,741,180,537,25,25,27,3],[26722,580,180,1131,25,25,27,3],[26466,943,190,1331,25,25,27,3],[26465,1408,180,218,25,25,27,3],[25698,74,180,1903,25,25,27,3],[25697,1719,179,521,25,25,27,3],[25183,1183,-174,562,25,24,26,3],[26464,288,364,1747,26,24,26,5],[26463,781,293,396,26,24,26,5],[26462,1116,222,1512,26,24,26,4],[26464,1359,414,1375,26,24,26,4],[26462,1663,180,774,26,24,26,4],[26205,801,177,873,26,24,26,4],[26461,1800,194,1809,26,24,26,4],[25694,1663,182,726,26,24,26,3],[25438,396,20,217,26,24,26,3],[25702,1314,180,873,27,27,28,7],[25187,1206,180,407,27,27,28,7],[25701,1571,186,1536,27,27,28,5],[25445,1172,209,1086,27,27,28,5],[25189,1073,180,579,27,27,28,5],[25954,1718,180,1021,27,25,27,5],[25187,1841,180,1540,27,27,28,5],[25955,751,180,440,27,25,29,4],[25701,1792,180,187,27,27,28,4],[25190,262,186,79,27,27,28,4],[24933,1359,203,1556,27,27,28,4],[25959,7,225,1411,27,27,28,3],[25958,583,180,28,27,27,28,3],[25446,142,183,636,27,27,28,3],[25189,733,180,1842,27,27,28,3],[24934,417,378,1022,27,27,28,3],[25190,7,180,1628,27,27,28,3],[26723,1614,303,120,27,25,27,3],[25954,864,180,1749,27,25,27,3],[25443,1304,180,795,27,27,28,3],[25444,734,180,407,27,27,28,3],[25444,1078,164,1540,27,27,28,3],[25700,709,216,805,27,27,28,3],[25188,352,296,139,27,27,28,3],[25701,425,191,569,27,27,28,3],[25446,745,180,1691,27,27,28,3],[25186,1717,180,1497,28,27,28,7],[25703,704,180,1441,28,27,28,4],[25443,199,199,434,28,27,28,4],[25188,1217,162,513,28,27,28,4],[25752,444,0,263,28,27,30,3],[25754,751,3,595,28,27,30,3],[24985,29,18,1836,28,27,30,3],[25957,602,215,637,28,27,29,3],[24678,1459,435,781,28,28,28,3],[24932,630,180,780,28,27,28,3],[27236,987,197,872,29,29,30,5],[27236,1846,218,36,29,29,30,5],[26214,1405,238,803,29,29,30,4],[25958,175,180,1117,29,29,30,4],[26980,1578,216,887,29,29,30,4],[26726,1820,180,1166,29,29,30,3],[26726,190,184,1203,29,29,30,3],[26725,989,257,1067,29,29,30,3],[26213,1319,180,908,29,29,30,3],[25957,641,255,1551,29,29,30,3],[26983,1491,180,307,29,29,30,3],[27238,514,219,1537,30,29,30,7],[26981,1240,212,588,30,29,30,6],[26982,1505,180,1025,30,29,30,6],[26983,619,180,771,30,29,30,6],[26981,1600,221,1872,30,29,30,5],[27237,140,296,1890,30,29,30,5],[26982,398,187,664,30,29,30,5],[26726,1699,180,202,30,29,30,4],[26727,857,180,26,30,29,30,4],[27237,1362,219,1224,30,29,30,4],[24983,1918,0,1835,30,28,30,3],[27753,411,206,468,31,31,32,9],[27241,1125,310,1493,31,31,32,7],[27501,1359,182,89,31,31,32,6],[27755,1593,209,1419,31,31,32,5],[26988,275,235,549,31,31,32,4],[27753,1655,251,41,31,31,32,3],[26988,1558,202,787,31,31,32,3],[26732,813,289,1690,31,31,32,3],[26986,322,226,241,31,31,32,3],[27245,1685,180,843,31,31,32,3],[27497,1025,255,714,32,31,32,7],[27241,29,367,1001,32,31,32,6],[26985,307,288,1838,32,31,32,6],[26985,1197,187,745,32,31,32,6],[26985,145,260,617,32,31,32,6],[26730,1838,149,1597,32,31,32,6],[26730,699,260,1235,32,31,32,6],[26729,1090,260,1467,32,31,32,6],[27242,584,151,1292,32,31,32,4],[27497,515,266,1473,32,31,32,4],[26985,1840,202,1755,32,31,32,4],[27756,982,181,1496,32,31,32,4],[27501,1313,206,1757,32,31,32,4],[26731,1882,201,584,32,31,32,4],[27755,731,192,647,32,31,32,4],[25961,1548,253,1625,33,33,34,12],[26473,1207,255,977,33,33,34,11],[25962,589,236,1752,33,33,34,10],[26475,884,308,825,33,33,34,9],[25961,433,187,1710,33,33,34,9],[24470,497,22,697,33,32,34,8],[24215,1361,9,291,33,33,34,8],[26217,334,231,962,33,33,34,8],[26218,1664,373,1519,33,33,34,8],[26474,706,305,1051,33,33,34,8],[24470,1170,0,1888,33,32,34,7],[26476,1232,281,911,33,33,35,7],[26218,390,185,1917,33,33,34,7],[26474,1560,373,625,33,33,34,7],[26729,1520,235,80,33,33,34,6],[26475,1218,221,1873,33,33,34,6],[24215,377,1,575,33,32,34,5],[24727,183,30,640,33,33,34,4],[24471,995,0,854,33,33,34,3],[26730,889,221,33,33,33,34,3],[26475,16,330,1590,34,33,34,12],[26219,925,224,1293,34,33,34,11],[24471,1862,5,515,34,32,34,9],[26473,183,196,858,34,33,34,9],[26729,174,198,280,34,33,34,9],[24214,634,16,1705,34,32,34,8],[24215,1585,0,1311,34,33,34,8],[23960,465,7,1496,34,32,34,8],[26219,1859,151,573,34,33,34,8],[26218,1267,221,426,34,33,34,7],[24471,851,28,1798,34,32,34,6],[26217,1315,187,1590,34,33,34,6],[24470,1882,0,1076,34,32,34,5],[24216,645,39,1527,34,33,34,5],[26217,1877,274,699,34,33,34,5],[26219,1863,69,1618,34,33,34,5],[24216,1129,33,214,34,33,34,4],[24726,350,17,494,34,32,34,3],[24214,1210,0,926,34,33,34,3],[27247,1730,141,820,35,35,36,9],[26991,1225,143,1527,35,35,36,8],[27502,1543,147,1274,35,35,36,7],[26221,316,241,1348,35,35,36,7],[27757,497,180,695,35,35,36,7],[27503,1613,140,378,35,35,36,6],[27502,635,147,577,35,35,36,6],[27503,551,147,562,35,35,36,5],[26986,992,175,1404,35,35,35,5],[26989,420,180,1248,35,35,36,5],[27754,111,303,869,35,35,36,5],[26731,1044,236,1342,35,35,36,5],[26735,959,174,197,35,35,36,5],[26991,1737,149,584,35,35,36,5],[26479,413,230,1108,35,35,36,5],[27246,733,206,607,35,35,36,5],[26478,430,182,605,35,35,36,5],[27503,1838,148,1484,35,35,36,5],[27759,684,180,132,35,35,36,5],[27754,1494,317,905,35,35,36,4],[27498,854,238,1607,35,35,35,4],[26734,1629,219,553,35,35,36,4],[26220,814,113,789,35,35,36,4],[24978,686,779,128,35,35,36,3],[26990,446,249,462,35,35,36,3],[26478,841,226,1678,36,35,36,11],[26735,806,270,1893,36,35,36,10],[26732,1845,293,101,36,35,36,8],[27246,1811,180,1119,36,35,36,8],[27248,717,141,919,36,35,36,7],[26479,1302,242,507,36,35,36,7],[26222,1282,241,1201,36,35,36,7],[26734,584,194,1162,36,35,36,7],[27252,1670,185,756,36,36,37,7],[26480,487,199,1612,36,35,37,7],[26733,459,298,872,36,35,36,6],[27248,400,145,61,36,35,36,6],[26735,1810,215,512,36,35,36,6],[26733,1033,287,165,36,35,36,6],[26223,371,194,1527,36,35,36,6],[27250,888,180,731,36,36,37,6],[26736,989,180,703,36,36,37,6],[26990,1684,302,1287,36,35,36,5],[26477,825,208,1126,36,35,36,5],[27504,1087,182,1724,36,35,36,5],[26989,320,194,25,36,35,36,5],[26221,1575,244,1075,36,35,36,5],[26993,459,215,1224,36,36,37,5],[27509,190,218,637,36,36,37,5],[27508,1059,233,1047,36,36,37,5],[27507,1139,242,1348,36,36,37,5],[26989,1267,196,806,36,35,36,4],[26990,1688,268,128,36,35,36,4],[27246,934,187,1634,36,35,36,4],[26989,1856,189,1776,36,35,36,4],[27247,934,181,1567,36,35,36,4],[27248,1826,205,584,36,36,37,4],[26480,1785,211,1849,36,36,37,4],[27251,921,180,562,36,36,37,4],[27251,1827,188,609,36,36,37,4],[27509,729,192,1878,36,36,37,4],[27506,1082,219,1770,36,36,37,4],[27505,1213,241,438,36,36,37,4],[24208,150,1108,972,36,35,36,3],[24463,761,1102,883,36,35,36,3],[27504,1307,173,326,36,35,36,3],[27249,1860,180,157,36,36,37,3],[26225,294,183,1665,36,36,37,3],[27509,1270,242,784,36,36,37,3],[27764,1601,180,99,36,36,37,3],[27505,303,214,463,36,36,37,3],[26997,143,242,1410,37,37,38,7],[27249,1045,180,573,37,36,37,6],[27251,106,180,1486,37,36,37,6],[26226,1012,178,1637,37,36,37,6],[26227,417,188,1183,37,36,37,6],[26993,1239,241,484,37,36,38,5],[27510,97,232,1572,37,36,37,5],[27506,257,217,744,37,36,37,5],[26992,1013,222,882,37,36,37,4],[27252,790,183,1313,37,36,37,4],[26993,389,218,153,37,36,37,4],[26480,1456,199,785,37,36,37,4],[27764,286,180,10,37,36,37,4],[27507,340,199,1840,37,36,37,4],[27253,983,189,1801,37,36,37,4],[27508,86,242,571,37,36,37,4],[27507,440,224,718,37,36,37,4],[27761,1274,189,235,37,36,37,4],[26225,166,238,730,37,36,37,4],[26225,1635,236,1764,37,36,37,4],[27507,1132,183,31,37,36,37,3],[26737,32,200,849,37,36,37,3],[27250,278,172,1404,37,36,37,3],[27506,1168,241,808,37,36,37,3],[26224,1119,159,1402,37,36,37,3],[26225,1576,267,555,37,36,37,3],[26226,1523,184,181,37,36,37,3],[26995,1106,263,1171,38,37,38,8],[26995,622,261,160,38,37,38,8],[26996,1385,248,726,38,37,38,7],[26996,196,258,392,38,37,38,7],[26740,903,214,1367,38,37,38,7],[26483,1411,200,1077,38,37,38,7],[26740,824,188,430,38,37,38,6],[26739,1690,248,402,38,37,38,6],[26994,548,269,1177,38,37,38,6],[26738,955,234,164,38,37,38,6],[26738,899,195,1184,38,37,38,5],[23699,1120,699,46,38,36,38,4],[26484,530,224,1293,38,37,38,4],[26739,679,257,28,38,37,38,4],[26994,1607,257,619,38,37,38,4],[26738,1792,240,565,38,37,38,4],[26482,1822,196,826,38,37,38,4],[26481,1638,273,1257,38,37,38,4],[26737,1191,220,518,38,37,38,4],[24212,1537,1097,1547,38,37,38,3],[26739,918,247,1042,38,37,38,3],[26484,1295,193,393,38,37,40,3],[26742,1433,192,1294,39,39,40,5],[26998,1436,374,560,39,39,40,5],[26999,812,478,919,39,39,40,5],[26488,743,182,1722,39,39,40,4],[27000,382,568,653,39,39,40,4],[26741,975,241,1845,39,39,40,4],[27510,871,242,13,39,39,40,3],[27256,843,780,1502,39,39,40,3],[26487,1768,167,1428,39,39,40,3],[26997,1602,198,1083,39,39,40,3],[26229,505,188,288,39,39,40,3],[26231,568,201,1146,39,39,40,3],[26486,682,180,655,39,39,40,3],[27255,1069,558,301,39,39,40,3],[26744,462,448,1342,40,39,40,6],[27255,1360,685,1163,40,39,40,5],[27254,1914,625,1558,40,39,40,4],[27254,967,557,766,40,39,40,4],[27256,310,604,233,40,39,40,4],[26999,200,527,1691,40,39,40,4],[26486,1850,220,1097,40,39,40,4],[26485,1481,180,719,40,39,40,4],[26230,207,203,1637,40,39,40,4],[26743,1471,302,890,40,39,40,4],[26485,1411,186,1797,40,39,40,4],[26230,986,194,868,40,39,40,4],[26998,693,422,1533,40,39,40,3],[26488,368,180,391,40,39,40,3],[26231,1663,184,1363,40,39,40,3],[26743,521,375,1709,40,39,40,3],[26486,557,180,1844,40,39,40,3],[26743,364,189,8,40,39,40,3],[26487,983,183,789,40,39,40,3],[26229,864,181,1263,40,39,40,3],[26229,1633,197,228,40,39,40,3],[26230,1807,180,1919,40,39,40,3],[23439,1330,12,210,43,43,43,3],[24712,1203,3,977,46,46,46,8],[23429,1567,272,1130,46,46,46,8],[24710,1783,21,1412,46,46,48,8],[24457,382,-82,395,46,45,46,7],[23941,1587,-54,1150,46,46,46,6],[24456,1793,-173,1546,46,46,48,6],[23690,567,40,1504,46,46,46,6],[24197,1618,-77,1054,46,46,46,6],[24712,546,8,1610,46,46,48,6],[24201,832,21,86,46,46,48,6],[23689,1398,37,155,46,46,48,6],[24201,550,2,1216,46,45,46,5],[23945,1788,29,787,46,46,48,5],[23689,1601,39,1777,46,46,48,5],[23434,103,48,842,46,46,48,4],[24711,890,76,1766,46,46,47,4],[23685,1315,142,569,46,46,46,4],[24453,1370,-87,189,46,46,46,4],[24710,669,14,905,46,46,48,4],[24709,1604,14,1010,46,46,48,3],[23685,1485,41,1895,46,46,46,3],[24713,645,-28,217,46,46,48,3],[23945,913,42,461,46,46,46,3],[23690,806,27,432,46,46,46,3],[22915,638,1429,334,51,51,52,10],[22146,1526,1404,1151,51,51,52,7],[23426,53,950,1469,51,51,52,6],[22402,1174,1402,73,51,51,52,5],[21889,312,1284,1632,51,51,52,5],[22402,1117,1405,1408,51,51,52,5],[22403,927,1490,506,51,51,52,4],[22403,66,1449,1125,51,51,52,3],[23169,1837,1230,1155,52,51,52,9],[22146,918,1341,327,52,51,52,8],[22914,725,1407,1625,52,51,52,8],[22658,1743,1458,1116,52,51,52,8],[22402,34,1410,764,52,51,52,7],[21889,1460,1354,1027,52,51,52,7],[22914,1322,1466,109,52,51,52,7],[22147,829,1446,562,52,51,52,7],[23425,1667,1082,301,52,51,52,6],[22145,1871,1326,454,52,51,52,6],[21891,3,1419,1457,52,51,52,6],[22147,598,1479,1465,52,51,52,4],[21890,881,1469,873,52,51,52,4],[22145,1251,1334,1364,52,51,52,3],[23169,551,479,103,54,54,54,3],[23680,870,353,577,54,54,54,3],[23425,637,536,1513,54,54,54,3],[22655,907,548,1335,55,55,55,3],[22911,11,579,305,55,55,55,3],[23165,141,410,1095,55,55,57,3],[22655,1409,546,122,56,55,56,4],[23422,1414,323,1554,57,55,57,3],[23679,1440,542,910,57,57,57,3],[23422,672,420,633,57,57,57,3],[25731,1522,-55,567,61,61,63,7],[25986,895,-141,805,61,61,63,4],[25990,1730,2,245,61,61,63,3],[25731,522,-36,199,61,61,63,3],[25732,825,-198,1132,61,61,63,3],[25731,1878,-198,1533,61,61,63,3],[25478,1110,-4,1637,63,61,63,4],[25735,169,-97,419,63,61,63,4],[25474,921,-54,1007,63,61,63,4],[25985,1400,-26,97,63,61,63,4],[26502,694,-514,205,65,65,67,3],[25726,915,-498,989,67,65,67,4],[25728,1245,-462,1216,67,65,67,4],[25990,1880,-483,1485,67,65,67,4],[26246,175,-540,73,67,65,67,4],[26250,399,33,1708,70,68,70,4],[25738,191,-48,1505,70,68,70,4],[25992,1500,6,1616,70,68,70,4],[26760,1905,-59,425,71,71,71,4],[26759,1284,-35,1885,71,71,73,3],[26760,273,-95,322,71,71,71,3],[26758,1752,-74,299,71,71,73,3],[26761,133,-100,1363,71,71,71,3],[22891,47,2096,1607,72,70,73,4],[24691,1311,2251,1677,72,72,72,3],[24947,637,2331,1353,72,72,72,3],[24946,1306,2304,1151,72,72,72,3],[21620,1497,2092,574,72,72,72,3],[23146,1624,2092,525,72,70,73,3],[22890,849,2026,1667,72,70,73,3],[26244,1647,-168,652,73,71,73,6],[27013,1280,-131,335,73,71,73,4],[26498,1809,-110,1004,74,74,76,3],[27010,693,202,163,76,74,76,6],[25983,1683,-5,420,77,77,77,5],[25983,1191,115,1685,77,77,78,3],[22379,171,4013,1762,78,78,80,6],[26238,331,233,858,78,77,78,5],[22378,1128,4006,1431,78,78,80,5],[21868,343,2969,1802,78,78,80,5],[26497,874,102,1439,78,77,78,4],[26238,1900,163,299,78,78,78,4],[26240,923,146,1367,78,77,78,4],[26496,1829,124,715,78,77,78,4],[22124,1071,2844,464,78,78,80,4],[24436,1827,4574,744,78,78,80,3],[24435,1255,3974,995,78,78,80,3],[22124,1210,2880,1511,78,78,80,3],[22897,842,3240,1039,78,78,80,3],[26495,1847,217,1864,79,79,80,3],[26495,730,168,456,80,79,80,6],[26752,1365,180,1014,80,79,80,6],[22123,1660,4820,1865,80,78,80,5],[24180,477,5347,1349,80,78,80,4],[24180,1468,5018,1299,80,78,80,4],[24179,704,3798,1138,80,78,80,4],[23924,478,3527,1646,80,78,80,4],[22379,191,5673,115,80,78,80,4],[22123,959,5144,1184,80,78,80,4],[22379,1347,4398,1271,80,78,80,4],[22122,621,3886,1732,80,78,80,4],[22122,953,3693,623,80,78,80,4],[21867,224,3436,1712,80,78,80,4],[21867,1195,3369,1547,80,78,80,4],[22640,202,3519,667,80,78,80,4],[22897,181,3494,349,80,78,80,4],[26496,864,232,1781,80,79,80,3],[24436,633,4148,1600,80,78,80,3],[24179,1428,3565,144,80,78,80,3],[22894,1707,3632,801,80,78,80,3],[22637,912,3297,658,80,78,80,3],[24172,1145,2689,985,82,82,82,3],[23915,1078,3373,1326,82,82,83,3],[22389,125,4228,612,85,85,87,4],[22644,1285,2876,736,85,85,87,3],[22388,450,3365,1783,85,85,87,3],[22132,404,5385,1622,87,85,87,5],[24171,331,5345,1479,87,85,87,5],[24428,46,4687,125,87,85,87,5],[22132,1701,4812,1602,87,85,87,4],[22388,1422,3616,1631,87,85,87,4],[22387,1350,3897,1179,87,85,87,4],[24171,1414,5005,1256,87,85,87,4],[24427,1589,4495,1089,87,85,87,4],[24427,730,4219,1576,87,85,87,4],[24426,1517,4015,1248,87,85,87,4]];
+const LEVEL_SPOTS = [[24486,582,161,1234,1,1,2,7],[27727,396,18,1137,1,1,1,7],[27212,769,0,244,1,1,2,7],[27982,498,29,440,1,1,3,7],[24744,1297,-28,208,1,1,1,6],[27725,174,0,1414,1,1,2,5],[27984,413,252,245,1,1,2,5],[24486,665,340,76,1,1,2,5],[24488,241,-37,1607,1,1,1,5],[24489,1101,-20,863,1,1,2,5],[24742,672,120,1809,1,1,2,5],[26956,471,-1,1262,1,1,2,5],[27468,1115,0,1196,1,1,2,5],[27727,1719,5,759,1,1,1,4],[27211,1876,-3,816,1,1,2,4],[27724,1105,10,391,1,1,2,4],[27980,1254,50,385,1,1,2,4],[27981,337,27,565,1,1,2,4],[27725,1224,0,1728,1,1,2,4],[27726,588,0,1000,1,1,2,4],[27982,1437,103,44,1,1,2,4],[27983,917,83,395,1,1,2,4],[25258,1039,61,412,1,1,3,4],[24998,879,147,808,1,1,1,4],[25254,647,111,426,1,1,1,4],[24742,78,183,1066,1,1,2,4],[27212,1245,9,1433,1,1,2,3],[27468,390,-2,104,1,1,1,3],[27468,163,0,1476,1,1,2,3],[27725,1105,1,592,1,1,2,3],[24485,1037,363,753,1,1,1,3],[24742,1501,115,769,1,1,1,3],[26956,1214,0,493,1,1,1,3],[25002,1452,20,1486,1,1,1,2],[25254,566,101,1466,1,1,1,2],[24490,756,55,1511,2,1,3,6],[26955,1411,33,1784,2,1,4,6],[24491,66,53,1732,2,1,4,5],[24231,1250,130,733,2,1,4,5],[23976,1869,94,520,2,2,4,5],[24745,1875,39,551,2,1,3,4],[24486,1756,43,1401,2,1,2,4],[24746,999,84,467,2,1,2,4],[24487,330,-24,8,2,1,2,3],[24746,694,57,1539,2,1,4,3],[24231,288,103,922,2,1,2,3],[23721,423,70,785,2,2,3,3],[24489,23,-29,372,2,1,2,3],[23977,1175,29,339,2,2,3,3],[24488,82,-37,327,2,1,2,3],[27210,600,-170,494,3,3,4,13],[27981,1231,11,1122,3,1,4,11],[28237,743,138,131,3,3,4,11],[26699,1463,-146,1749,3,3,4,11],[27723,1734,4,1677,3,1,4,10],[27723,344,-117,126,3,3,4,10],[27984,1686,442,711,3,1,4,9],[27984,31,206,1582,3,1,4,9],[28239,463,176,52,3,3,4,9],[28236,748,8,33,3,3,4,9],[27978,1828,-80,871,3,3,4,9],[27979,205,-20,1798,3,3,4,7],[26954,365,-186,223,3,3,4,7],[24232,1321,56,945,3,2,3,5],[23719,419,79,1686,3,2,4,5],[24490,1573,23,870,3,1,4,5],[23720,999,141,893,3,2,4,4],[23719,818,182,669,3,2,4,4],[27467,625,-32,934,3,3,3,4],[28236,1675,80,83,3,3,4,3],[23717,1349,465,1877,3,2,3,3],[24232,121,163,197,3,3,4,3],[23974,778,452,969,3,2,3,3],[23975,1478,210,406,3,2,4,3],[23976,1328,65,1477,3,3,4,3],[27722,1141,-174,979,3,3,4,3],[24234,627,21,850,3,2,3,2],[27723,634,-7,1609,4,3,4,12],[26955,290,-140,148,4,3,4,12],[27210,1489,-94,1590,4,3,4,10],[27979,1277,6,536,4,3,4,8],[27466,943,-171,472,4,3,4,8],[23974,1377,288,168,4,2,4,6],[27984,1255,251,1676,4,3,4,6],[23718,543,211,826,4,3,4,5],[25261,824,279,616,4,3,5,5],[25260,869,209,1300,4,4,5,5],[25005,461,292,354,4,4,5,5],[26700,405,-78,1210,4,3,4,4],[26698,1355,-143,1749,4,3,4,4],[26954,863,-166,1032,4,3,4,4],[27210,1494,22,175,4,3,4,4],[25260,1775,279,841,4,3,4,4],[24748,415,240,367,4,3,5,4],[28238,1217,240,24,4,3,4,3],[27982,123,204,1626,4,3,4,3],[26955,1108,-120,727,4,3,4,3],[25003,240,25,292,4,3,4,3],[25003,1656,84,1668,4,4,4,3],[25517,415,101,434,4,4,5,3],[25005,1344,358,1523,4,4,4,3],[24747,750,99,935,4,3,5,3],[25005,57,263,1776,4,3,5,3],[28234,1145,-133,190,4,3,4,2],[25004,1347,237,199,5,3,5,6],[24749,899,331,123,5,3,5,6],[28233,190,0,104,5,5,7,5],[27977,1191,-108,289,5,5,7,5],[27721,915,-121,461,5,5,7,5],[27208,1858,-156,462,5,5,7,5],[27208,1126,-173,1267,5,5,7,5],[25516,1193,60,488,5,4,5,4],[24491,1287,138,1836,5,3,5,4],[24492,1003,209,1273,5,4,5,4],[24747,1710,51,1919,5,3,5,4],[27464,1571,-194,908,5,5,7,3],[25258,616,25,1542,5,3,5,3],[24493,145,232,1290,5,4,5,3],[24749,1315,316,1576,5,4,5,2],[28231,807,-71,3,6,6,7,7],[28230,1748,-68,137,6,6,7,6],[25768,690,64,327,6,6,7,6],[28232,1144,45,17,6,5,7,5],[28230,693,-134,213,6,6,7,5],[27976,90,-114,185,6,6,7,5],[26951,435,-7,1184,6,6,8,5],[27973,1773,-184,1777,6,6,7,5],[25510,135,87,1804,6,6,7,5],[25511,889,57,1761,6,6,7,5],[26695,113,-145,1277,6,6,7,4],[27208,115,-160,738,6,6,7,4],[26952,26,-84,970,6,6,7,4],[25512,61,38,1582,6,6,7,4],[27974,1641,-186,936,6,6,7,4],[25514,524,30,1082,6,5,7,3],[25513,154,71,1694,7,5,7,8],[25510,818,61,957,7,5,7,7],[26952,1652,-110,688,7,5,7,6],[25769,493,71,985,7,6,7,6],[27720,1557,-164,138,7,5,7,5],[27207,1690,-177,1607,7,6,7,5],[25766,1765,53,57,7,6,7,5],[27465,610,-161,1172,7,5,7,4],[27977,66,5,886,7,5,7,4],[27720,177,-136,1029,7,6,7,4],[27975,1022,-159,419,7,6,7,4],[26950,1833,-5,394,7,6,8,4],[25766,1163,46,1033,7,6,7,4],[25768,161,58,1197,7,6,7,4],[25767,1288,58,658,7,6,7,4],[25513,1366,71,1843,7,5,7,4],[27721,140,-1,1865,7,5,7,3],[28231,1768,2,245,7,6,7,3],[26951,950,-138,313,7,6,7,3],[27207,1014,-91,835,7,6,8,3],[25769,1591,78,1315,7,7,7,3],[25773,1624,423,1430,8,8,9,7],[27206,1525,44,749,8,8,9,7],[25772,547,85,984,8,8,9,7],[25773,1498,419,276,8,8,9,6],[27463,610,-154,609,8,7,9,6],[26029,1447,352,833,8,8,9,5],[25771,1121,240,997,8,8,9,5],[26693,1626,-188,236,8,8,9,5],[26949,1851,-2,948,8,8,9,5],[27207,212,-96,1471,8,8,9,5],[26027,1213,304,281,8,8,9,4],[27461,1488,-5,674,8,8,9,4],[25773,622,236,1394,8,8,9,3],[25515,1168,240,1815,8,8,8,3],[26028,1804,137,74,8,8,9,3],[25771,185,433,354,8,8,9,3],[25772,1822,137,249,8,8,9,3],[27205,1528,9,379,8,8,9,3],[27463,671,-165,1564,8,8,9,3],[27718,1261,-170,651,9,9,10,10],[27462,1169,-159,684,9,9,10,8],[26694,134,-53,1152,9,8,9,6],[26950,742,1,372,9,8,9,6],[27206,594,20,31,9,8,9,6],[23724,320,299,1866,9,8,9,6],[27206,567,-11,981,9,8,9,5],[27717,1915,-162,395,9,8,10,5],[23722,1291,89,1824,9,8,9,5],[23980,230,195,1904,9,8,9,5],[23981,1149,501,1230,9,8,9,5],[24237,1398,354,293,9,8,9,5],[27719,480,-184,597,9,8,9,5],[25771,65,434,1531,9,8,9,4],[26027,334,434,773,9,8,9,4],[27718,572,-168,1297,9,8,9,4],[27205,1508,13,1509,9,8,9,4],[27462,1519,-162,1541,9,9,10,4],[23723,1751,360,589,9,8,9,4],[23724,1683,643,841,9,8,9,4],[23980,1908,368,1108,9,8,9,4],[24236,984,216,1083,9,8,9,4],[24237,1270,330,1790,9,8,9,4],[23980,1480,367,227,9,8,9,4],[26028,953,50,607,9,8,9,3],[23722,1014,58,805,9,8,9,3],[23979,504,199,1241,9,9,9,3],[23723,25,208,396,9,9,9,2],[23725,1120,750,1541,9,9,9,2],[24235,1434,143,761,9,8,9,2],[26284,982,13,587,9,9,9,2],[25251,1374,706,306,10,10,10,6],[24996,704,653,1475,10,10,10,4],[24740,192,739,1672,10,10,10,4],[24740,596,687,511,10,10,10,4],[24997,357,229,1639,10,10,10,4],[24227,1536,966,1849,10,10,10,4],[23973,309,340,1808,10,10,12,4],[25253,511,160,1342,10,10,10,3],[24995,697,829,1161,10,10,10,3],[24484,998,371,1134,10,10,10,3],[23972,832,539,802,10,10,10,3],[25508,322,383,340,10,10,10,3],[23716,1478,509,1241,10,10,11,3],[24484,119,667,846,10,10,10,3],[25508,1905,164,418,10,10,10,2],[24994,1782,829,650,10,10,10,2],[27973,205,-166,90,11,11,12,5],[24739,755,748,1414,11,10,13,4],[27211,287,25,776,11,11,11,3],[23716,1079,549,172,11,11,12,3],[23460,981,609,563,11,11,12,3],[24223,77,834,1107,11,11,11,2],[27461,405,0,1838,12,11,12,10],[26693,300,-86,1177,12,11,12,7],[26438,369,-162,43,12,12,12,7],[25926,180,0,1760,12,12,13,7],[23456,244,1553,1791,12,12,12,6],[27461,163,0,675,12,11,12,6],[27205,265,0,1616,12,11,12,6],[27205,428,18,172,12,11,12,6],[26949,582,-21,1048,12,11,12,6],[26441,1222,0,342,12,12,12,6],[26439,581,-108,1548,12,12,12,6],[25929,1024,0,1895,12,12,12,6],[23456,1349,1552,1726,12,12,12,5],[26181,895,0,187,12,12,13,5],[27717,613,-61,856,12,11,12,4],[23459,1,1309,1761,12,11,12,4],[26182,436,0,1016,12,12,12,4],[26697,579,-202,273,12,12,12,3],[26696,770,-150,427,12,12,12,3],[26440,907,-59,1379,12,12,12,3],[26441,343,-3,949,12,12,12,3],[26438,1370,-164,1080,12,12,12,3],[23203,1125,935,1483,12,11,12,3],[23204,448,666,1564,12,11,12,3],[26181,337,-177,1546,12,12,12,3],[23201,1326,1337,869,12,11,12,2],[23458,1179,1376,307,12,12,12,2],[23714,297,1397,345,12,11,12,2],[25927,812,8,1292,13,12,15,10],[25928,62,9,1314,13,12,15,10],[25928,1136,0,1376,13,12,15,8],[25928,1417,0,27,13,12,13,6],[24226,1689,1038,184,13,13,15,5],[24482,688,1014,378,13,13,14,5],[24738,1573,697,1484,13,11,13,5],[24738,776,701,1041,13,11,14,5],[25925,326,98,1303,13,13,13,5],[25927,358,171,347,13,13,13,5],[25673,1156,0,1863,13,13,13,5],[25926,1069,2,981,13,12,13,4],[24227,69,1014,1617,13,13,13,4],[24483,5,1184,1045,13,13,14,4],[25673,410,0,1244,13,13,13,4],[25925,1621,77,241,13,13,13,3],[25670,1192,175,1877,13,13,13,3],[25927,1429,167,523,13,13,13,3],[25928,375,163,102,13,13,13,3],[25669,681,62,1788,13,13,13,3],[24738,1851,1270,282,13,13,13,2],[23715,221,1309,850,13,12,13,2],[25932,369,0,1777,14,14,16,8],[25930,1122,-16,85,14,14,16,8],[26442,1358,-137,1375,14,14,14,7],[26442,228,-50,901,14,12,14,7],[26443,1741,-69,1209,14,14,14,7],[25931,1566,0,1208,14,14,16,7],[25931,279,0,1893,14,14,14,7],[25674,1193,0,174,14,14,16,7],[26442,1094,-3,262,14,14,14,6],[26444,624,-60,639,14,14,14,6],[26186,1224,0,549,14,14,14,6],[26188,1292,-61,817,14,14,14,6],[25419,1255,-3,290,14,14,16,5],[23969,1512,1088,1587,14,14,14,5],[26443,249,-12,266,14,14,14,5],[26188,314,0,982,14,14,14,5],[25932,1264,0,1573,14,14,14,5],[25675,991,0,492,14,14,16,5],[25930,1048,0,1489,14,14,14,5],[25931,318,0,557,14,14,16,4],[25418,922,0,936,14,14,16,4],[25676,1582,-69,695,14,14,16,4],[25676,707,-5,1254,14,14,16,4],[25675,91,0,822,14,14,16,4],[23971,110,1211,82,14,13,16,4],[24737,1888,779,187,14,13,14,4],[24481,1328,779,908,14,13,14,4],[24992,870,248,289,14,14,16,4],[26443,919,-95,1717,14,14,16,4],[26442,541,-144,1785,14,12,14,4],[26187,599,0,1055,14,14,14,4],[26443,1589,0,305,14,14,14,3],[25675,1333,-7,1777,14,14,16,3],[25932,1102,0,373,14,14,16,3],[25420,1631,-19,1425,14,14,16,3],[23971,574,1055,1178,14,13,14,3],[24479,1321,846,260,14,13,14,3],[24224,1692,656,1089,14,14,14,3],[24226,285,1207,919,14,14,14,2],[23970,894,1277,102,14,14,14,2],[24736,266,651,639,14,13,14,2],[23969,315,923,1814,14,14,14,2],[26183,232,-3,1369,15,15,15,8],[26184,65,17,423,15,15,15,6],[26183,1504,7,1246,15,15,15,6],[26184,1563,-4,1023,15,15,15,5],[26440,987,1,101,15,15,15,5],[26185,66,0,1821,15,15,15,4],[26439,883,-4,368,15,15,15,4],[26183,1030,2,434,15,15,15,4],[23199,740,1242,701,15,15,16,4],[23196,1564,946,1338,15,15,16,4],[23198,252,901,1129,15,14,16,4],[23197,648,900,1357,16,15,18,6],[25419,546,0,970,16,14,16,5],[23454,530,989,123,16,14,18,5],[23713,173,1401,632,16,16,16,5],[25420,560,-8,452,16,14,18,5],[23709,70,761,718,16,15,17,4],[23453,758,704,779,16,14,18,4],[23457,521,1407,1577,16,16,16,3],[23964,1078,553,498,16,14,17,3],[23199,1865,1411,870,16,15,16,2],[23708,1190,776,1370,16,16,16,2],[23455,935,1403,1551,16,16,16,2],[23712,625,1414,1053,16,16,16,2],[25157,1770,275,1052,17,17,19,7],[25415,1845,0,1774,17,17,19,7],[25413,517,99,1432,17,17,17,7],[23966,1222,890,1485,17,16,18,6],[25414,583,0,1459,17,17,17,6],[25671,651,0,699,17,17,17,6],[25415,139,0,1479,17,17,17,6],[24221,173,355,726,17,16,18,5],[25672,865,0,496,17,17,17,5],[25414,1633,177,475,17,17,17,5],[23967,1719,1060,1565,17,17,18,4],[24477,1351,534,41,17,16,18,4],[25670,1423,0,355,17,17,17,4],[25669,1024,-13,287,17,17,17,3],[25416,1464,0,1262,17,17,17,3],[25415,752,172,607,17,17,17,3],[25158,734,222,1484,17,17,17,3],[25413,774,89,55,17,17,17,3],[23968,840,936,1604,17,17,18,3],[24222,711,695,895,17,17,18,3],[23709,740,658,1619,17,15,18,3],[23710,796,888,91,17,16,18,3],[25669,1896,-2,740,17,17,17,3],[25669,127,80,357,17,17,17,3],[24224,309,886,525,17,17,18,2],[25162,1425,-219,1185,18,18,20,5],[23965,791,634,1281,18,17,18,5],[24221,1729,564,926,18,16,18,5],[23966,506,826,199,18,16,18,5],[23452,1226,1065,1030,18,16,18,4],[25163,1806,-240,502,18,18,20,3],[24478,437,580,740,18,16,18,3],[24220,1334,316,28,18,16,18,3],[23453,1364,882,1539,18,16,18,2],[23200,1812,1448,921,18,16,18,2],[25417,744,0,366,19,17,19,14],[25417,1027,0,1683,19,17,19,12],[25161,444,0,1049,19,17,19,11],[25416,1467,0,165,19,17,19,10],[24901,184,471,1688,19,19,19,8],[24646,383,854,1712,19,19,19,7],[25160,750,165,1377,19,17,19,7],[24389,885,857,1816,19,19,19,6],[25159,761,470,109,19,19,19,6],[25159,1300,259,1596,19,17,19,6],[24903,269,854,752,19,19,19,5],[24391,729,849,1437,19,19,19,5],[25159,226,288,1239,19,17,19,5],[25673,1691,0,445,19,17,19,4],[24734,993,254,385,19,17,19,4],[24992,1580,199,1262,19,19,19,4],[25502,782,59,864,19,19,20,4],[24901,1707,854,559,19,19,19,4],[24647,854,854,1616,19,19,19,4],[24645,952,857,1341,19,19,19,3],[24646,1782,854,1866,19,19,19,3],[24647,659,850,503,19,19,19,3],[24389,1009,857,924,19,19,19,3],[25157,1211,473,93,19,19,19,3],[25160,1103,56,190,19,17,19,3],[25416,448,146,607,19,17,19,3],[25503,916,92,975,19,19,20,3],[24646,53,1130,615,19,19,19,2],[24906,456,-245,1343,20,18,20,12],[25162,630,-247,543,20,18,20,11],[25164,1020,-211,1549,20,18,20,6],[25421,146,-168,13,20,18,20,6],[24906,219,-217,441,20,18,20,4],[25161,1692,-147,259,20,18,20,4],[24904,1756,-198,616,20,18,20,4],[25503,1392,92,1796,20,19,20,4],[25244,914,74,1328,20,19,20,4],[25245,654,69,1462,20,19,20,4],[25501,998,52,583,20,19,20,4],[24905,843,-180,430,20,18,20,3],[25758,1036,69,26,20,19,22,3],[25760,1363,107,1184,20,19,20,3],[25759,1020,43,1657,20,20,22,3],[25757,1526,-16,906,20,19,22,3],[26017,748,84,14,20,20,20,2],[27231,138,-4,1539,21,21,23,8],[26201,1897,-2,569,21,21,23,7],[26203,125,2,1230,21,21,23,7],[27231,1042,46,1232,21,21,23,6],[26014,275,60,19,21,19,22,6],[25757,785,-25,1598,21,20,22,6],[25758,919,22,1156,21,19,22,5],[26969,1071,-26,90,21,21,23,5],[26017,469,26,1702,21,20,22,4],[26272,1152,-23,558,21,20,22,4],[26273,816,-35,1707,21,20,22,4],[26458,904,2,1285,21,21,21,3],[26459,266,55,1858,21,21,23,3],[26459,732,110,766,21,21,23,3],[26458,1812,4,367,21,21,23,3],[26201,562,-13,1543,21,21,23,3],[26202,926,4,524,21,21,23,3],[26201,991,-2,468,21,21,23,3],[27228,75,-18,1251,21,21,23,3],[26013,242,-66,782,21,20,22,3],[26016,424,46,1468,21,20,22,3],[26458,694,0,404,21,21,21,3],[26203,1284,14,1772,22,21,23,10],[26203,1139,3,490,22,21,23,10],[26714,433,-1,827,22,21,23,8],[26713,311,-9,1379,22,21,23,6],[26528,386,-57,376,22,21,23,6],[26970,322,-10,144,22,21,23,6],[25946,788,0,93,22,21,23,5],[26713,400,-7,415,22,21,23,5],[25691,319,3,527,22,22,23,5],[26529,764,-35,738,22,21,22,5],[26460,6,24,1028,22,21,23,4],[26970,1414,-9,1630,22,21,23,4],[26458,16,0,1919,22,21,23,4],[26015,1161,58,1018,22,20,23,4],[26528,1573,-43,1202,22,21,22,4],[25757,347,-11,768,22,21,22,3],[26970,95,-18,1217,22,21,23,3],[27228,1119,-8,1433,22,21,23,3],[27229,787,-13,1411,22,21,23,3],[27230,285,0,1035,22,22,23,3],[27228,1851,0,726,22,22,23,3],[27229,787,0,69,22,22,23,3],[26972,363,7,1811,22,22,23,3],[26971,864,5,1322,22,22,23,3],[26971,1163,0,122,22,22,23,3],[26714,1362,-4,1420,22,22,23,3],[26970,932,2,822,22,22,23,3],[26715,333,4,1185,22,22,23,3],[25691,1321,0,349,22,22,23,3],[25690,1553,0,1357,22,22,23,3],[25946,1872,1,352,22,21,23,3],[25434,362,123,1912,22,22,23,3],[26013,1631,30,1288,22,22,24,3],[26271,480,19,399,23,21,24,6],[25689,1477,-18,483,23,22,23,5],[25435,598,0,851,23,22,23,5],[25946,1616,0,1729,23,21,23,5],[26269,1176,-16,354,23,21,24,5],[26271,1462,-18,1210,23,21,24,5],[26782,530,34,911,23,23,24,5],[26783,21,-81,820,23,23,24,5],[25181,329,0,1153,23,22,23,5],[25689,1659,1,1488,23,21,23,4],[25434,1385,-3,745,23,22,23,4],[25947,959,6,529,23,22,23,4],[26270,684,7,275,23,23,23,4],[26716,276,87,11,23,21,24,4],[25689,276,-22,1134,23,21,23,3],[25433,1511,-26,1370,23,22,23,3],[25180,710,-11,1454,23,22,23,3],[25435,1495,-6,948,23,22,23,3],[26015,244,76,1270,23,21,23,3],[26527,1255,-87,1351,23,22,24,3],[25181,1348,-5,140,23,22,23,3],[27231,1381,172,187,24,22,26,10],[26717,1074,161,1911,24,24,26,10],[26205,1700,180,467,24,24,26,10],[26974,1347,180,940,24,24,26,9],[26717,309,319,1336,24,24,26,9],[25696,13,180,772,24,24,26,9],[27232,1035,180,888,24,24,26,9],[26717,1152,194,769,24,24,26,8],[25692,1488,180,1009,24,24,26,8],[25692,1201,176,129,24,24,26,8],[26976,57,180,986,24,24,26,7],[26718,643,180,1665,24,24,26,7],[26976,967,180,1601,24,24,26,7],[25437,94,176,992,24,24,26,7],[25437,1307,180,313,24,24,26,7],[25695,819,181,692,24,24,26,7],[26204,1256,181,921,24,24,26,6],[26525,599,4,514,24,23,24,6],[25693,393,180,1391,24,24,26,6],[25182,111,-4,790,24,22,26,6],[26719,1422,312,771,24,24,26,5],[25948,958,153,1612,24,24,26,5],[26209,125,307,940,24,24,26,5],[26526,493,-116,95,24,23,24,5],[26973,131,198,323,24,24,26,5],[26975,1364,315,72,24,24,26,5],[26718,1827,199,1259,24,24,26,4],[26461,1460,180,237,24,24,26,4],[26208,746,571,958,24,24,26,4],[26269,698,-4,1495,24,23,24,4],[26781,1320,34,307,24,23,24,4],[26524,1768,10,1137,24,23,24,4],[26526,1551,-86,1911,24,24,24,4],[26781,953,97,1341,24,23,26,3],[26973,1854,142,1111,24,24,26,3],[27230,1859,178,39,24,24,26,3],[26977,287,180,1014,24,24,26,3],[25948,1332,164,433,24,24,26,3],[26205,314,155,116,24,24,26,3],[26461,673,205,897,24,24,26,3],[26204,1655,168,1750,24,24,26,3],[26207,60,211,763,24,24,26,3],[25950,1180,125,932,24,24,26,3],[26206,904,181,664,24,24,26,3],[25949,95,173,1078,24,24,26,3],[26460,1440,174,1247,24,24,26,3],[26206,315,233,1452,24,24,26,3],[25692,712,140,1592,24,24,26,3],[25949,924,162,424,24,24,26,3],[25693,655,176,237,24,24,26,3],[25693,1538,180,503,24,24,26,3],[25696,1546,180,760,24,24,26,3],[26207,1072,464,812,24,24,26,3],[24926,750,-39,1792,24,24,26,3],[25949,1185,177,1390,24,24,26,3],[26716,886,523,1314,24,24,26,3],[26526,1604,-139,198,24,24,24,2],[25697,427,180,267,25,24,27,9],[27234,502,180,1130,25,25,27,9],[27233,271,180,64,25,24,27,9],[26723,45,317,5,25,25,27,9],[26211,79,180,230,25,25,27,9],[26977,1638,220,1854,25,25,27,8],[25699,6,180,1331,25,25,27,7],[25184,94,-173,1536,25,24,27,7],[25183,602,-169,1481,25,24,27,7],[25184,936,-175,886,25,24,27,7],[25183,30,-160,52,25,24,27,7],[26722,959,189,312,25,25,27,7],[26465,1485,180,1128,25,24,27,7],[25698,1047,180,1051,25,25,27,6],[26780,302,1,315,25,25,26,6],[27036,1550,-22,1872,25,25,26,6],[27234,1433,180,144,25,25,27,6],[26723,782,247,757,25,25,27,6],[26209,1044,180,158,25,24,27,6],[26979,1019,267,1367,25,25,27,5],[26979,126,249,1191,25,25,27,5],[26979,1758,250,590,25,25,27,5],[24928,43,-147,1628,25,24,27,5],[25182,1268,8,1405,25,24,27,5],[25184,1870,-176,802,25,25,27,5],[27291,1828,-18,55,25,25,26,5],[26779,421,-12,1866,25,25,26,5],[27039,588,-45,775,25,24,26,5],[27233,81,180,1693,25,25,27,5],[26210,776,196,1702,25,25,27,5],[26721,1619,180,398,25,25,27,4],[25185,1023,34,944,25,25,27,4],[27037,688,-18,1800,25,25,26,4],[26780,796,-6,1219,25,25,26,4],[26779,494,12,582,25,25,25,4],[27038,620,7,1718,25,25,26,4],[27038,120,19,418,25,23,26,4],[27040,869,-22,804,25,25,26,3],[27233,1058,192,1305,25,25,27,3],[26978,741,180,537,25,25,27,3],[26722,580,180,1131,25,25,27,3],[26466,943,190,1331,25,25,27,3],[26465,1408,180,218,25,25,27,3],[25698,74,180,1903,25,25,27,3],[25697,1719,179,521,25,25,27,3],[25183,1183,-174,562,25,24,26,3],[27036,1415,-5,126,25,25,26,3],[26524,498,10,730,25,25,27,3],[27035,1672,-16,296,25,25,25,2],[26783,1830,67,1357,25,24,25,2],[25441,1296,180,1562,25,25,25,2],[25438,386,180,1141,26,24,26,9],[26464,288,364,1747,26,24,26,5],[26463,781,293,396,26,24,26,5],[26778,736,-7,1774,26,25,28,5],[26465,399,304,1017,26,24,26,5],[26462,1116,222,1512,26,24,26,4],[26464,1359,414,1375,26,24,26,4],[26462,1663,180,774,26,24,26,4],[26205,801,177,873,26,24,26,4],[26461,1800,194,1809,26,24,26,4],[26784,1048,-39,1448,26,24,26,4],[27041,633,-11,1061,26,25,26,4],[27038,1743,-27,1639,26,25,26,4],[25694,1663,182,726,26,24,26,3],[25438,396,20,217,26,24,26,3],[26785,457,-31,1764,26,25,26,3],[27035,1009,-18,1468,26,25,26,3],[27290,1268,-22,11,26,25,28,3],[27035,104,-16,920,26,25,26,3],[26778,897,-1,709,26,25,28,3],[26785,451,-12,619,26,26,26,2],[27039,1063,-17,1819,26,25,26,2],[25955,1355,180,1535,27,25,27,13],[25188,1345,176,1628,27,27,28,9],[25443,1761,204,1734,27,27,28,9],[24677,1083,206,1727,27,27,28,8],[26467,543,303,836,27,25,27,8],[25699,1565,180,1826,27,25,28,8],[25956,279,180,553,27,25,28,8],[25954,81,180,1115,27,25,29,8],[26724,135,200,991,27,25,29,8],[25699,906,180,120,27,25,28,8],[25698,1602,182,59,27,25,28,8],[25702,1314,180,873,27,27,28,7],[25187,1206,180,407,27,27,28,7],[24931,1006,310,552,27,27,28,7],[26266,1786,-13,901,27,27,27,6],[25959,1077,181,463,27,27,28,6],[24677,1916,313,1135,27,27,28,6],[25185,1665,180,1779,27,25,28,6],[25186,698,180,150,27,27,28,6],[25442,179,180,791,27,25,28,6],[25700,1622,224,1408,27,27,28,6],[25701,1571,186,1536,27,27,28,5],[25445,1172,209,1086,27,27,28,5],[25189,1073,180,579,27,27,28,5],[25954,1718,180,1021,27,25,27,5],[25187,1841,180,1540,27,27,28,5],[26268,191,0,1304,27,25,27,5],[25956,1123,194,1305,27,25,29,5],[25955,751,180,440,27,25,29,4],[25701,1792,180,187,27,27,28,4],[25190,262,186,79,27,27,28,4],[24933,1359,203,1556,27,27,28,4],[26009,61,-71,1036,27,27,27,4],[26011,1472,-25,723,27,27,27,4],[26010,603,-65,1102,27,27,27,4],[26267,1034,-4,144,27,27,27,4],[26007,1067,0,988,27,27,27,4],[26211,727,218,1645,27,25,29,4],[25186,628,180,1512,27,27,28,4],[25959,7,225,1411,27,27,28,3],[25958,583,180,28,27,27,28,3],[25446,142,183,636,27,27,28,3],[25189,733,180,1842,27,27,28,3],[24934,417,378,1022,27,27,28,3],[25190,7,180,1628,27,27,28,3],[26723,1614,303,120,27,25,27,3],[25954,864,180,1749,27,25,27,3],[25443,1304,180,795,27,27,28,3],[25444,734,180,407,27,27,28,3],[25444,1078,164,1540,27,27,28,3],[25700,709,216,805,27,27,28,3],[25188,352,296,139,27,27,28,3],[25701,425,191,569,27,27,28,3],[25446,745,180,1691,27,27,28,3],[25756,449,-40,636,27,27,27,3],[26008,1012,-27,1509,27,27,27,3],[25753,1278,6,1265,27,27,27,3],[26012,140,-29,25,27,27,27,3],[26010,1708,-39,1262,27,27,27,3],[26268,660,32,282,27,27,27,3],[26517,1231,13,1037,27,27,28,3],[26523,452,-22,1110,27,25,27,3],[25499,1597,-2,1609,27,27,27,3],[26007,1148,0,72,27,27,27,2],[26522,795,-79,501,27,27,27,2],[24932,1516,180,1085,28,27,28,10],[24933,167,180,1817,28,27,28,10],[25442,1251,181,868,28,27,28,10],[25186,1717,180,1497,28,27,28,7],[25752,1378,0,616,28,27,30,5],[25497,683,6,1834,28,27,30,5],[25241,676,3,999,28,27,30,5],[27033,1256,-15,1417,28,27,28,5],[27032,1335,-17,1733,28,28,28,5],[26516,969,45,875,28,27,28,5],[26517,564,8,1753,28,27,28,5],[27289,563,1,547,28,28,28,5],[24986,443,69,416,28,27,30,5],[25703,704,180,1441,28,27,28,4],[25443,199,199,434,28,27,28,4],[25188,1217,162,513,28,27,28,4],[26260,1823,130,1561,28,27,29,4],[26519,269,-92,218,28,27,28,4],[27033,1341,-11,86,28,27,28,4],[27029,1411,74,119,28,28,28,4],[27028,1816,319,617,28,28,28,4],[25496,1839,0,1335,28,27,30,4],[25752,444,0,263,28,27,30,3],[25754,751,3,595,28,27,30,3],[24985,29,18,1836,28,27,30,3],[25957,602,215,637,28,27,29,3],[24678,1459,435,781,28,28,28,3],[24932,630,180,780,28,27,28,3],[24729,1437,69,1810,28,27,30,3],[24728,686,61,1312,28,27,30,3],[24728,1677,65,1165,28,28,30,3],[24986,1804,69,531,28,27,30,3],[26261,1114,0,785,28,28,29,3],[26262,481,13,1446,28,28,28,3],[26776,1081,3,1726,28,28,28,3],[27031,1650,0,482,28,28,28,3],[26519,247,-92,1612,28,27,28,3],[26518,758,23,1494,28,28,28,3],[26773,1582,74,1150,28,28,28,3],[27288,647,4,774,28,28,28,3],[27030,486,0,382,28,28,28,3],[27031,1162,0,1527,28,28,28,3],[24930,767,180,980,28,27,28,3],[27034,246,-22,1834,28,28,28,2],[26772,1486,136,351,28,28,28,2],[27028,814,500,756,28,28,28,2],[26215,815,184,479,29,27,30,13],[26214,517,222,358,29,29,30,11],[26726,764,158,62,29,29,30,10],[26724,1738,256,241,29,29,30,10],[26468,1614,199,994,29,29,30,10],[26468,526,266,1558,29,27,30,10],[26469,884,180,807,29,29,30,10],[26468,592,180,441,29,29,30,10],[26727,884,180,1253,29,29,30,9],[26470,67,149,1406,29,29,30,9],[26212,765,180,1340,29,29,30,9],[26724,1476,180,1685,29,27,30,9],[26980,743,205,1578,29,27,30,8],[26213,46,180,980,29,29,30,7],[26212,823,180,328,29,27,30,7],[27236,987,197,872,29,29,30,5],[27236,1846,218,36,29,29,30,5],[26261,1820,0,118,29,28,30,5],[26214,1405,238,803,29,29,30,4],[25958,175,180,1117,29,29,30,4],[26980,1578,216,887,29,29,30,4],[26211,1577,145,1015,29,27,30,4],[26726,1820,180,1166,29,29,30,3],[26726,190,184,1203,29,29,30,3],[26725,989,257,1067,29,29,30,3],[26213,1319,180,908,29,29,30,3],[25957,641,255,1551,29,29,30,3],[26983,1491,180,307,29,29,30,3],[25750,321,-20,1282,29,29,30,3],[25237,1266,19,1672,29,29,30,3],[25750,1392,-9,1216,29,29,30,3],[26260,516,51,1446,29,27,30,3],[25748,1696,7,1119,29,29,30,2],[26005,1871,68,363,29,29,29,2],[26471,17,180,1251,30,29,30,11],[26725,1092,242,38,30,29,30,8],[27238,514,219,1537,30,29,30,7],[26215,1261,196,1414,30,29,30,7],[26981,1240,212,588,30,29,30,6],[26982,1505,180,1025,30,29,30,6],[26983,619,180,771,30,29,30,6],[26471,1027,181,716,30,29,30,6],[26981,1600,221,1872,30,29,30,5],[27237,140,296,1890,30,29,30,5],[26982,398,187,664,30,29,30,5],[25494,540,0,52,30,29,30,5],[27238,641,218,623,30,29,30,5],[26726,1699,180,202,30,29,30,4],[26727,857,180,26,30,29,30,4],[27237,1362,219,1224,30,29,30,4],[26260,1235,112,684,30,28,30,4],[25748,1538,8,111,30,29,30,4],[25237,1896,8,926,30,29,30,4],[25493,1348,59,789,30,30,30,4],[24983,1918,0,1835,30,28,30,3],[25495,737,0,971,30,29,30,3],[25242,1093,-8,1791,30,28,30,3],[25497,1759,3,1081,30,28,30,3],[25239,987,0,417,30,28,30,3],[26004,1331,55,1502,30,30,30,3],[25751,1313,28,718,30,30,30,2],[25755,49,-6,119,30,30,30,2],[24987,267,76,1862,30,30,30,2],[24984,531,35,334,30,28,30,2],[26006,1285,-8,208,30,29,30,2],[25749,1094,0,1174,30,29,30,2],[25750,1604,55,338,30,29,30,2],[25494,1632,27,173,30,29,30,2],[24986,86,31,1523,30,30,30,2],[27498,608,246,397,31,31,32,11],[27753,411,206,468,31,31,32,9],[27241,1125,310,1493,31,31,32,7],[27501,1359,182,89,31,31,32,6],[27245,703,181,830,31,31,32,6],[27755,1593,209,1419,31,31,32,5],[26987,707,255,767,31,31,31,5],[26988,275,235,549,31,31,32,4],[27753,1655,251,41,31,31,32,3],[26988,1558,202,787,31,31,32,3],[26732,813,289,1690,31,31,32,3],[26986,322,226,241,31,31,32,3],[27245,1685,180,843,31,31,32,3],[25491,1679,74,607,31,31,32,3],[24980,113,9,1491,31,31,32,3],[27758,317,203,158,32,31,32,8],[27497,1025,255,714,32,31,32,7],[27241,29,367,1001,32,31,32,6],[26985,307,288,1838,32,31,32,6],[26985,1197,187,745,32,31,32,6],[26985,145,260,617,32,31,32,6],[26730,1838,149,1597,32,31,32,6],[26730,699,260,1235,32,31,32,6],[26729,1090,260,1467,32,31,32,6],[24981,346,21,684,32,31,34,6],[27242,584,151,1292,32,31,32,4],[27497,515,266,1473,32,31,32,4],[26985,1840,202,1755,32,31,32,4],[27756,982,181,1496,32,31,32,4],[27501,1313,206,1757,32,31,32,4],[26731,1882,201,584,32,31,32,4],[27755,731,192,647,32,31,32,4],[24725,1291,38,1347,32,31,32,4],[25236,195,74,1425,32,31,32,4],[25491,377,71,823,32,31,32,4],[24980,1521,75,1624,32,31,32,2],[25961,1548,253,1625,33,33,34,12],[26473,1207,255,977,33,33,34,11],[25962,589,236,1752,33,33,34,10],[26475,884,308,825,33,33,34,9],[25961,433,187,1710,33,33,34,9],[24470,497,22,697,33,32,34,8],[24215,1361,9,291,33,33,34,8],[26217,334,231,962,33,33,34,8],[26218,1664,373,1519,33,33,34,8],[26474,706,305,1051,33,33,34,8],[26475,1836,112,921,33,33,34,8],[24470,1170,0,1888,33,32,34,7],[26476,1232,281,911,33,33,35,7],[26218,390,185,1917,33,33,34,7],[26474,1560,373,625,33,33,34,7],[26729,1520,235,80,33,33,34,6],[26475,1218,221,1873,33,33,34,6],[24215,377,1,575,33,32,34,5],[24727,183,30,640,33,33,34,4],[25488,1495,370,789,33,33,34,4],[24471,995,0,854,33,33,34,3],[26730,889,221,33,33,33,34,3],[25234,470,212,1830,33,33,34,3],[26475,16,330,1590,34,33,34,12],[26219,925,224,1293,34,33,34,11],[24471,1862,5,515,34,32,34,9],[26473,183,196,858,34,33,34,9],[26729,174,198,280,34,33,34,9],[24214,634,16,1705,34,32,34,8],[24215,1585,0,1311,34,33,34,8],[23960,465,7,1496,34,32,34,8],[26219,1859,151,573,34,33,34,8],[24469,1898,25,1481,34,32,34,8],[26218,1267,221,426,34,33,34,7],[24471,851,28,1798,34,32,34,6],[26217,1315,187,1590,34,33,34,6],[24463,1538,975,1653,34,34,36,6],[24470,1882,0,1076,34,32,34,5],[24216,645,39,1527,34,33,34,5],[26217,1877,274,699,34,33,34,5],[26219,1863,69,1618,34,33,34,5],[25231,1343,560,554,34,34,34,5],[24721,707,892,1304,34,34,36,5],[25489,1717,242,1158,34,33,34,5],[24216,1129,33,214,34,33,34,4],[24720,1692,937,1817,34,34,36,4],[25489,266,322,161,34,33,34,4],[25487,1025,524,492,34,33,34,4],[25232,1226,510,701,34,33,34,4],[24726,350,17,494,34,32,34,3],[24214,1210,0,926,34,33,34,3],[25488,252,444,677,34,33,34,3],[25233,1279,322,1332,34,33,34,3],[24977,1333,577,1475,34,34,34,3],[24719,1141,807,1916,34,34,34,3],[25488,1070,382,1896,34,34,34,2],[25490,1225,118,730,34,33,34,2],[26477,1086,194,110,35,35,36,14],[27247,678,146,390,35,35,36,13],[27247,1730,141,820,35,35,36,9],[26986,1645,180,777,35,35,36,9],[26991,1225,143,1527,35,35,36,8],[27502,1543,147,1274,35,35,36,7],[26221,316,241,1348,35,35,36,7],[27757,497,180,695,35,35,36,7],[24465,651,983,1855,35,35,36,7],[27503,1613,140,378,35,35,36,6],[27502,635,147,577,35,35,36,6],[24721,1524,924,608,35,34,36,6],[27503,551,147,562,35,35,36,5],[26986,992,175,1404,35,35,35,5],[26989,420,180,1248,35,35,36,5],[27754,111,303,869,35,35,36,5],[26731,1044,236,1342,35,35,36,5],[26735,959,174,197,35,35,36,5],[26991,1737,149,584,35,35,36,5],[26479,413,230,1108,35,35,36,5],[27246,733,206,607,35,35,36,5],[26478,430,182,605,35,35,36,5],[27503,1838,148,1484,35,35,36,5],[27759,684,180,132,35,35,36,5],[27754,1494,317,905,35,35,36,4],[27498,854,238,1607,35,35,35,4],[26734,1629,219,553,35,35,36,4],[26220,814,113,789,35,35,36,4],[24722,1519,869,1365,35,35,36,4],[24978,686,779,128,35,35,36,3],[26990,446,249,462,35,35,36,3],[24978,1584,963,920,35,34,35,3],[23704,773,119,1817,35,35,36,3],[23703,379,441,1020,35,35,36,3],[23447,1771,580,204,35,35,36,3],[23191,997,909,739,35,35,36,3],[23190,1786,967,3,35,35,36,3],[26478,1641,186,477,36,35,36,16],[26736,732,237,1672,36,35,37,15],[26733,1392,206,1465,36,35,36,12],[27252,1577,210,1789,36,36,37,12],[26223,1818,180,991,36,35,37,12],[26478,841,226,1678,36,35,36,11],[26735,806,270,1893,36,35,36,10],[27249,608,180,1360,36,36,37,10],[26732,1845,293,101,36,35,36,8],[27246,1811,180,1119,36,35,36,8],[27248,717,141,919,36,35,36,7],[26479,1302,242,507,36,35,36,7],[26222,1282,241,1201,36,35,36,7],[26734,584,194,1162,36,35,36,7],[27252,1670,185,756,36,36,37,7],[26480,487,199,1612,36,35,37,7],[26733,459,298,872,36,35,36,6],[27248,400,145,61,36,35,36,6],[26735,1810,215,512,36,35,36,6],[26733,1033,287,165,36,35,36,6],[26223,371,194,1527,36,35,36,6],[27250,888,180,731,36,36,37,6],[26736,989,180,703,36,36,37,6],[24463,1795,1068,181,36,35,36,6],[24464,780,975,1716,36,34,36,6],[24722,1271,945,185,36,35,36,6],[23445,947,424,1688,36,36,38,6],[26990,1684,302,1287,36,35,36,5],[26477,825,208,1126,36,35,36,5],[27504,1087,182,1724,36,35,36,5],[26989,320,194,25,36,35,36,5],[26221,1575,244,1075,36,35,36,5],[26993,459,215,1224,36,36,37,5],[27509,190,218,637,36,36,37,5],[27508,1059,233,1047,36,36,37,5],[27507,1139,242,1348,36,36,37,5],[23447,695,374,1869,36,35,36,5],[23700,1688,387,1043,36,36,38,5],[26989,1267,196,806,36,35,36,4],[26990,1688,268,128,36,35,36,4],[27246,934,187,1634,36,35,36,4],[26989,1856,189,1776,36,35,36,4],[27247,934,181,1567,36,35,36,4],[27248,1826,205,584,36,36,37,4],[26480,1785,211,1849,36,36,37,4],[27251,921,180,562,36,36,37,4],[27251,1827,188,609,36,36,37,4],[27509,729,192,1878,36,36,37,4],[27506,1082,219,1770,36,36,37,4],[27505,1213,241,438,36,36,37,4],[23704,156,298,518,36,35,36,4],[23958,1111,710,448,36,35,38,4],[24208,150,1108,972,36,35,36,3],[24463,761,1102,883,36,35,36,3],[27504,1307,173,326,36,35,36,3],[27249,1860,180,157,36,36,37,3],[26225,294,183,1665,36,36,37,3],[27509,1270,242,784,36,36,37,3],[27764,1601,180,99,36,36,37,3],[27505,303,214,463,36,36,37,3],[23952,75,1169,1391,36,36,36,3],[23447,523,492,601,36,36,36,3],[23191,29,702,1361,36,35,36,3],[23443,1400,290,948,36,36,38,3],[23445,263,296,794,36,36,36,3],[24464,1886,1045,988,36,36,36,2],[23446,1485,613,1844,36,35,36,2],[22933,1422,872,1897,36,35,36,2],[23448,416,433,1451,36,35,36,2],[23188,1344,742,1,36,35,36,2],[26481,389,207,1074,37,36,38,13],[26483,988,170,272,37,36,38,13],[27250,1876,209,17,37,36,38,11],[26227,1766,246,783,37,36,37,10],[26997,143,242,1410,37,37,38,7],[27249,1045,180,573,37,36,37,6],[27251,106,180,1486,37,36,37,6],[26226,1012,178,1637,37,36,37,6],[26227,417,188,1183,37,36,37,6],[23958,168,943,1097,37,35,38,6],[26993,1239,241,484,37,36,38,5],[27510,97,232,1572,37,36,37,5],[27506,257,217,744,37,36,37,5],[24210,308,1118,115,37,37,38,5],[26992,1013,222,882,37,36,37,4],[27252,790,183,1313,37,36,37,4],[26993,389,218,153,37,36,37,4],[26480,1456,199,785,37,36,37,4],[27764,286,180,10,37,36,37,4],[27507,340,199,1840,37,36,37,4],[27253,983,189,1801,37,36,37,4],[27508,86,242,571,37,36,37,4],[27507,440,224,718,37,36,37,4],[27761,1274,189,235,37,36,37,4],[26225,166,238,730,37,36,37,4],[26225,1635,236,1764,37,36,37,4],[23953,1317,1100,1402,37,37,38,4],[27507,1132,183,31,37,36,37,3],[26737,32,200,849,37,36,37,3],[27250,278,172,1404,37,36,37,3],[27506,1168,241,808,37,36,37,3],[26224,1119,159,1402,37,36,37,3],[26225,1576,267,555,37,36,37,3],[26226,1523,184,181,37,36,37,3],[23698,393,1059,391,37,37,38,3],[24209,706,1100,212,37,37,37,2],[26737,1910,195,1748,38,37,38,14],[26995,1106,263,1171,38,37,38,8],[26995,622,261,160,38,37,38,8],[26996,1385,248,726,38,37,38,7],[26996,196,258,392,38,37,38,7],[26740,903,214,1367,38,37,38,7],[26483,1411,200,1077,38,37,38,7],[26740,824,188,430,38,37,38,6],[26739,1690,248,402,38,37,38,6],[26994,548,269,1177,38,37,38,6],[26738,955,234,164,38,37,38,6],[24211,925,1100,1017,38,37,38,6],[24213,1245,1084,111,38,37,38,6],[26738,899,195,1184,38,37,38,5],[24213,645,1094,1025,38,38,38,5],[23444,997,625,928,38,36,38,5],[23699,1120,699,46,38,36,38,4],[26484,530,224,1293,38,37,38,4],[26739,679,257,28,38,37,38,4],[26994,1607,257,619,38,37,38,4],[26738,1792,240,565,38,37,38,4],[26482,1822,196,826,38,37,38,4],[26481,1638,273,1257,38,37,38,4],[26737,1191,220,518,38,37,38,4],[24210,1842,1123,809,38,38,38,4],[24211,1889,1100,1111,38,38,38,4],[24468,805,1100,366,38,38,38,4],[24212,1537,1097,1547,38,37,38,3],[26739,918,247,1042,38,37,38,3],[26484,1295,193,393,38,37,40,3],[23697,1810,1090,1584,38,37,38,3],[24724,1228,1074,175,38,38,38,3],[23956,1310,1074,1667,38,37,38,2],[24469,440,1149,51,38,38,38,2],[23700,619,826,922,38,36,38,2],[26998,536,235,499,39,39,40,7],[26232,729,183,776,39,39,40,7],[26742,1433,192,1294,39,39,40,5],[26998,1436,374,560,39,39,40,5],[26999,812,478,919,39,39,40,5],[26488,743,182,1722,39,39,40,4],[27000,382,568,653,39,39,40,4],[26741,975,241,1845,39,39,40,4],[27510,871,242,13,39,39,40,3],[27256,843,780,1502,39,39,40,3],[26487,1768,167,1428,39,39,40,3],[26997,1602,198,1083,39,39,40,3],[26229,505,188,288,39,39,40,3],[26231,568,201,1146,39,39,40,3],[26486,682,180,655,39,39,40,3],[27255,1069,558,301,39,39,40,3],[23190,960,892,923,39,39,39,2],[26742,522,193,1231,40,39,40,9],[26744,462,448,1342,40,39,40,6],[27255,1360,685,1163,40,39,40,5],[27254,1914,625,1558,40,39,40,4],[27254,967,557,766,40,39,40,4],[27256,310,604,233,40,39,40,4],[26999,200,527,1691,40,39,40,4],[26486,1850,220,1097,40,39,40,4],[26485,1481,180,719,40,39,40,4],[26230,207,203,1637,40,39,40,4],[26743,1471,302,890,40,39,40,4],[26485,1411,186,1797,40,39,40,4],[26230,986,194,868,40,39,40,4],[23187,103,690,447,40,39,40,4],[26998,693,422,1533,40,39,40,3],[26488,368,180,391,40,39,40,3],[26231,1663,184,1363,40,39,40,3],[26743,521,375,1709,40,39,40,3],[26486,557,180,1844,40,39,40,3],[26743,364,189,8,40,39,40,3],[26487,983,183,789,40,39,40,3],[26229,864,181,1263,40,39,40,3],[26229,1633,197,228,40,39,40,3],[26230,1807,180,1919,40,39,40,3],[23186,1129,579,1225,40,39,40,2],[23441,1260,333,42,40,39,40,2],[24723,1748,-296,1182,41,41,42,3],[24467,1063,-224,1619,42,41,42,3],[24467,328,-156,630,42,41,42,2],[23952,1295,-31,1858,42,41,42,2],[23435,1000,85,982,43,43,43,6],[23696,977,113,250,43,43,43,4],[23184,535,101,1905,43,43,43,4],[23179,520,21,1381,43,43,43,4],[23434,1888,51,1024,43,43,43,4],[23179,1365,-26,848,43,43,43,4],[23439,1330,12,210,43,43,43,3],[23440,975,101,1065,43,43,43,3],[23434,646,8,80,43,43,43,3],[23696,31,138,49,43,43,43,2],[23183,1513,8,392,43,43,43,2],[23436,1095,-10,141,43,43,43,2],[23691,812,60,1864,44,44,45,5],[24203,785,87,613,44,44,45,5],[23691,1307,91,947,44,43,44,3],[24202,1607,56,797,44,44,45,3],[23946,963,90,1828,44,44,44,3],[23690,1879,27,1084,44,44,44,2],[23947,1015,68,849,44,44,44,2],[24201,1464,81,900,45,44,46,7],[24457,1615,62,325,45,45,45,3],[24459,309,104,439,45,45,45,3],[24714,1825,141,673,45,45,45,3],[24971,900,453,404,45,45,45,3],[24969,1714,38,724,45,45,45,3],[25225,1332,54,717,45,45,45,3],[24714,225,40,643,45,45,45,3],[23946,1132,25,667,45,44,45,2],[23947,357,86,1645,45,44,45,2],[24458,845,82,313,45,45,45,2],[24458,1717,96,1319,45,45,45,2],[24714,693,316,1796,45,45,45,2],[24715,782,276,1424,45,45,45,2],[24712,1203,3,977,46,46,46,8],[23429,1567,272,1130,46,46,46,8],[24710,1783,21,1412,46,46,48,8],[24457,382,-82,395,46,45,46,7],[23941,1587,-54,1150,46,46,46,6],[24456,1793,-173,1546,46,46,48,6],[23690,567,40,1504,46,46,46,6],[24197,1618,-77,1054,46,46,46,6],[24712,546,8,1610,46,46,48,6],[24201,832,21,86,46,46,48,6],[23689,1398,37,155,46,46,48,6],[24201,550,2,1216,46,45,46,5],[23945,1788,29,787,46,46,48,5],[23689,1601,39,1777,46,46,48,5],[23434,103,48,842,46,46,48,4],[24711,890,76,1766,46,46,47,4],[23685,1315,142,569,46,46,46,4],[24453,1370,-87,189,46,46,46,4],[24710,669,14,905,46,46,48,4],[24713,251,12,1364,46,45,46,4],[24709,1604,14,1010,46,46,48,3],[23685,1485,41,1895,46,46,46,3],[24713,645,-28,217,46,46,48,3],[23945,913,42,461,46,46,46,3],[23690,806,27,432,46,46,46,3],[24968,893,31,738,47,45,48,5],[25223,1767,70,160,47,47,48,5],[24966,654,18,92,47,46,48,5],[24967,845,84,1163,47,47,48,4],[23174,1317,81,375,47,47,47,4],[25223,824,145,808,47,47,48,3],[24965,1210,56,335,47,47,48,3],[24966,1123,0,1044,47,47,48,3],[24969,235,0,1066,48,47,48,5],[23176,1743,90,323,48,46,48,5],[25224,1029,31,15,48,47,48,4],[25222,875,106,83,48,47,48,4],[22920,618,77,1907,48,46,48,4],[23174,374,274,1342,49,47,49,4],[23684,372,1038,1084,49,49,50,4],[24197,443,216,1036,49,49,50,3],[23684,1756,792,807,49,49,50,3],[22917,563,1193,1038,49,49,50,3],[23940,1144,863,399,49,49,49,2],[24195,1771,1049,1323,50,49,50,4],[23171,848,1394,781,50,49,50,3],[24451,1416,1213,688,50,49,50,3],[24196,1465,551,1862,50,49,50,2],[23171,511,1394,1872,50,50,50,2],[23173,1031,1004,112,50,50,50,2],[22915,638,1429,334,51,51,52,10],[22146,1526,1404,1151,51,51,52,7],[23426,53,950,1469,51,51,52,6],[22402,1174,1402,73,51,51,52,5],[21889,312,1284,1632,51,51,52,5],[22402,1117,1405,1408,51,51,52,5],[22403,927,1490,506,51,51,52,4],[22403,66,1449,1125,51,51,52,3],[23169,1837,1230,1155,52,51,52,9],[22146,918,1341,327,52,51,52,8],[22914,725,1407,1625,52,51,52,8],[22658,1743,1458,1116,52,51,52,8],[22402,34,1410,764,52,51,52,7],[21889,1460,1354,1027,52,51,52,7],[22914,1322,1466,109,52,51,52,7],[22147,829,1446,562,52,51,52,7],[23425,1667,1082,301,52,51,52,6],[22145,1871,1326,454,52,51,52,6],[21891,3,1419,1457,52,51,52,6],[23934,1588,1468,1047,52,52,53,5],[22147,598,1479,1465,52,51,52,4],[21890,881,1469,873,52,51,52,4],[22145,1251,1334,1364,52,51,52,3],[24190,111,1468,131,52,52,53,3],[24189,1375,1468,976,52,52,52,2],[23935,614,1468,810,52,52,52,2],[24193,594,1468,60,53,52,53,5],[23938,408,1468,1810,53,52,53,5],[24191,1581,1468,1781,53,52,53,5],[23682,1099,1468,1416,53,52,53,4],[24191,67,1468,429,53,52,53,4],[24190,1154,1468,942,53,52,53,4],[24194,626,1468,1179,53,52,53,3],[23932,1739,1468,769,53,53,53,3],[24193,120,1468,915,53,53,53,2],[24191,475,1468,1856,53,52,53,2],[23934,564,1468,898,53,52,53,2],[23168,1452,472,1213,54,54,54,5],[23169,505,467,1727,54,54,54,4],[23169,551,479,103,54,54,54,3],[23680,870,353,577,54,54,54,3],[23425,637,536,1513,54,54,54,3],[23680,83,382,103,54,54,54,3],[23424,433,462,22,54,54,54,3],[23424,1574,412,1295,54,54,54,2],[22909,958,387,1730,55,55,55,6],[22911,935,537,520,55,55,55,5],[22910,99,598,715,55,55,55,5],[22654,545,730,1562,55,55,55,5],[23166,46,538,1594,55,55,57,5],[23166,1636,534,865,55,55,56,4],[22910,41,480,1616,55,55,55,4],[22655,907,548,1335,55,55,55,3],[22911,11,579,305,55,55,55,3],[23165,141,410,1095,55,55,57,3],[22910,1084,542,1894,55,55,55,2],[22913,799,452,696,56,54,56,7],[22656,1679,450,1598,56,56,56,5],[22655,1409,546,122,56,55,56,4],[22912,1119,531,1487,56,54,56,4],[23167,1407,537,319,56,55,56,4],[22912,206,506,271,56,55,56,3],[22656,684,500,854,56,55,56,3],[22657,1115,500,1186,56,56,56,3],[23679,238,511,976,57,57,57,6],[23423,63,533,797,57,55,57,6],[23678,1193,565,731,57,57,57,5],[23679,743,397,125,57,57,57,5],[23421,1793,505,1211,57,57,57,5],[23420,1603,598,26,57,57,57,4],[23422,1414,323,1554,57,55,57,3],[23679,1440,542,910,57,57,57,3],[23422,672,420,633,57,57,57,3],[23163,1094,2000,637,57,57,58,3],[22650,1567,2000,127,57,57,57,2],[23420,1737,633,1049,57,57,57,2],[24188,1245,1468,293,58,58,58,5],[23676,253,1834,1600,58,58,58,4],[24189,132,1468,951,58,58,58,3],[23932,6,1771,1542,58,57,58,3],[23931,727,1977,1116,58,58,58,3],[23676,895,1605,796,58,58,58,3],[23675,1007,1990,476,58,57,58,3],[23676,151,1807,92,58,58,58,3],[23933,228,1468,1259,58,58,58,2],[23419,1260,2000,974,58,58,58,2],[22907,670,2000,1257,58,57,58,2],[22142,489,1668,1119,59,59,60,6],[22141,1223,1925,507,59,59,60,5],[22142,1371,1468,388,59,59,60,5],[21885,1853,1673,1650,59,59,60,5],[22145,255,1468,650,59,59,60,4],[22142,1255,1502,1755,59,59,60,4],[22143,1435,1468,944,59,59,59,4],[21888,1135,1414,1537,59,59,60,4],[22398,825,1484,892,59,59,60,3],[21887,492,1376,130,59,59,59,3],[21886,1914,1410,1358,59,59,59,2],[21884,1434,1957,992,60,59,60,7],[22395,485,2000,226,60,59,60,5],[22139,1367,2000,494,60,59,60,5],[22140,710,2000,341,60,59,60,5],[21887,1483,1376,839,60,59,60,4],[21886,1086,1440,672,60,59,60,4],[21885,965,1863,784,60,59,60,4],[22138,1454,2000,718,60,60,60,4],[22141,171,1989,835,60,60,60,4],[22397,598,938,1274,60,60,60,3],[22652,1201,930,511,60,59,60,3],[22139,1788,1905,1411,60,60,60,2],[22396,620,1153,815,60,60,60,2],[22652,838,1364,1891,60,59,60,2],[25733,1630,-98,1005,61,61,63,8],[25731,1522,-55,567,61,61,63,7],[25735,399,12,1433,61,61,63,6],[25729,1727,-59,56,61,61,63,5],[25986,895,-141,805,61,61,63,4],[25990,1730,2,245,61,61,63,3],[25731,522,-36,199,61,61,63,3],[25732,825,-198,1132,61,61,63,3],[25731,1878,-198,1533,61,61,63,3],[25476,176,-25,107,63,61,63,10],[25476,742,-92,868,63,61,63,10],[25730,52,-52,1088,63,61,63,10],[25475,320,-20,648,63,61,63,8],[25730,1365,-47,691,63,61,63,7],[25472,1028,-30,1312,63,61,63,6],[25219,1237,-25,1698,63,61,63,5],[25478,1110,-4,1637,63,61,63,4],[25735,169,-97,419,63,61,63,4],[25474,921,-54,1007,63,61,63,4],[25985,1400,-26,97,63,61,63,4],[25989,1761,-148,49,63,61,63,4],[25734,683,-81,1225,63,61,63,4],[25733,284,-247,1673,63,61,63,4],[25730,1815,-47,1644,63,61,63,4],[25473,687,-35,1235,63,61,63,4],[25732,1679,-103,255,63,61,63,2],[25987,19,-347,1092,63,61,63,2],[25985,879,-321,1355,65,63,67,6],[26502,694,-514,205,65,65,67,3],[26503,1693,-422,91,67,65,67,8],[25727,1915,-482,729,67,65,67,6],[26241,1785,-428,151,67,65,67,6],[25987,1292,-480,1788,67,65,67,6],[25989,663,-496,1245,67,65,67,6],[26502,1514,-512,619,67,65,67,6],[26505,262,-173,1041,67,65,67,6],[25726,915,-498,989,67,65,67,4],[25728,1245,-462,1216,67,65,67,4],[25990,1880,-483,1485,67,65,67,4],[26246,175,-540,73,67,65,67,4],[25726,1816,-446,588,67,65,67,4],[25984,1386,-419,242,67,65,67,4],[26242,624,-485,765,67,65,67,4],[26243,233,-469,317,67,65,67,4],[25988,367,-517,1035,67,65,67,4],[26247,1474,-422,309,67,65,67,4],[26504,860,-287,384,67,65,67,4],[26506,35,-58,1900,67,65,67,2],[25471,1635,32,183,68,68,70,2],[26250,399,33,1708,70,68,70,4],[25738,191,-48,1505,70,68,70,4],[25992,1500,6,1616,70,68,70,4],[22645,544,2315,945,70,70,70,4],[25214,1276,31,1341,70,68,70,4],[25471,1012,-31,1293,70,68,70,4],[25470,68,46,159,70,68,70,4],[22133,1482,2680,1198,70,70,70,3],[22133,642,2921,123,70,70,70,3],[22389,1648,2480,1307,70,70,70,3],[25737,581,-49,1088,70,68,70,3],[24437,1670,2509,1323,70,70,70,2],[24181,1474,2772,1319,70,70,70,2],[25992,707,-21,970,70,68,70,2],[25992,1741,8,374,70,68,70,2],[25736,1774,-43,160,70,68,70,2],[25737,1058,25,85,70,68,70,2],[25993,901,-44,296,70,68,70,2],[25993,811,-2,1505,70,68,70,2],[25993,1808,-8,940,70,68,70,2],[26249,665,-32,739,70,68,70,2],[26249,793,-111,1782,70,68,70,2],[25994,1170,27,1579,70,68,70,2],[25738,1141,64,828,70,68,70,2],[26249,1764,-48,163,70,68,70,2],[26250,1056,47,765,70,68,70,2],[26506,1375,13,355,70,68,70,2],[26506,515,-1,930,70,68,70,2],[26248,1513,-22,919,70,68,70,2],[25480,674,-87,1611,70,68,70,2],[25736,817,31,827,70,68,70,2],[25736,901,-69,1788,70,68,70,2],[25215,972,-17,1185,70,68,70,2],[25470,1223,-41,1424,70,68,70,2],[25469,1489,64,1327,70,68,70,2],[26760,256,-78,1375,71,71,73,6],[26501,1482,-37,1491,71,71,73,6],[26758,771,-47,106,71,71,71,5],[26759,407,-74,1194,71,71,71,5],[26760,1905,-59,425,71,71,71,4],[26759,1284,-35,1885,71,71,73,3],[26760,273,-95,322,71,71,71,3],[26758,1752,-74,299,71,71,73,3],[26761,133,-100,1363,71,71,71,3],[24948,234,2279,205,72,72,73,8],[24947,76,2304,546,72,72,72,8],[24690,1318,2073,1141,72,72,72,7],[23146,834,2117,1643,72,70,73,7],[22901,361,2103,1124,72,72,72,6],[24947,1522,2406,891,72,72,72,6],[24945,1818,2574,1865,72,72,72,6],[21874,307,2200,735,72,72,72,5],[21619,64,2093,1210,72,72,72,5],[22890,1143,2303,764,72,70,73,5],[24946,540,2151,332,72,72,72,5],[24682,221,2310,1865,72,72,72,5],[25194,1711,2561,359,72,72,72,5],[22891,47,2096,1607,72,70,73,4],[23413,1667,2095,1413,72,72,72,4],[23157,1830,2093,1283,72,72,72,4],[23157,1062,2078,174,72,72,72,4],[21619,1017,2092,1269,72,72,72,4],[22889,1494,2225,384,72,72,72,4],[24681,1164,2455,1817,72,72,72,4],[24938,671,2564,1350,72,72,72,4],[25195,991,2442,7,72,72,72,4],[24939,814,2182,716,72,72,72,4],[24691,1311,2251,1677,72,72,72,3],[24947,637,2331,1353,72,72,72,3],[24946,1306,2304,1151,72,72,72,3],[21620,1497,2092,574,72,72,72,3],[23146,1624,2092,525,72,70,73,3],[22890,849,2026,1667,72,70,73,3],[23925,1313,2535,427,72,72,72,3],[21618,941,2146,1504,72,72,72,3],[21620,565,2092,894,72,72,72,3],[22900,928,2167,1629,72,72,72,3],[23669,1030,2427,1312,72,72,72,2],[24937,644,2572,637,72,72,72,2],[24938,1127,2267,450,72,72,72,2],[25196,862,2407,454,72,72,72,2],[24940,666,2282,1107,72,72,72,2],[22634,671,2608,1614,72,72,72,2],[27017,289,-76,836,73,73,73,8],[26244,1647,-168,652,73,71,73,6],[27016,1322,-102,193,73,71,73,6],[27015,1406,-28,1076,73,73,73,6],[27015,339,20,1066,73,73,73,5],[26758,799,-99,1678,73,71,73,5],[26757,380,-95,1813,73,71,74,5],[23401,1155,2110,50,73,73,73,5],[24170,544,3908,1781,73,73,73,5],[24170,309,3473,623,73,73,73,5],[27013,1280,-131,335,73,71,73,4],[23657,487,2365,1726,73,73,73,4],[21876,1030,3408,1461,73,73,73,4],[27017,1063,-2,320,73,73,73,4],[27014,781,-95,678,73,71,73,4],[23402,161,2126,946,73,73,73,4],[21876,41,3490,1492,73,73,73,4],[23657,724,2307,478,73,73,73,3],[26756,1919,-48,776,73,71,74,3],[24693,720,2343,507,73,73,73,2],[24693,91,2235,1294,73,73,73,2],[22131,953,3526,12,73,73,73,2],[26246,1771,-40,880,73,71,73,2],[23402,505,2238,1873,73,73,73,2],[26756,912,-58,1340,74,74,76,7],[26500,78,-73,994,74,74,74,6],[26244,74,-142,1656,74,74,74,6],[26755,891,-13,136,74,74,76,6],[27010,1787,111,473,74,74,76,6],[26755,1771,-31,528,74,74,76,5],[26498,1809,-110,1004,74,74,76,3],[26498,949,-159,702,74,74,76,3],[27013,241,-86,944,74,73,76,3],[26501,142,-39,1607,74,73,74,2],[23668,1238,2093,189,75,75,76,9],[22129,449,2017,1503,75,75,76,5],[22636,598,2146,571,75,75,76,5],[24177,1571,2046,937,75,75,76,3],[22384,1797,2000,1511,75,75,76,3],[24178,691,2105,932,76,75,76,8],[22126,311,2116,1722,76,75,76,8],[27010,693,202,163,76,74,76,6],[26755,639,5,1344,76,74,76,6],[27012,244,-33,497,76,74,76,6],[27009,1878,350,748,76,74,76,6],[23668,575,2093,1030,76,75,76,6],[22642,735,2089,330,76,75,76,6],[22643,846,2101,1479,76,75,76,6],[22381,59,2234,1232,76,75,76,6],[23403,1283,2090,596,76,75,76,6],[23404,156,2083,1898,76,75,76,6],[23660,774,2037,1351,76,75,76,6],[24173,1828,2101,1738,76,75,76,6],[24429,1655,2128,1048,76,75,76,6],[24431,943,2021,294,76,75,76,6],[24432,549,2019,60,76,75,76,6],[27011,869,28,754,76,74,76,5],[22384,1474,2022,456,76,75,76,5],[22381,877,2202,622,76,75,76,5],[23916,1728,2037,951,76,75,76,5],[26754,910,102,303,76,74,76,4],[24178,1424,2105,121,76,75,76,4],[23923,1001,1981,106,76,75,76,4],[22642,1665,2104,831,76,75,76,4],[22385,972,1976,1778,76,75,76,4],[23917,531,2046,1754,76,75,76,4],[24430,828,2078,558,76,75,76,4],[24176,1659,2086,1511,76,75,76,4],[22891,1592,2250,1248,76,75,76,4],[22891,1476,2250,346,76,75,76,4],[24434,8,2068,164,76,75,76,3],[24173,874,2090,755,76,75,76,3],[24177,1061,1959,1706,76,75,76,2],[23922,1781,1989,700,76,75,76,2],[22900,456,2114,553,76,75,76,2],[22385,1272,1946,904,76,75,76,2],[23147,1462,2215,1238,76,75,76,2],[22129,1607,2259,708,76,75,76,2],[22130,694,2744,727,76,75,76,2],[22130,1671,3234,979,76,75,76,2],[25983,1683,-5,420,77,77,77,5],[25983,1191,115,1685,77,77,78,3],[26239,1748,145,1292,78,77,78,7],[22379,171,4013,1762,78,78,80,6],[25983,402,29,674,78,77,78,6],[26238,331,233,858,78,77,78,5],[22378,1128,4006,1431,78,78,80,5],[21868,343,2969,1802,78,78,80,5],[25982,1386,13,1245,78,77,78,5],[26497,874,102,1439,78,77,78,4],[26238,1900,163,299,78,78,78,4],[26240,923,146,1367,78,77,78,4],[26496,1829,124,715,78,77,78,4],[22124,1071,2844,464,78,78,80,4],[24436,1827,4574,744,78,78,80,3],[24435,1255,3974,995,78,78,80,3],[22124,1210,2880,1511,78,78,80,3],[22897,842,3240,1039,78,78,80,3],[23925,1,3182,1745,78,78,78,3],[26238,948,98,1715,78,77,78,2],[25984,411,141,1665,78,78,78,2],[26495,1858,207,892,79,79,80,5],[26495,1847,217,1864,79,79,80,3],[22893,1609,3312,469,80,78,80,9],[22896,37,3945,1233,80,78,80,8],[23148,1497,2904,106,80,78,80,8],[22896,1159,3603,179,80,78,80,8],[26495,730,168,456,80,79,80,6],[26752,1365,180,1014,80,79,80,6],[22893,368,3133,709,80,78,80,6],[22894,642,3587,1281,80,78,80,6],[22638,1361,3492,1296,80,78,80,6],[22639,895,3567,1521,80,78,80,6],[22896,754,4022,1808,80,78,80,6],[22123,1660,4820,1865,80,78,80,5],[26752,54,164,1323,80,79,80,5],[24180,477,5347,1349,80,78,80,4],[24180,1468,5018,1299,80,78,80,4],[24179,704,3798,1138,80,78,80,4],[23924,478,3527,1646,80,78,80,4],[22379,191,5673,115,80,78,80,4],[22123,959,5144,1184,80,78,80,4],[22379,1347,4398,1271,80,78,80,4],[22122,621,3886,1732,80,78,80,4],[22122,953,3693,623,80,78,80,4],[21867,224,3436,1712,80,78,80,4],[21867,1195,3369,1547,80,78,80,4],[22640,202,3519,667,80,78,80,4],[22897,181,3494,349,80,78,80,4],[26496,864,232,1781,80,79,80,3],[24436,633,4148,1600,80,78,80,3],[24179,1428,3565,144,80,78,80,3],[22894,1707,3632,801,80,78,80,3],[22637,912,3297,658,80,78,80,3],[26753,755,93,827,80,79,80,3],[21872,1497,2093,1351,82,82,83,13],[21870,1641,2105,1579,82,82,83,10],[24941,982,2410,1374,82,82,83,9],[24685,1708,2117,540,82,82,83,9],[24944,482,2400,982,82,82,83,9],[21617,1917,2094,873,82,82,83,8],[24688,1394,2112,251,82,82,83,7],[21870,650,2131,1141,82,82,83,7],[24686,821,2103,116,82,82,83,6],[24428,1489,2272,1691,82,82,83,5],[24172,568,2894,157,82,82,82,5],[24430,1918,2091,1653,82,82,83,5],[24944,603,2789,1918,82,82,83,5],[24944,1555,2535,1488,82,82,83,5],[24428,1560,2546,606,82,82,82,4],[24432,1812,2050,1296,82,82,83,4],[24172,1145,2689,985,82,82,82,3],[23915,1078,3373,1326,82,82,83,3],[23915,47,3415,1786,82,82,82,3],[23659,742,3315,1852,82,82,82,3],[24689,1020,2092,233,82,82,82,3],[23659,630,3011,718,82,82,82,3],[23403,611,2838,1641,82,82,82,2],[21871,1522,2160,1593,83,82,83,12],[24686,1717,2277,971,83,82,83,10],[24687,526,2380,1754,83,82,83,10],[24688,709,2144,873,83,82,83,10],[22127,1741,2216,751,83,82,83,10],[24684,1259,2100,1223,83,82,83,8],[24686,913,2345,1714,83,82,83,8],[24687,1163,2184,690,83,82,83,8],[24944,1651,2244,307,83,82,83,8],[24941,188,2297,743,83,82,83,8],[22127,437,2100,912,83,82,83,8],[21871,692,2093,920,83,82,83,8],[22128,1009,2147,344,83,82,83,8],[21617,654,2093,1781,83,82,83,8],[21873,526,2093,1129,83,82,83,8],[24941,1073,2198,93,83,82,83,7],[24687,1797,2182,1734,83,82,83,6],[25197,407,2468,158,83,82,83,6],[24689,950,2093,1134,83,82,83,4],[23919,467,3846,1175,85,85,87,9],[23405,493,3223,1179,85,85,87,7],[23661,1602,3714,1352,85,85,87,7],[22387,694,3820,483,85,85,87,5],[22389,125,4228,612,85,85,87,4],[23918,1217,3812,800,85,85,87,4],[22644,1285,2876,736,85,85,87,3],[22388,450,3365,1783,85,85,87,3],[23919,942,4109,25,87,85,87,8],[23149,927,3258,1523,87,85,87,7],[23153,736,4104,1250,87,85,87,6],[23409,237,4273,1459,87,85,87,6],[23664,351,4270,1068,87,85,87,6],[23662,1413,3862,1332,87,85,87,6],[23405,1147,3289,546,87,85,87,6],[22132,404,5385,1622,87,85,87,5],[24171,331,5345,1479,87,85,87,5],[24428,46,4687,125,87,85,87,5],[22132,1701,4812,1602,87,85,87,4],[22388,1422,3616,1631,87,85,87,4],[22387,1350,3897,1179,87,85,87,4],[24171,1414,5005,1256,87,85,87,4],[24427,1589,4495,1089,87,85,87,4],[24427,730,4219,1576,87,85,87,4],[24426,1517,4015,1248,87,85,87,4],[23406,151,3721,794,87,85,87,4],[23664,1492,4218,582,87,85,87,4],[23662,644,3830,431,87,85,87,4],[23406,928,4032,1289,87,85,87,4],[23920,430,4732,894,88,88,90,4],[23666,766,3456,1030,88,88,88,4],[23665,1549,3366,1880,88,88,88,4],[23920,1364,4105,422,88,88,88,3],[23665,490,3869,1244,88,88,88,3],[23666,1777,3671,100,88,88,88,3],[23149,1840,4284,320,88,88,90,3],[23150,948,3899,686,88,88,88,3],[23665,1179,3861,209,88,88,88,2],[23410,576,4015,976,88,88,88,2],[23666,758,4384,94,88,88,88,2],[23150,1878,3915,184,88,88,88,2]];
 // LEVEL_GEAR[town] rows: [refObjId, shop, TID3, TID4, country, sex, required level, price].
 const LEVEL_GEAR = {"KT":[[1847,"accessory",5,1,0,2,34,81000],[1850,"accessory",5,1,0,2,44,181000],[1853,"accessory",5,1,0,2,54,348500],[1856,"accessory",5,1,0,2,66,1036000],[1859,"accessory",5,1,0,2,78,1980000],[1883,"accessory",5,2,0,2,36,112500],[1886,"accessory",5,2,0,2,46,241500],[1889,"accessory",5,2,0,2,56,455000],[1892,"accessory",5,2,0,2,68,1343000],[1895,"accessory",5,2,0,2,80,2384000],[1811,"accessory",5,3,0,2,32,61500],[1814,"accessory",5,3,0,2,42,143000],[1817,"accessory",5,3,0,2,52,282000],[1820,"accessory",5,3,0,2,64,705000],[1823,"accessory",5,3,0,2,76,1652000],[3731,"accessory",7,5,3,0,10,500],[3732,"accessory",7,5,3,0,10,500],[3733,"accessory",7,5,3,0,10,500],[3734,"accessory",7,5,3,0,10,500],[3735,"accessory",7,5,3,0,10,500],[3726,"accessory",7,5,3,1,10,500],[3727,"accessory",7,5,3,1,10,500],[3728,"accessory",7,5,3,1,10,500],[3729,"accessory",7,5,3,1,10,500],[3730,"accessory",7,5,3,1,10,500],[14549,"accessory",12,1,1,2,34,81000],[14552,"accessory",12,1,1,2,44,181000],[14555,"accessory",12,1,1,2,54,348500],[14558,"accessory",12,1,1,2,66,1036000],[14561,"accessory",12,1,1,2,78,1980000],[14585,"accessory",12,2,1,2,36,112500],[14588,"accessory",12,2,1,2,46,241500],[14591,"accessory",12,2,1,2,56,455000],[14594,"accessory",12,2,1,2,68,1343000],[14597,"accessory",12,2,1,2,80,2384000],[14513,"accessory",12,3,1,2,32,61500],[14516,"accessory",12,3,1,2,42,143000],[14519,"accessory",12,3,1,2,52,282000],[14522,"accessory",12,3,1,2,64,705000],[14525,"accessory",12,3,1,2,76,1652000],[839,"armor",1,1,0,1,35,90500],[1595,"armor",1,1,0,0,35,90500],[842,"armor",1,1,0,1,45,198000],[1598,"armor",1,1,0,0,45,198000],[845,"armor",1,1,0,1,55,377500],[1601,"armor",1,1,0,0,55,377500],[848,"armor",1,1,0,1,67,1118000],[1604,"armor",1,1,0,0,67,1118000],[851,"armor",1,1,0,1,79,2115000],[1607,"armor",1,1,0,0,79,2115000],[875,"armor",1,2,0,1,33,62000],[1631,"armor",1,2,0,0,33,62000],[878,"armor",1,2,0,1,43,141000],[1634,"armor",1,2,0,0,43,141000],[881,"armor",1,2,0,1,53,274500],[1637,"armor",1,2,0,0,53,274500],[884,"armor",1,2,0,1,65,821000],[1640,"armor",1,2,0,0,65,821000],[887,"armor",1,2,0,1,77,1585000],[1643,"armor",1,2,0,0,77,1585000],[911,"armor",1,3,0,1,37,138500],[1667,"armor",1,3,0,0,37,138500],[914,"armor",1,3,0,1,47,293000],[1670,"armor",1,3,0,0,47,293000],[917,"armor",1,3,0,1,57,548000],[1673,"armor",1,3,0,0,57,548000],[920,"armor",1,3,0,1,69,1612000],[1676,"armor",1,3,0,0,69,1612000],[923,"armor",1,3,0,1,81,2744000],[1679,"armor",1,3,0,0,81,2744000],[947,"armor",1,4,0,1,36,104500],[1703,"armor",1,4,0,0,36,104500],[950,"armor",1,4,0,1,46,224500],[1706,"armor",1,4,0,0,46,224500],[953,"armor",1,4,0,1,56,423500],[1709,"armor",1,4,0,0,56,423500],[956,"armor",1,4,0,1,68,1251000],[1712,"armor",1,4,0,0,68,1251000],[959,"armor",1,4,0,1,80,2219000],[1715,"armor",1,4,0,0,80,2219000],[983,"armor",1,5,0,1,32,52000],[1739,"armor",1,5,0,0,32,52000],[986,"armor",1,5,0,1,42,121000],[1742,"armor",1,5,0,0,42,121000],[989,"armor",1,5,0,1,52,239000],[1745,"armor",1,5,0,0,52,239000],[992,"armor",1,5,0,1,64,597000],[1748,"armor",1,5,0,0,64,597000],[995,"armor",1,5,0,1,76,1401000],[1751,"armor",1,5,0,0,76,1401000],[1019,"armor",1,6,0,1,34,78000],[1775,"armor",1,6,0,0,34,78000],[1022,"armor",1,6,0,1,44,173500],[1778,"armor",1,6,0,0,44,173500],[1025,"armor",1,6,0,1,54,334500],[1781,"armor",1,6,0,0,54,334500],[1028,"armor",1,6,0,1,66,995000],[1784,"armor",1,6,0,0,66,995000],[1031,"armor",1,6,0,1,78,1900000],[1787,"armor",1,6,0,0,78,1900000],[587,"armor",2,1,0,1,35,90500],[1343,"armor",2,1,0,0,35,90500],[590,"armor",2,1,0,1,45,198000],[1346,"armor",2,1,0,0,45,198000],[593,"armor",2,1,0,1,55,377500],[1349,"armor",2,1,0,0,55,377500],[596,"armor",2,1,0,1,67,1118000],[1352,"armor",2,1,0,0,67,1118000],[599,"armor",2,1,0,1,79,2115000],[1355,"armor",2,1,0,0,79,2115000],[623,"armor",2,2,0,1,33,62000],[1379,"armor",2,2,0,0,33,62000],[626,"armor",2,2,0,1,43,141000],[1382,"armor",2,2,0,0,43,141000],[629,"armor",2,2,0,1,53,274500],[1385,"armor",2,2,0,0,53,274500],[632,"armor",2,2,0,1,65,821000],[1388,"armor",2,2,0,0,65,821000],[635,"armor",2,2,0,1,77,1585000],[1391,"armor",2,2,0,0,77,1585000],[659,"armor",2,3,0,1,37,138500],[1415,"armor",2,3,0,0,37,138500],[662,"armor",2,3,0,1,47,293000],[1418,"armor",2,3,0,0,47,293000],[665,"armor",2,3,0,1,57,548000],[1421,"armor",2,3,0,0,57,548000],[668,"armor",2,3,0,1,69,1612000],[1424,"armor",2,3,0,0,69,1612000],[671,"armor",2,3,0,1,81,2744000],[1427,"armor",2,3,0,0,81,2744000],[695,"armor",2,4,0,1,36,104500],[1451,"armor",2,4,0,0,36,104500],[698,"armor",2,4,0,1,46,224500],[1454,"armor",2,4,0,0,46,224500],[701,"armor",2,4,0,1,56,423500],[1457,"armor",2,4,0,0,56,423500],[704,"armor",2,4,0,1,68,1251000],[1460,"armor",2,4,0,0,68,1251000],[707,"armor",2,4,0,1,80,2219000],[1463,"armor",2,4,0,0,80,2219000],[731,"armor",2,5,0,1,32,52000],[1487,"armor",2,5,0,0,32,52000],[734,"armor",2,5,0,1,42,121000],[1490,"armor",2,5,0,0,42,121000],[737,"armor",2,5,0,1,52,239000],[1493,"armor",2,5,0,0,52,239000],[740,"armor",2,5,0,1,64,597000],[1496,"armor",2,5,0,0,64,597000],[743,"armor",2,5,0,1,76,1401000],[1499,"armor",2,5,0,0,76,1401000],[767,"armor",2,6,0,1,34,78000],[1523,"armor",2,6,0,0,34,78000],[770,"armor",2,6,0,1,44,173500],[1526,"armor",2,6,0,0,44,173500],[773,"armor",2,6,0,1,54,334500],[1529,"armor",2,6,0,0,54,334500],[776,"armor",2,6,0,1,66,995000],[1532,"armor",2,6,0,0,66,995000],[779,"armor",2,6,0,1,78,1900000],[1535,"armor",2,6,0,0,78,1900000],[335,"armor",3,1,0,1,35,90500],[1091,"armor",3,1,0,0,35,90500],[338,"armor",3,1,0,1,45,198000],[1094,"armor",3,1,0,0,45,198000],[341,"armor",3,1,0,1,55,377500],[1097,"armor",3,1,0,0,55,377500],[344,"armor",3,1,0,1,67,1118000],[1100,"armor",3,1,0,0,67,1118000],[347,"armor",3,1,0,1,79,2115000],[1103,"armor",3,1,0,0,79,2115000],[371,"armor",3,2,0,1,33,62000],[1127,"armor",3,2,0,0,33,62000],[374,"armor",3,2,0,1,43,141000],[1130,"armor",3,2,0,0,43,141000],[377,"armor",3,2,0,1,53,274500],[1133,"armor",3,2,0,0,53,274500],[380,"armor",3,2,0,1,65,821000],[1136,"armor",3,2,0,0,65,821000],[383,"armor",3,2,0,1,77,1585000],[1139,"armor",3,2,0,0,77,1585000],[407,"armor",3,3,0,1,37,138500],[1163,"armor",3,3,0,0,37,138500],[410,"armor",3,3,0,1,47,293000],[1166,"armor",3,3,0,0,47,293000],[413,"armor",3,3,0,1,57,548000],[1169,"armor",3,3,0,0,57,548000],[416,"armor",3,3,0,1,69,1612000],[1172,"armor",3,3,0,0,69,1612000],[419,"armor",3,3,0,1,81,2744000],[1175,"armor",3,3,0,0,81,2744000],[443,"armor",3,4,0,1,36,104500],[1199,"armor",3,4,0,0,36,104500],[446,"armor",3,4,0,1,46,224500],[1202,"armor",3,4,0,0,46,224500],[449,"armor",3,4,0,1,56,423500],[1205,"armor",3,4,0,0,56,423500],[452,"armor",3,4,0,1,68,1251000],[1208,"armor",3,4,0,0,68,1251000],[455,"armor",3,4,0,1,80,2219000],[1211,"armor",3,4,0,0,80,2219000],[479,"armor",3,5,0,1,32,52000],[1235,"armor",3,5,0,0,32,52000],[482,"armor",3,5,0,1,42,121000],[1238,"armor",3,5,0,0,42,121000],[485,"armor",3,5,0,1,52,239000],[1241,"armor",3,5,0,0,52,239000],[488,"armor",3,5,0,1,64,597000],[1244,"armor",3,5,0,0,64,597000],[491,"armor",3,5,0,1,76,1401000],[1247,"armor",3,5,0,0,76,1401000],[515,"armor",3,6,0,1,34,78000],[1271,"armor",3,6,0,0,34,78000],[518,"armor",3,6,0,1,44,173500],[1274,"armor",3,6,0,0,44,173500],[521,"armor",3,6,0,1,54,334500],[1277,"armor",3,6,0,0,54,334500],[524,"armor",3,6,0,1,66,995000],[1280,"armor",3,6,0,0,66,995000],[527,"armor",3,6,0,1,78,1900000],[1283,"armor",3,6,0,0,78,1900000],[12029,"armor",9,1,1,1,35,90500],[13541,"armor",9,1,1,0,35,90500],[12032,"armor",9,1,1,1,45,198000],[13544,"armor",9,1,1,0,45,198000],[12035,"armor",9,1,1,1,55,377500],[13547,"armor",9,1,1,0,55,377500],[12038,"armor",9,1,1,1,67,1118000],[13550,"armor",9,1,1,0,67,1118000],[12041,"armor",9,1,1,1,79,2115000],[13553,"armor",9,1,1,0,79,2115000],[12065,"armor",9,2,1,1,33,62000],[13577,"armor",9,2,1,0,33,62000],[12068,"armor",9,2,1,1,43,141000],[13580,"armor",9,2,1,0,43,141000],[12071,"armor",9,2,1,1,53,274500],[13583,"armor",9,2,1,0,53,274500],[12074,"armor",9,2,1,1,65,821000],[13586,"armor",9,2,1,0,65,821000],[12077,"armor",9,2,1,1,77,1585000],[13589,"armor",9,2,1,0,77,1585000],[12101,"armor",9,3,1,1,37,138500],[13613,"armor",9,3,1,0,37,138500],[12104,"armor",9,3,1,1,47,293000],[13616,"armor",9,3,1,0,47,293000],[12107,"armor",9,3,1,1,57,548000],[13619,"armor",9,3,1,0,57,548000],[12110,"armor",9,3,1,1,69,1612000],[13622,"armor",9,3,1,0,69,1612000],[12113,"armor",9,3,1,1,81,2744000],[13625,"armor",9,3,1,0,81,2744000],[12137,"armor",9,4,1,1,36,104500],[13649,"armor",9,4,1,0,36,104500],[12140,"armor",9,4,1,1,46,224500],[13652,"armor",9,4,1,0,46,224500],[12143,"armor",9,4,1,1,56,423500],[13655,"armor",9,4,1,0,56,423500],[12146,"armor",9,4,1,1,68,1251000],[13658,"armor",9,4,1,0,68,1251000],[12149,"armor",9,4,1,1,80,2219000],[13661,"armor",9,4,1,0,80,2219000],[12173,"armor",9,5,1,1,32,52000],[13685,"armor",9,5,1,0,32,52000],[12176,"armor",9,5,1,1,42,121000],[13688,"armor",9,5,1,0,42,121000],[12179,"armor",9,5,1,1,52,239000],[13691,"armor",9,5,1,0,52,239000],[12182,"armor",9,5,1,1,64,597000],[13694,"armor",9,5,1,0,64,597000],[12185,"armor",9,5,1,1,76,1401000],[13697,"armor",9,5,1,0,76,1401000],[12209,"armor",9,6,1,1,34,78000],[13721,"armor",9,6,1,0,34,78000],[12212,"armor",9,6,1,1,44,173500],[13724,"armor",9,6,1,0,44,173500],[12215,"armor",9,6,1,1,54,334500],[13727,"armor",9,6,1,0,54,334500],[12218,"armor",9,6,1,1,66,995000],[13730,"armor",9,6,1,0,66,995000],[12221,"armor",9,6,1,1,78,1900000],[13733,"armor",9,6,1,0,78,1900000],[11777,"armor",10,1,1,1,35,90500],[13289,"armor",10,1,1,0,35,90500],[11780,"armor",10,1,1,1,45,198000],[13292,"armor",10,1,1,0,45,198000],[11783,"armor",10,1,1,1,55,377500],[13295,"armor",10,1,1,0,55,377500],[11786,"armor",10,1,1,1,67,1118000],[13298,"armor",10,1,1,0,67,1118000],[11789,"armor",10,1,1,1,79,2115000],[13301,"armor",10,1,1,0,79,2115000],[11813,"armor",10,2,1,1,33,62000],[13325,"armor",10,2,1,0,33,62000],[11816,"armor",10,2,1,1,43,141000],[13328,"armor",10,2,1,0,43,141000],[11819,"armor",10,2,1,1,53,274500],[13331,"armor",10,2,1,0,53,274500],[11822,"armor",10,2,1,1,65,821000],[13334,"armor",10,2,1,0,65,821000],[11825,"armor",10,2,1,1,77,1585000],[13337,"armor",10,2,1,0,77,1585000],[11849,"armor",10,3,1,1,37,138500],[13361,"armor",10,3,1,0,37,138500],[11852,"armor",10,3,1,1,47,293000],[13364,"armor",10,3,1,0,47,293000],[11855,"armor",10,3,1,1,57,548000],[13367,"armor",10,3,1,0,57,548000],[11858,"armor",10,3,1,1,69,1612000],[13370,"armor",10,3,1,0,69,1612000],[11861,"armor",10,3,1,1,81,2744000],[13373,"armor",10,3,1,0,81,2744000],[11885,"armor",10,4,1,1,36,104500],[13397,"armor",10,4,1,0,36,104500],[11888,"armor",10,4,1,1,46,224500],[13400,"armor",10,4,1,0,46,224500],[11891,"armor",10,4,1,1,56,423500],[13403,"armor",10,4,1,0,56,423500],[11894,"armor",10,4,1,1,68,1251000],[13406,"armor",10,4,1,0,68,1251000],[11897,"armor",10,4,1,1,80,2219000],[13409,"armor",10,4,1,0,80,2219000],[11921,"armor",10,5,1,1,32,52000],[13433,"armor",10,5,1,0,32,52000],[11924,"armor",10,5,1,1,42,121000],[13436,"armor",10,5,1,0,42,121000],[11927,"armor",10,5,1,1,52,239000],[13439,"armor",10,5,1,0,52,239000],[11930,"armor",10,5,1,1,64,597000],[13442,"armor",10,5,1,0,64,597000],[11933,"armor",10,5,1,1,76,1401000],[13445,"armor",10,5,1,0,76,1401000],[11957,"armor",10,6,1,1,34,78000],[13469,"armor",10,6,1,0,34,78000],[11960,"armor",10,6,1,1,44,173500],[13472,"armor",10,6,1,0,44,173500],[11963,"armor",10,6,1,1,54,334500],[13475,"armor",10,6,1,0,54,334500],[11966,"armor",10,6,1,1,66,995000],[13478,"armor",10,6,1,0,66,995000],[11969,"armor",10,6,1,1,78,1900000],[13481,"armor",10,6,1,0,78,1900000],[11525,"armor",11,1,1,1,35,90500],[13037,"armor",11,1,1,0,35,90500],[11528,"armor",11,1,1,1,45,198000],[13040,"armor",11,1,1,0,45,198000],[11531,"armor",11,1,1,1,55,377500],[13043,"armor",11,1,1,0,55,377500],[11534,"armor",11,1,1,1,67,1118000],[13046,"armor",11,1,1,0,67,1118000],[11537,"armor",11,1,1,1,79,2115000],[13049,"armor",11,1,1,0,79,2115000],[11561,"armor",11,2,1,1,33,62000],[13073,"armor",11,2,1,0,33,62000],[11564,"armor",11,2,1,1,43,141000],[13076,"armor",11,2,1,0,43,141000],[11567,"armor",11,2,1,1,53,274500],[13079,"armor",11,2,1,0,53,274500],[11570,"armor",11,2,1,1,65,821000],[13082,"armor",11,2,1,0,65,821000],[11573,"armor",11,2,1,1,77,1585000],[13085,"armor",11,2,1,0,77,1585000],[11597,"armor",11,3,1,1,37,138500],[13109,"armor",11,3,1,0,37,138500],[11600,"armor",11,3,1,1,47,293000],[13112,"armor",11,3,1,0,47,293000],[11603,"armor",11,3,1,1,57,548000],[13115,"armor",11,3,1,0,57,548000],[11606,"armor",11,3,1,1,69,1612000],[13118,"armor",11,3,1,0,69,1612000],[11609,"armor",11,3,1,1,81,2744000],[13121,"armor",11,3,1,0,81,2744000],[11633,"armor",11,4,1,1,36,104500],[13145,"armor",11,4,1,0,36,104500],[11636,"armor",11,4,1,1,46,224500],[13148,"armor",11,4,1,0,46,224500],[11639,"armor",11,4,1,1,56,423500],[13151,"armor",11,4,1,0,56,423500],[11642,"armor",11,4,1,1,68,1251000],[13154,"armor",11,4,1,0,68,1251000],[11645,"armor",11,4,1,1,80,2219000],[13157,"armor",11,4,1,0,80,2219000],[11669,"armor",11,5,1,1,32,52000],[13181,"armor",11,5,1,0,32,52000],[11672,"armor",11,5,1,1,42,121000],[13184,"armor",11,5,1,0,42,121000],[11675,"armor",11,5,1,1,52,239000],[13187,"armor",11,5,1,0,52,239000],[11678,"armor",11,5,1,1,64,597000],[13190,"armor",11,5,1,0,64,597000],[11681,"armor",11,5,1,1,76,1401000],[13193,"armor",11,5,1,0,76,1401000],[11705,"armor",11,6,1,1,34,78000],[13217,"armor",11,6,1,0,34,78000],[11708,"armor",11,6,1,1,44,173500],[13220,"armor",11,6,1,0,44,173500],[11711,"armor",11,6,1,1,54,334500],[13223,"armor",11,6,1,0,54,334500],[11714,"armor",11,6,1,1,66,995000],[13226,"armor",11,6,1,0,66,995000],[11717,"armor",11,6,1,1,78,1900000],[13229,"armor",11,6,1,0,78,1900000],[263,"smith",4,1,0,2,32,83500],[266,"smith",4,1,0,2,42,194500],[269,"smith",4,1,0,2,52,383000],[272,"smith",4,1,0,2,64,957000],[275,"smith",4,1,0,2,76,2245000],[11399,"smith",4,2,1,2,32,83500],[11402,"smith",4,2,1,2,42,194500],[11405,"smith",4,2,1,2,52,383000],[11408,"smith",4,2,1,2,64,957000],[11411,"smith",4,2,1,2,76,2245000],[83,"smith",6,2,0,2,32,150000],[86,"smith",6,2,0,2,42,350000],[89,"smith",6,2,0,2,52,689000],[92,"smith",6,2,0,2,64,1724000],[95,"smith",6,2,0,2,76,4042000],[119,"smith",6,3,0,2,32,150000],[122,"smith",6,3,0,2,42,350000],[125,"smith",6,3,0,2,52,689000],[128,"smith",6,3,0,2,64,1724000],[131,"smith",6,3,0,2,76,4042000],[155,"smith",6,4,0,2,32,167000],[158,"smith",6,4,0,2,42,389000],[161,"smith",6,4,0,2,52,766000],[164,"smith",6,4,0,2,64,1915000],[167,"smith",6,4,0,2,76,4491000],[191,"smith",6,5,0,2,32,167000],[194,"smith",6,5,0,2,42,389000],[197,"smith",6,5,0,2,52,766000],[200,"smith",6,5,0,2,64,1915000],[203,"smith",6,5,0,2,76,4491000],[227,"smith",6,6,0,2,32,167000],[230,"smith",6,6,0,2,42,389000],[233,"smith",6,6,0,2,52,766000],[236,"smith",6,6,0,2,64,1915000],[239,"smith",6,6,0,2,76,4491000],[10787,"smith",6,7,1,2,32,150000],[10790,"smith",6,7,1,2,42,350000],[10793,"smith",6,7,1,2,52,689000],[10796,"smith",6,7,1,2,64,1724000],[10799,"smith",6,7,1,2,76,4042000],[10823,"smith",6,8,1,2,32,167000],[10826,"smith",6,8,1,2,42,389000],[10829,"smith",6,8,1,2,52,766000],[10832,"smith",6,8,1,2,64,1915000],[10835,"smith",6,8,1,2,76,4491000],[10859,"smith",6,9,1,2,32,167000],[10862,"smith",6,9,1,2,42,389000],[10865,"smith",6,9,1,2,52,766000],[10868,"smith",6,9,1,2,64,1915000],[10871,"smith",6,9,1,2,76,4491000],[10931,"smith",6,10,1,2,32,150000],[10934,"smith",6,10,1,2,42,350000],[10937,"smith",6,10,1,2,52,689000],[10940,"smith",6,10,1,2,64,1724000],[10943,"smith",6,10,1,2,76,4042000],[10967,"smith",6,11,1,2,32,167000],[10970,"smith",6,11,1,2,42,389000],[10973,"smith",6,11,1,2,52,766000],[10976,"smith",6,11,1,2,64,1915000],[10979,"smith",6,11,1,2,76,4491000],[10895,"smith",6,12,1,2,32,167000],[10898,"smith",6,12,1,2,42,389000],[10901,"smith",6,12,1,2,52,766000],[10904,"smith",6,12,1,2,64,1915000],[10907,"smith",6,12,1,2,76,4491000],[10751,"smith",6,13,1,2,32,167000],[10754,"smith",6,13,1,2,42,389000],[10757,"smith",6,13,1,2,52,766000],[10760,"smith",6,13,1,2,64,1915000],[10763,"smith",6,13,1,2,76,4491000],[11003,"smith",6,14,1,2,32,167000],[11006,"smith",6,14,1,2,42,389000],[11009,"smith",6,14,1,2,52,766000],[11012,"smith",6,14,1,2,64,1915000],[11015,"smith",6,14,1,2,76,4491000],[11039,"smith",6,15,1,2,32,167000],[11042,"smith",6,15,1,2,42,389000],[11045,"smith",6,15,1,2,52,766000],[11048,"smith",6,15,1,2,64,1915000],[11051,"smith",6,15,1,2,76,4491000]],"CH":[[1835,"accessory",5,1,0,2,1,395],[1838,"accessory",5,1,0,2,10,1750],[1841,"accessory",5,1,0,2,18,10250],[1871,"accessory",5,2,0,2,1,460],[1874,"accessory",5,2,0,2,12,3250],[1877,"accessory",5,2,0,2,20,16250],[1799,"accessory",5,3,0,2,1,365],[1802,"accessory",5,3,0,2,8,1250],[1805,"accessory",5,3,0,2,16,6250],[3731,"accessory",7,5,3,0,10,500],[3732,"accessory",7,5,3,0,10,500],[3733,"accessory",7,5,3,0,10,500],[3734,"accessory",7,5,3,0,10,500],[3735,"accessory",7,5,3,0,10,500],[3726,"accessory",7,5,3,1,10,500],[3727,"accessory",7,5,3,1,10,500],[3728,"accessory",7,5,3,1,10,500],[3729,"accessory",7,5,3,1,10,500],[3730,"accessory",7,5,3,1,10,500],[827,"armor",1,1,0,1,1,405],[1583,"armor",1,1,0,0,1,405],[830,"armor",1,1,0,1,11,2000],[1586,"armor",1,1,0,0,11,2000],[833,"armor",1,1,0,1,19,12250],[1589,"armor",1,1,0,0,19,12250],[863,"armor",1,2,0,1,1,335],[1619,"armor",1,2,0,0,1,335],[866,"armor",1,2,0,1,9,1250],[1622,"armor",1,2,0,0,9,1250],[869,"armor",1,2,0,1,17,7000],[1625,"armor",1,2,0,0,17,7000],[899,"armor",1,3,0,1,1,520],[1655,"armor",1,3,0,0,1,520],[902,"armor",1,3,0,1,13,4500],[1658,"armor",1,3,0,0,13,4500],[905,"armor",1,3,0,1,21,22750],[1661,"armor",1,3,0,0,21,22750],[935,"armor",1,4,0,1,1,430],[1691,"armor",1,4,0,0,1,430],[938,"armor",1,4,0,1,12,3000],[1694,"armor",1,4,0,0,12,3000],[941,"armor",1,4,0,1,20,15250],[1697,"armor",1,4,0,0,20,15250],[971,"armor",1,5,0,1,1,310],[1727,"armor",1,5,0,0,1,310],[974,"armor",1,5,0,1,8,1000],[1730,"armor",1,5,0,0,8,1000],[977,"armor",1,5,0,1,16,5250],[1733,"armor",1,5,0,0,16,5250],[1007,"armor",1,6,0,1,1,380],[1763,"armor",1,6,0,0,1,380],[1010,"armor",1,6,0,1,10,1500],[1766,"armor",1,6,0,0,10,1500],[1013,"armor",1,6,0,1,18,9750],[1769,"armor",1,6,0,0,18,9750],[575,"armor",2,1,0,1,1,405],[1331,"armor",2,1,0,0,1,405],[578,"armor",2,1,0,1,11,2000],[1334,"armor",2,1,0,0,11,2000],[581,"armor",2,1,0,1,19,12250],[1337,"armor",2,1,0,0,19,12250],[611,"armor",2,2,0,1,1,335],[1367,"armor",2,2,0,0,1,335],[614,"armor",2,2,0,1,9,1250],[1370,"armor",2,2,0,0,9,1250],[617,"armor",2,2,0,1,17,7000],[1373,"armor",2,2,0,0,17,7000],[647,"armor",2,3,0,1,1,520],[1403,"armor",2,3,0,0,1,520],[650,"armor",2,3,0,1,13,4500],[1406,"armor",2,3,0,0,13,4500],[653,"armor",2,3,0,1,21,22750],[1409,"armor",2,3,0,0,21,22750],[683,"armor",2,4,0,1,1,430],[1439,"armor",2,4,0,0,1,430],[686,"armor",2,4,0,1,12,3000],[1442,"armor",2,4,0,0,12,3000],[689,"armor",2,4,0,1,20,15250],[1445,"armor",2,4,0,0,20,15250],[719,"armor",2,5,0,1,1,310],[1475,"armor",2,5,0,0,1,310],[722,"armor",2,5,0,1,8,1000],[1478,"armor",2,5,0,0,8,1000],[725,"armor",2,5,0,1,16,5250],[1481,"armor",2,5,0,0,16,5250],[755,"armor",2,6,0,1,1,380],[1511,"armor",2,6,0,0,1,380],[758,"armor",2,6,0,1,10,1500],[1514,"armor",2,6,0,0,10,1500],[761,"armor",2,6,0,1,18,9750],[1517,"armor",2,6,0,0,18,9750],[323,"armor",3,1,0,1,1,405],[1079,"armor",3,1,0,0,1,405],[326,"armor",3,1,0,1,11,2000],[1082,"armor",3,1,0,0,11,2000],[329,"armor",3,1,0,1,19,12250],[1085,"armor",3,1,0,0,19,12250],[359,"armor",3,2,0,1,1,335],[1115,"armor",3,2,0,0,1,335],[362,"armor",3,2,0,1,9,1250],[1118,"armor",3,2,0,0,9,1250],[365,"armor",3,2,0,1,17,7000],[1121,"armor",3,2,0,0,17,7000],[395,"armor",3,3,0,1,1,520],[1151,"armor",3,3,0,0,1,520],[398,"armor",3,3,0,1,13,4500],[1154,"armor",3,3,0,0,13,4500],[401,"armor",3,3,0,1,21,22750],[1157,"armor",3,3,0,0,21,22750],[431,"armor",3,4,0,1,1,430],[1187,"armor",3,4,0,0,1,430],[434,"armor",3,4,0,1,12,3000],[1190,"armor",3,4,0,0,12,3000],[437,"armor",3,4,0,1,20,15250],[1193,"armor",3,4,0,0,20,15250],[467,"armor",3,5,0,1,1,310],[1223,"armor",3,5,0,0,1,310],[470,"armor",3,5,0,1,8,1000],[1226,"armor",3,5,0,0,8,1000],[473,"armor",3,5,0,1,16,5250],[1229,"armor",3,5,0,0,16,5250],[503,"armor",3,6,0,1,1,380],[1259,"armor",3,6,0,0,1,380],[506,"armor",3,6,0,1,10,1500],[1262,"armor",3,6,0,0,10,1500],[509,"armor",3,6,0,1,18,9750],[1265,"armor",3,6,0,0,18,9750],[251,"smith",4,1,0,2,1,495],[254,"smith",4,1,0,2,8,1750],[257,"smith",4,1,0,2,16,8500],[71,"smith",6,2,0,2,1,890],[74,"smith",6,2,0,2,8,3500],[77,"smith",6,2,0,2,16,15250],[107,"smith",6,3,0,2,1,890],[110,"smith",6,3,0,2,8,3500],[113,"smith",6,3,0,2,16,15250],[143,"smith",6,4,0,2,1,990],[146,"smith",6,4,0,2,8,3750],[149,"smith",6,4,0,2,16,17000],[179,"smith",6,5,0,2,1,990],[182,"smith",6,5,0,2,8,3750],[185,"smith",6,5,0,2,16,17000],[215,"smith",6,6,0,2,1,990],[218,"smith",6,6,0,2,8,3750],[221,"smith",6,6,0,2,16,17000]],"WC":[[1841,"accessory",5,1,0,2,18,10250],[1844,"accessory",5,1,0,2,26,35500],[1847,"accessory",5,1,0,2,34,81000],[1877,"accessory",5,2,0,2,20,16250],[1880,"accessory",5,2,0,2,28,51000],[1883,"accessory",5,2,0,2,36,112500],[1805,"accessory",5,3,0,2,16,6250],[1808,"accessory",5,3,0,2,24,25250],[1811,"accessory",5,3,0,2,32,61500],[3731,"accessory",7,5,3,0,10,500],[3732,"accessory",7,5,3,0,10,500],[3733,"accessory",7,5,3,0,10,500],[3734,"accessory",7,5,3,0,10,500],[3735,"accessory",7,5,3,0,10,500],[3726,"accessory",7,5,3,1,10,500],[3727,"accessory",7,5,3,1,10,500],[3728,"accessory",7,5,3,1,10,500],[3729,"accessory",7,5,3,1,10,500],[3730,"accessory",7,5,3,1,10,500],[833,"armor",1,1,0,1,19,12250],[1589,"armor",1,1,0,0,19,12250],[836,"armor",1,1,0,1,27,40500],[1592,"armor",1,1,0,0,27,40500],[839,"armor",1,1,0,1,35,90500],[1595,"armor",1,1,0,0,35,90500],[869,"armor",1,2,0,1,17,7000],[1625,"armor",1,2,0,0,17,7000],[872,"armor",1,2,0,1,25,26250],[1628,"armor",1,2,0,0,25,26250],[875,"armor",1,2,0,1,33,62000],[1631,"armor",1,2,0,0,33,62000],[905,"armor",1,3,0,1,21,22750],[1661,"armor",1,3,0,0,21,22750],[908,"armor",1,3,0,1,29,64000],[1664,"armor",1,3,0,0,29,64000],[911,"armor",1,3,0,1,37,138500],[1667,"armor",1,3,0,0,37,138500],[941,"armor",1,4,0,1,20,15250],[1697,"armor",1,4,0,0,20,15250],[944,"armor",1,4,0,1,28,47500],[1700,"armor",1,4,0,0,28,47500],[947,"armor",1,4,0,1,36,104500],[1703,"armor",1,4,0,0,36,104500],[977,"armor",1,5,0,1,16,5250],[1733,"armor",1,5,0,0,16,5250],[980,"armor",1,5,0,1,24,21500],[1736,"armor",1,5,0,0,24,21500],[983,"armor",1,5,0,1,32,52000],[1739,"armor",1,5,0,0,32,52000],[1013,"armor",1,6,0,1,18,9750],[1769,"armor",1,6,0,0,18,9750],[1016,"armor",1,6,0,1,26,34000],[1772,"armor",1,6,0,0,26,34000],[1019,"armor",1,6,0,1,34,78000],[1775,"armor",1,6,0,0,34,78000],[581,"armor",2,1,0,1,19,12250],[1337,"armor",2,1,0,0,19,12250],[584,"armor",2,1,0,1,27,40500],[1340,"armor",2,1,0,0,27,40500],[587,"armor",2,1,0,1,35,90500],[1343,"armor",2,1,0,0,35,90500],[617,"armor",2,2,0,1,17,7000],[1373,"armor",2,2,0,0,17,7000],[620,"armor",2,2,0,1,25,26250],[1376,"armor",2,2,0,0,25,26250],[623,"armor",2,2,0,1,33,62000],[1379,"armor",2,2,0,0,33,62000],[653,"armor",2,3,0,1,21,22750],[1409,"armor",2,3,0,0,21,22750],[656,"armor",2,3,0,1,29,64000],[1412,"armor",2,3,0,0,29,64000],[659,"armor",2,3,0,1,37,138500],[1415,"armor",2,3,0,0,37,138500],[689,"armor",2,4,0,1,20,15250],[1445,"armor",2,4,0,0,20,15250],[692,"armor",2,4,0,1,28,47500],[1448,"armor",2,4,0,0,28,47500],[695,"armor",2,4,0,1,36,104500],[1451,"armor",2,4,0,0,36,104500],[725,"armor",2,5,0,1,16,5250],[1481,"armor",2,5,0,0,16,5250],[728,"armor",2,5,0,1,24,21500],[1484,"armor",2,5,0,0,24,21500],[731,"armor",2,5,0,1,32,52000],[1487,"armor",2,5,0,0,32,52000],[761,"armor",2,6,0,1,18,9750],[1517,"armor",2,6,0,0,18,9750],[764,"armor",2,6,0,1,26,34000],[1520,"armor",2,6,0,0,26,34000],[767,"armor",2,6,0,1,34,78000],[1523,"armor",2,6,0,0,34,78000],[329,"armor",3,1,0,1,19,12250],[1085,"armor",3,1,0,0,19,12250],[332,"armor",3,1,0,1,27,40500],[1088,"armor",3,1,0,0,27,40500],[335,"armor",3,1,0,1,35,90500],[1091,"armor",3,1,0,0,35,90500],[365,"armor",3,2,0,1,17,7000],[1121,"armor",3,2,0,0,17,7000],[368,"armor",3,2,0,1,25,26250],[1124,"armor",3,2,0,0,25,26250],[371,"armor",3,2,0,1,33,62000],[1127,"armor",3,2,0,0,33,62000],[401,"armor",3,3,0,1,21,22750],[1157,"armor",3,3,0,0,21,22750],[404,"armor",3,3,0,1,29,64000],[1160,"armor",3,3,0,0,29,64000],[407,"armor",3,3,0,1,37,138500],[1163,"armor",3,3,0,0,37,138500],[437,"armor",3,4,0,1,20,15250],[1193,"armor",3,4,0,0,20,15250],[440,"armor",3,4,0,1,28,47500],[1196,"armor",3,4,0,0,28,47500],[443,"armor",3,4,0,1,36,104500],[1199,"armor",3,4,0,0,36,104500],[473,"armor",3,5,0,1,16,5250],[1229,"armor",3,5,0,0,16,5250],[476,"armor",3,5,0,1,24,21500],[1232,"armor",3,5,0,0,24,21500],[479,"armor",3,5,0,1,32,52000],[1235,"armor",3,5,0,0,32,52000],[509,"armor",3,6,0,1,18,9750],[1265,"armor",3,6,0,0,18,9750],[512,"armor",3,6,0,1,26,34000],[1268,"armor",3,6,0,0,26,34000],[515,"armor",3,6,0,1,34,78000],[1271,"armor",3,6,0,0,34,78000],[257,"smith",4,1,0,2,16,8500],[260,"smith",4,1,0,2,24,34500],[263,"smith",4,1,0,2,32,83500],[77,"smith",6,2,0,2,16,15250],[80,"smith",6,2,0,2,24,62000],[83,"smith",6,2,0,2,32,150000],[113,"smith",6,3,0,2,16,15250],[116,"smith",6,3,0,2,24,62000],[119,"smith",6,3,0,2,32,150000],[149,"smith",6,4,0,2,16,17000],[152,"smith",6,4,0,2,24,69000],[155,"smith",6,4,0,2,32,167000],[185,"smith",6,5,0,2,16,17000],[188,"smith",6,5,0,2,24,69000],[191,"smith",6,5,0,2,32,167000],[221,"smith",6,6,0,2,16,17000],[224,"smith",6,6,0,2,24,69000],[227,"smith",6,6,0,2,32,167000]],"EU":[[3731,"accessory",7,5,3,0,10,500],[3732,"accessory",7,5,3,0,10,500],[3733,"accessory",7,5,3,0,10,500],[3734,"accessory",7,5,3,0,10,500],[3735,"accessory",7,5,3,0,10,500],[3726,"accessory",7,5,3,1,10,500],[3727,"accessory",7,5,3,1,10,500],[3728,"accessory",7,5,3,1,10,500],[3729,"accessory",7,5,3,1,10,500],[3730,"accessory",7,5,3,1,10,500],[14537,"accessory",12,1,1,2,1,395],[14540,"accessory",12,1,1,2,10,1750],[14543,"accessory",12,1,1,2,18,10250],[14573,"accessory",12,2,1,2,1,460],[14576,"accessory",12,2,1,2,12,3250],[14579,"accessory",12,2,1,2,20,16250],[14501,"accessory",12,3,1,2,1,365],[14504,"accessory",12,3,1,2,8,1250],[14507,"accessory",12,3,1,2,16,6250],[12017,"armor",9,1,1,1,1,405],[13529,"armor",9,1,1,0,1,405],[12020,"armor",9,1,1,1,11,2000],[13532,"armor",9,1,1,0,11,2000],[12023,"armor",9,1,1,1,19,12250],[13535,"armor",9,1,1,0,19,12250],[12053,"armor",9,2,1,1,1,335],[13565,"armor",9,2,1,0,1,335],[12056,"armor",9,2,1,1,9,1250],[13568,"armor",9,2,1,0,9,1250],[12059,"armor",9,2,1,1,17,7000],[13571,"armor",9,2,1,0,17,7000],[12089,"armor",9,3,1,1,1,520],[13601,"armor",9,3,1,0,1,520],[12092,"armor",9,3,1,1,13,4500],[13604,"armor",9,3,1,0,13,4500],[12095,"armor",9,3,1,1,21,22750],[13607,"armor",9,3,1,0,21,22750],[12125,"armor",9,4,1,1,1,430],[13637,"armor",9,4,1,0,1,430],[12128,"armor",9,4,1,1,12,3000],[13640,"armor",9,4,1,0,12,3000],[12131,"armor",9,4,1,1,20,15250],[13643,"armor",9,4,1,0,20,15250],[12161,"armor",9,5,1,1,1,310],[13673,"armor",9,5,1,0,1,310],[12164,"armor",9,5,1,1,8,1000],[13676,"armor",9,5,1,0,8,1000],[12167,"armor",9,5,1,1,16,5250],[13679,"armor",9,5,1,0,16,5250],[12197,"armor",9,6,1,1,1,380],[13709,"armor",9,6,1,0,1,380],[12200,"armor",9,6,1,1,10,1500],[13712,"armor",9,6,1,0,10,1500],[12203,"armor",9,6,1,1,18,9750],[13715,"armor",9,6,1,0,18,9750],[11765,"armor",10,1,1,1,1,405],[13277,"armor",10,1,1,0,1,405],[11768,"armor",10,1,1,1,11,2000],[13280,"armor",10,1,1,0,11,2000],[11771,"armor",10,1,1,1,19,12250],[13283,"armor",10,1,1,0,19,12250],[11801,"armor",10,2,1,1,1,335],[13313,"armor",10,2,1,0,1,335],[11804,"armor",10,2,1,1,9,1250],[13316,"armor",10,2,1,0,9,1250],[11807,"armor",10,2,1,1,17,7000],[13319,"armor",10,2,1,0,17,7000],[11837,"armor",10,3,1,1,1,520],[13349,"armor",10,3,1,0,1,520],[11840,"armor",10,3,1,1,13,4500],[13352,"armor",10,3,1,0,13,4500],[11843,"armor",10,3,1,1,21,22750],[13355,"armor",10,3,1,0,21,22750],[11873,"armor",10,4,1,1,1,430],[13385,"armor",10,4,1,0,1,430],[11876,"armor",10,4,1,1,12,3000],[13388,"armor",10,4,1,0,12,3000],[11879,"armor",10,4,1,1,20,15250],[13391,"armor",10,4,1,0,20,15250],[11909,"armor",10,5,1,1,1,310],[13421,"armor",10,5,1,0,1,310],[11912,"armor",10,5,1,1,8,1000],[13424,"armor",10,5,1,0,8,1000],[11915,"armor",10,5,1,1,16,5250],[13427,"armor",10,5,1,0,16,5250],[11945,"armor",10,6,1,1,1,380],[13457,"armor",10,6,1,0,1,380],[11948,"armor",10,6,1,1,10,1500],[13460,"armor",10,6,1,0,10,1500],[11951,"armor",10,6,1,1,18,9750],[13463,"armor",10,6,1,0,18,9750],[11513,"armor",11,1,1,1,1,405],[13025,"armor",11,1,1,0,1,405],[11516,"armor",11,1,1,1,11,2000],[13028,"armor",11,1,1,0,11,2000],[11519,"armor",11,1,1,1,19,12250],[13031,"armor",11,1,1,0,19,12250],[11549,"armor",11,2,1,1,1,335],[13061,"armor",11,2,1,0,1,335],[11552,"armor",11,2,1,1,9,1250],[13064,"armor",11,2,1,0,9,1250],[11555,"armor",11,2,1,1,17,7000],[13067,"armor",11,2,1,0,17,7000],[11585,"armor",11,3,1,1,1,520],[13097,"armor",11,3,1,0,1,520],[11588,"armor",11,3,1,1,13,4500],[13100,"armor",11,3,1,0,13,4500],[11591,"armor",11,3,1,1,21,22750],[13103,"armor",11,3,1,0,21,22750],[11621,"armor",11,4,1,1,1,430],[13133,"armor",11,4,1,0,1,430],[11624,"armor",11,4,1,1,12,3000],[13136,"armor",11,4,1,0,12,3000],[11627,"armor",11,4,1,1,20,15250],[13139,"armor",11,4,1,0,20,15250],[11657,"armor",11,5,1,1,1,310],[13169,"armor",11,5,1,0,1,310],[11660,"armor",11,5,1,1,8,1000],[13172,"armor",11,5,1,0,8,1000],[11663,"armor",11,5,1,1,16,5250],[13175,"armor",11,5,1,0,16,5250],[11693,"armor",11,6,1,1,1,380],[13205,"armor",11,6,1,0,1,380],[11696,"armor",11,6,1,1,10,1500],[13208,"armor",11,6,1,0,10,1500],[11699,"armor",11,6,1,1,18,9750],[13211,"armor",11,6,1,0,18,9750],[11387,"smith",4,2,1,2,1,495],[11390,"smith",4,2,1,2,8,1750],[11393,"smith",4,2,1,2,16,8500],[10775,"smith",6,7,1,2,1,890],[10778,"smith",6,7,1,2,8,3500],[10781,"smith",6,7,1,2,16,15250],[10811,"smith",6,8,1,2,1,990],[10814,"smith",6,8,1,2,8,3750],[10817,"smith",6,8,1,2,16,17000],[10847,"smith",6,9,1,2,1,990],[10850,"smith",6,9,1,2,8,3750],[10853,"smith",6,9,1,2,16,17000],[10919,"smith",6,10,1,2,1,890],[10922,"smith",6,10,1,2,8,3500],[10925,"smith",6,10,1,2,16,15250],[10955,"smith",6,11,1,2,1,990],[10958,"smith",6,11,1,2,8,3750],[10961,"smith",6,11,1,2,16,17000],[10883,"smith",6,12,1,2,1,990],[10886,"smith",6,12,1,2,8,3750],[10889,"smith",6,12,1,2,16,17000],[10739,"smith",6,13,1,2,1,990],[10742,"smith",6,13,1,2,8,3750],[10745,"smith",6,13,1,2,16,17000],[10991,"smith",6,14,1,2,1,990],[10994,"smith",6,14,1,2,8,3750],[10997,"smith",6,14,1,2,16,17000],[11027,"smith",6,15,1,2,1,990],[11030,"smith",6,15,1,2,8,3750],[11033,"smith",6,15,1,2,16,17000]],"CA":[[3731,"accessory",7,5,3,0,10,500],[3732,"accessory",7,5,3,0,10,500],[3733,"accessory",7,5,3,0,10,500],[3734,"accessory",7,5,3,0,10,500],[3735,"accessory",7,5,3,0,10,500],[3726,"accessory",7,5,3,1,10,500],[3727,"accessory",7,5,3,1,10,500],[3728,"accessory",7,5,3,1,10,500],[3729,"accessory",7,5,3,1,10,500],[3730,"accessory",7,5,3,1,10,500],[14543,"accessory",12,1,1,2,18,10250],[14546,"accessory",12,1,1,2,26,35500],[14549,"accessory",12,1,1,2,34,81000],[14579,"accessory",12,2,1,2,20,16250],[14582,"accessory",12,2,1,2,28,51000],[14585,"accessory",12,2,1,2,36,112500],[14507,"accessory",12,3,1,2,16,6250],[14510,"accessory",12,3,1,2,24,25250],[14513,"accessory",12,3,1,2,32,61500],[12023,"armor",9,1,1,1,19,12250],[13535,"armor",9,1,1,0,19,12250],[12026,"armor",9,1,1,1,27,40500],[13538,"armor",9,1,1,0,27,40500],[12029,"armor",9,1,1,1,35,90500],[13541,"armor",9,1,1,0,35,90500],[12059,"armor",9,2,1,1,17,7000],[13571,"armor",9,2,1,0,17,7000],[12062,"armor",9,2,1,1,25,26250],[13574,"armor",9,2,1,0,25,26250],[12065,"armor",9,2,1,1,33,62000],[13577,"armor",9,2,1,0,33,62000],[12095,"armor",9,3,1,1,21,22750],[13607,"armor",9,3,1,0,21,22750],[12098,"armor",9,3,1,1,29,64000],[13610,"armor",9,3,1,0,29,64000],[12101,"armor",9,3,1,1,37,138500],[13613,"armor",9,3,1,0,37,138500],[12131,"armor",9,4,1,1,20,15250],[13643,"armor",9,4,1,0,20,15250],[12134,"armor",9,4,1,1,28,47500],[13646,"armor",9,4,1,0,28,47500],[12137,"armor",9,4,1,1,36,104500],[13649,"armor",9,4,1,0,36,104500],[12167,"armor",9,5,1,1,16,5250],[13679,"armor",9,5,1,0,16,5250],[12170,"armor",9,5,1,1,24,21500],[13682,"armor",9,5,1,0,24,21500],[12173,"armor",9,5,1,1,32,52000],[13685,"armor",9,5,1,0,32,52000],[12203,"armor",9,6,1,1,18,9750],[13715,"armor",9,6,1,0,18,9750],[12206,"armor",9,6,1,1,26,34000],[13718,"armor",9,6,1,0,26,34000],[12209,"armor",9,6,1,1,34,78000],[13721,"armor",9,6,1,0,34,78000],[11771,"armor",10,1,1,1,19,12250],[13283,"armor",10,1,1,0,19,12250],[11774,"armor",10,1,1,1,27,40500],[13286,"armor",10,1,1,0,27,40500],[11777,"armor",10,1,1,1,35,90500],[13289,"armor",10,1,1,0,35,90500],[11807,"armor",10,2,1,1,17,7000],[13319,"armor",10,2,1,0,17,7000],[11810,"armor",10,2,1,1,25,26250],[13322,"armor",10,2,1,0,25,26250],[11813,"armor",10,2,1,1,33,62000],[13325,"armor",10,2,1,0,33,62000],[11843,"armor",10,3,1,1,21,22750],[13355,"armor",10,3,1,0,21,22750],[11846,"armor",10,3,1,1,29,64000],[13358,"armor",10,3,1,0,29,64000],[11849,"armor",10,3,1,1,37,138500],[13361,"armor",10,3,1,0,37,138500],[11879,"armor",10,4,1,1,20,15250],[13391,"armor",10,4,1,0,20,15250],[11882,"armor",10,4,1,1,28,47500],[13394,"armor",10,4,1,0,28,47500],[11885,"armor",10,4,1,1,36,104500],[13397,"armor",10,4,1,0,36,104500],[11915,"armor",10,5,1,1,16,5250],[13427,"armor",10,5,1,0,16,5250],[11918,"armor",10,5,1,1,24,21500],[13430,"armor",10,5,1,0,24,21500],[11921,"armor",10,5,1,1,32,52000],[13433,"armor",10,5,1,0,32,52000],[11951,"armor",10,6,1,1,18,9750],[13463,"armor",10,6,1,0,18,9750],[11954,"armor",10,6,1,1,26,34000],[13466,"armor",10,6,1,0,26,34000],[11957,"armor",10,6,1,1,34,78000],[13469,"armor",10,6,1,0,34,78000],[11519,"armor",11,1,1,1,19,12250],[13031,"armor",11,1,1,0,19,12250],[11522,"armor",11,1,1,1,27,40500],[13034,"armor",11,1,1,0,27,40500],[11525,"armor",11,1,1,1,35,90500],[13037,"armor",11,1,1,0,35,90500],[11555,"armor",11,2,1,1,17,7000],[13067,"armor",11,2,1,0,17,7000],[11558,"armor",11,2,1,1,25,26250],[13070,"armor",11,2,1,0,25,26250],[11561,"armor",11,2,1,1,33,62000],[13073,"armor",11,2,1,0,33,62000],[11591,"armor",11,3,1,1,21,22750],[13103,"armor",11,3,1,0,21,22750],[11594,"armor",11,3,1,1,29,64000],[13106,"armor",11,3,1,0,29,64000],[11597,"armor",11,3,1,1,37,138500],[13109,"armor",11,3,1,0,37,138500],[11627,"armor",11,4,1,1,20,15250],[13139,"armor",11,4,1,0,20,15250],[11630,"armor",11,4,1,1,28,47500],[13142,"armor",11,4,1,0,28,47500],[11633,"armor",11,4,1,1,36,104500],[13145,"armor",11,4,1,0,36,104500],[11663,"armor",11,5,1,1,16,5250],[13175,"armor",11,5,1,0,16,5250],[11666,"armor",11,5,1,1,24,21500],[13178,"armor",11,5,1,0,24,21500],[11669,"armor",11,5,1,1,32,52000],[13181,"armor",11,5,1,0,32,52000],[11699,"armor",11,6,1,1,18,9750],[13211,"armor",11,6,1,0,18,9750],[11702,"armor",11,6,1,1,26,34000],[13214,"armor",11,6,1,0,26,34000],[11705,"armor",11,6,1,1,34,78000],[13217,"armor",11,6,1,0,34,78000],[11393,"smith",4,2,1,2,16,8500],[11396,"smith",4,2,1,2,24,34500],[11399,"smith",4,2,1,2,32,83500],[10781,"smith",6,7,1,2,16,15250],[10784,"smith",6,7,1,2,24,62000],[10787,"smith",6,7,1,2,32,150000],[10817,"smith",6,8,1,2,16,17000],[10820,"smith",6,8,1,2,24,69000],[10823,"smith",6,8,1,2,32,167000],[10853,"smith",6,9,1,2,16,17000],[10856,"smith",6,9,1,2,24,69000],[10859,"smith",6,9,1,2,32,167000],[10925,"smith",6,10,1,2,16,15250],[10928,"smith",6,10,1,2,24,62000],[10931,"smith",6,10,1,2,32,150000],[10961,"smith",6,11,1,2,16,17000],[10964,"smith",6,11,1,2,24,69000],[10967,"smith",6,11,1,2,32,167000],[10889,"smith",6,12,1,2,16,17000],[10892,"smith",6,12,1,2,24,69000],[10895,"smith",6,12,1,2,32,167000],[10745,"smith",6,13,1,2,16,17000],[10748,"smith",6,13,1,2,24,69000],[10751,"smith",6,13,1,2,32,167000],[10997,"smith",6,14,1,2,16,17000],[11000,"smith",6,14,1,2,24,69000],[11003,"smith",6,14,1,2,32,167000],[11033,"smith",6,15,1,2,16,17000],[11036,"smith",6,15,1,2,24,69000],[11039,"smith",6,15,1,2,32,167000]]};
 // Armour and accessory merchants per town.
 const LEVEL_SHOPS = {"CH":{"armor":{"refObjId":2004,"regionId":25000,"x":332.17,"y":0.0,"z":1085.23},"accessory":{"refObjId":2008,"regionId":25000,"x":1658.55,"y":0.0,"z":1078.19}},"KT":{"armor":{"refObjId":2073,"regionId":23687,"x":578.13,"y":243.81,"z":188.5},"accessory":{"refObjId":2075,"regionId":23431,"x":859.33,"y":243.81,"z":1874.06}},"WC":{"accessory":{"refObjId":2054,"regionId":26265,"x":559.19,"y":-104.28,"z":737.88},"armor":{"refObjId":2052,"regionId":26265,"x":1196.42,"y":-106.01,"z":901.38}},"CA":{"armor":{"refObjId":7531,"regionId":27499,"x":1298.11,"y":180.0,"z":358.28},"accessory":{"refObjId":7533,"regionId":27243,"x":1635.81,"y":180.0,"z":1460.36}},"EU":{"armor":{"refObjId":7496,"regionId":26958,"x":1910.98,"y":83.87,"z":1083.46},"accessory":{"refObjId":7498,"regionId":26959,"x":699.15,"y":80.0,"z":253.89}}};
 
 
-const LEVEL_SPOT_BELOW = 5, LEVEL_SPOT_KEEP = 2, LEVEL_GEAR_MAX_PLUS = 3, LEVEL_GEAR_CHECK_MS = 20000;
+// Generated by gen-builds.py from the server skill data. Do not edit by hand.
+// BUILD_SKILLS: family -> [mastery, mastery level it opens at, kind, why it is blocked]
+const BUILD_SKILLS = {"CH_BOW_AREA":[259,25,"attack",""],"CH_BOW_BASE":[259,0,"attack",""],"CH_BOW_CALL":[259,10,"buff",""],"CH_BOW_CHAIN":[259,7,"attack",""],"CH_BOW_CRITICAL":[259,5,"attack",""],"CH_BOW_NORMAL":[259,19,"buff",""],"CH_BOW_PASSIVE":[259,10,"passive",""],"CH_BOW_PIERCE":[259,14,"attack",""],"CH_BOW_POWER":[259,31,"attack",""],"CH_BOW_SPECIAL":[259,25,"attack",""],"CH_COLD_BINGBYEOK":[273,17,"blocked","roots the character"],"CH_COLD_BINGPAN":[273,23,"other",""],"CH_COLD_GANGGI":[273,8,"buff",""],"CH_COLD_GIGONGJANG":[273,12,"other",""],"CH_COLD_GIGONGSUL":[273,30,"attack",""],"CH_COLD_GIGONGTA":[273,5,"imbue",""],"CH_COLD_PASSIVE":[273,10,"passive",""],"CH_COLD_SHIELD":[273,20,"buff",""],"CH_FIRE_DESCRY":[275,30,"buff",""],"CH_FIRE_DETECT":[275,30,"buff",""],"CH_FIRE_GANGGI":[275,17,"buff",""],"CH_FIRE_GIGONGSUL":[275,30,"attack",""],"CH_FIRE_GIGONGTA":[275,5,"imbue",""],"CH_FIRE_GONGUP":[275,12,"buff",""],"CH_FIRE_HWABYEOK":[275,23,"blocked","roots the character"],"CH_FIRE_PASSIVE":[275,10,"passive",""],"CH_FIRE_SHIELD":[275,8,"buff",""],"CH_LIGHTNING_CHUNDUNG":[274,17,"attack",""],"CH_LIGHTNING_GIGONGTA":[274,5,"imbue",""],"CH_LIGHTNING_GWANTONG":[274,8,"buff",""],"CH_LIGHTNING_GYEONGGONG":[274,12,"buff","teleports"],"CH_LIGHTNING_JIPJUNG":[274,23,"buff",""],"CH_LIGHTNING_PASSIVE":[274,10,"passive",""],"CH_LIGHTNING_STORM":[274,30,"attack",""],"CH_SPEAR_BASE":[258,0,"attack",""],"CH_SPEAR_CHAIN":[258,24,"attack",""],"CH_SPEAR_FRONTAREA":[258,10,"attack",""],"CH_SPEAR_PASSIVE":[258,10,"passive",""],"CH_SPEAR_PIERCE":[258,5,"attack",""],"CH_SPEAR_ROUNDAREA":[258,19,"attack",""],"CH_SPEAR_SHOOT":[258,31,"attack",""],"CH_SPEAR_SPIN":[258,7,"buff",""],"CH_SPEAR_STUN":[258,14,"attack",""],"CH_SWORD_BASE":[257,0,"attack",""],"CH_SWORD_CHAIN":[257,7,"attack",""],"CH_SWORD_DOWNATTACK":[257,19,"attack",""],"CH_SWORD_GEOMGI":[257,14,"attack",""],"CH_SWORD_KNOCKDOWN":[257,19,"attack",""],"CH_SWORD_PASSIVE":[257,10,"passive",""],"CH_SWORD_SHIELD":[257,10,"buff",""],"CH_SWORD_SHIELDPD":[257,20,"buff",""],"CH_SWORD_SMASH":[257,5,"attack",""],"CH_SWORD_SPECIAL":[257,31,"attack",""],"CH_WATER_CANCEL":[276,30,"buff",""],"CH_WATER_CURE":[276,8,"other",""],"CH_WATER_CUREAREA":[276,30,"other",""],"CH_WATER_HARMONY":[276,23,"buff",""],"CH_WATER_HEAL":[276,12,"heal",""],"CH_WATER_PASSIVE":[276,10,"passive",""],"CH_WATER_RESURRECTION":[276,17,"blocked","resurrects a party member"],"CH_WATER_SELFHEAL":[276,5,"heal",""],"EU_AXE_BASE":[513,0,"attack",""],"EU_BARD_BATTLAA_DAMAGE":[517,4,"attack",""],"EU_BARD_BATTLAA_EXPLOSION":[517,20,"attack",""],"EU_BARD_BATTLAA_GUARD":[517,20,"blocked","standing aura that drains MP"],"EU_BARD_BATTLAA_MPSTEAL":[517,40,"buff",""],"EU_BARD_BATTLAA_ROOT":[517,14,"other",""],"EU_BARD_DANACEP_DEFENSE":[517,40,"passive",""],"EU_BARD_DANACEP_MANA":[517,20,"passive",""],"EU_BARD_DANACEP_RANGE":[517,30,"passive",""],"EU_BARD_DANCEA_CASTER":[517,30,"blocked","standing aura that drains MP"],"EU_BARD_DANCEA_CLERIC":[517,40,"blocked","standing aura that drains MP"],"EU_BARD_DANCEA_ROG":[517,50,"blocked","standing aura that drains MP"],"EU_BARD_DANCEA_WARRIOR":[517,20,"blocked","standing aura that drains MP"],"EU_BARD_FORGETA_AGGRO":[517,30,"other",""],"EU_BARD_FORGETA_ATTACK":[517,20,"buff",""],"EU_BARD_FORGETA_MPABSORB":[517,10,"other",""],"EU_BARD_FORGETA_TARGET":[517,26,"other",""],"EU_BARD_MUSICP_ATTPOINT":[517,4,"passive",""],"EU_BARD_MUSICP_RANGE":[517,10,"passive",""],"EU_BARD_MUSICP_REINFORCE":[517,30,"passive",""],"EU_BARD_RECOVERA_ABNORMAL":[517,24,"other",""],"EU_BARD_RECOVERA_ABNORMALTIME":[517,36,"heal",""],"EU_BARD_RECOVERA_MANATRANS":[517,20,"heal",""],"EU_BARD_RECOVERA_MPHEAL":[517,10,"heal",""],"EU_BARD_SPEEDUPA_HITRATE":[517,40,"blocked","standing aura that drains MP"],"EU_BARD_SPEEDUPA_MSPEED":[517,10,"buff",""],"EU_CLERIC_BATTLEA_CROSS":[518,4,"attack",""],"EU_CLERIC_BATTLEA_OVERHEAL":[518,20,"other",""],"EU_CLERIC_BATTLEA_ROOT":[518,26,"other",""],"EU_CLERIC_BATTLEA_SACRIFICE":[518,40,"attack",""],"EU_CLERIC_BLESSA_INT":[518,20,"buff",""],"EU_CLERIC_BLESSA_MAGICAL":[518,40,"buff",""],"EU_CLERIC_BLESSA_PHYSICAL":[518,30,"buff",""],"EU_CLERIC_BLESSA_STR":[518,10,"buff",""],"EU_CLERIC_GLORYP_MAGICAL":[518,30,"passive",""],"EU_CLERIC_GLORYP_PHYSICAL":[518,20,"passive",""],"EU_CLERIC_HEALA_CYCLE":[518,30,"heal",""],"EU_CLERIC_HEALA_DIVIDE":[518,20,"heal",""],"EU_CLERIC_HEALA_GROUP":[518,20,"heal",""],"EU_CLERIC_HEALA_TARGET":[518,4,"heal",""],"EU_CLERIC_PRAISEP_ABILITY":[518,10,"passive",""],"EU_CLERIC_PRAISEP_DAMAGE":[518,4,"passive",""],"EU_CLERIC_PRAISEP_HEAL":[518,10,"passive",""],"EU_CLERIC_REBIRTHA_GROUP":[518,40,"heal",""],"EU_CLERIC_REBIRTHA_SPECIAL":[518,40,"heal",""],"EU_CLERIC_REBIRTHA_SPECIAL_A_BUFF":[518,40,"blocked","changes the character"],"EU_CLERIC_REBIRTHA_SPECIAL_B_BUFF":[518,90,"blocked","changes the character"],"EU_CLERIC_REBIRTHA_TARGET":[518,10,"heal",""],"EU_CLERIC_RECOVERYA_GROUP":[518,40,"heal",""],"EU_CLERIC_RECOVERYA_HEALSHIELD":[518,24,"buff",""],"EU_CLERIC_RECOVERYA_QUICK":[518,40,"heal",""],"EU_CLERIC_RECOVERYA_TARGET":[518,30,"heal",""],"EU_CLERIC_SAINTA_ABNORMAL":[518,14,"buff",""],"EU_CLERIC_SAINTA_INNOCENT":[518,14,"other",""],"EU_CROSSBOW_BASE":[515,0,"attack",""],"EU_DAGGER_BASE":[515,0,"attack",""],"EU_HARP_BASE":[517,0,"attack",""],"EU_ROG_BOWA_FAST":[515,10,"attack",""],"EU_ROG_BOWA_KNOCK":[515,40,"attack",""],"EU_ROG_BOWA_POWER":[515,4,"attack",""],"EU_ROG_BOWA_RANGE":[515,20,"attack",""],"EU_ROG_BOWP_ABSORB":[515,20,"passive",""],"EU_ROG_BOWP_DAMAGE":[515,4,"passive",""],"EU_ROG_BOWP_MAD_BOW_UP":[515,20,"buff",""],"EU_ROG_BOWP_RANGE":[515,10,"passive",""],"EU_ROG_DAGGERA_CHAIN":[515,4,"attack",""],"EU_ROG_DAGGERA_SCREW":[515,20,"attack",""],"EU_ROG_DAGGERA_SLASH":[515,40,"attack",""],"EU_ROG_DAGGERA_SPEED":[515,10,"buff",""],"EU_ROG_DAGGERA_WOUND":[515,10,"attack",""],"EU_ROG_POISONA_BLADE":[515,14,"imbue",""],"EU_ROG_POISONA_FIELD":[515,44,"buff",""],"EU_ROG_POISONA_GUARD":[515,28,"buff",""],"EU_ROG_POISONA_ROUND":[515,36,"other",""],"EU_ROG_POIS_DAGP_DAGGAR_UP":[515,20,"buff",""],"EU_ROG_POIS_DAGP_DAMAGE":[515,4,"other",""],"EU_ROG_POIS_DAGP_HITRATE":[515,10,"other",""],"EU_ROG_POIS_DAGP_MAINTAIN":[515,30,"other",""],"EU_ROG_POIS_DAGP_POISON":[515,20,"other",""],"EU_ROG_STEALTHA_ATTACK":[515,40,"attack",""],"EU_ROG_STEALTHA_CHANGE":[515,15,"buff",""],"EU_ROG_STEALTHA_DETECT":[515,30,"buff",""],"EU_ROG_STEALTHA_HIDING":[515,30,"blocked","hides the character"],"EU_ROG_STEALTHA_POINT":[515,40,"buff",""],"EU_ROG_STEALTHP_DAMAGE":[515,30,"passive",""],"EU_ROG_STEALTHP_MSPEED":[515,40,"passive",""],"EU_ROG_STEALTHP_TIME":[515,30,"passive",""],"EU_ROG_TRANSFORMA_DUPLE":[515,40,"blocked","changes the character"],"EU_ROG_TRANSFORMA_MASK":[515,20,"other",""],"EU_STAFF_BASE":[514,0,"attack",""],"EU_SWORD_BASE":[513,0,"attack",""],"EU_TSWORD_BASE":[513,0,"attack",""],"EU_WAND_CLERIC_BASE":[518,0,"attack",""],"EU_WAND_WARLOCK_BASE":[516,0,"attack",""],"EU_WARLOCK_BLOODA_EXPLOSION":[516,44,"other",""],"EU_WARLOCK_BLOODA_LIFEDRAIN":[516,4,"other",""],"EU_WARLOCK_BLOODA_POINT":[516,4,"attack",""],"EU_WARLOCK_BLOODP_DAMAGE":[516,4,"passive",""],"EU_WARLOCK_BLOODP_INCREASE":[516,4,"passive",""],"EU_WARLOCK_BLOODP_TRAPDAMAGE":[516,30,"passive",""],"EU_WARLOCK_CONFUSIONA_AGGROLOW":[516,40,"other",""],"EU_WARLOCK_CONFUSIONA_HEAL":[516,24,"other",""],"EU_WARLOCK_CONFUSIONA_ILLUSION":[516,40,"blocked","changes the character"],"EU_WARLOCK_CONFUSIONA_RANGE":[516,24,"other",""],"EU_WARLOCK_DOTA_BLOODING":[516,20,"attack",""],"EU_WARLOCK_DOTA_BURN":[516,4,"attack",""],"EU_WARLOCK_DOTA_DISEASE":[516,40,"attack",""],"EU_WARLOCK_DOTA_POISON":[516,10,"attack",""],"EU_WARLOCK_MINDP_DAMAGE":[516,4,"passive",""],"EU_WARLOCK_MINDP_MAINTAIN":[516,20,"passive",""],"EU_WARLOCK_RAZEA_INT":[516,44,"other",""],"EU_WARLOCK_RAZEA_MAGICAL":[516,24,"other",""],"EU_WARLOCK_RAZEA_PHYSICAL":[516,12,"other",""],"EU_WARLOCK_RAZEA_STR":[516,32,"other",""],"EU_WARLOCK_SOULA_CHAOS":[516,20,"buff",""],"EU_WARLOCK_SOULA_MEZ":[516,16,"other",""],"EU_WARLOCK_SOULA_RETURN":[516,40,"buff",""],"EU_WARLOCK_SOULA_STUN":[516,16,"other",""],"EU_WARLOCK_SOULA_STUNLINK":[516,24,"buff",""],"EU_WARRIOR_DUALA_COUNTER":[513,20,"attack",""],"EU_WARRIOR_DUALA_CROSS":[513,4,"attack",""],"EU_WARRIOR_DUALA_STUN":[513,15,"other",""],"EU_WARRIOR_DUALA_TWIST":[513,10,"attack",""],"EU_WARRIOR_DUALA_WHIRLWIND":[513,40,"attack",""],"EU_WARRIOR_DUALP_ABNORMAL":[513,30,"passive",""],"EU_WARRIOR_DUALP_ATTACK":[513,4,"passive",""],"EU_WARRIOR_DUALP_HITRATE":[513,20,"passive",""],"EU_WARRIOR_FRENZYA_DAMAGE":[513,10,"buff",""],"EU_WARRIOR_FRENZYA_DEFENSE":[513,10,"other",""],"EU_WARRIOR_FRENZYA_DETECT":[513,30,"buff",""],"EU_WARRIOR_FRENZYA_HEALTH":[513,20,"buff",""],"EU_WARRIOR_FRENZYA_MASICAL_BLOCK":[513,60,"buff",""],"EU_WARRIOR_FRENZYA_PHYSICAL_BLOCK":[513,40,"buff",""],"EU_WARRIOR_FRENZYA_TOUNT":[513,10,"other",""],"EU_WARRIOR_FRENZYA_TOUNT_AREA":[513,60,"other",""],"EU_WARRIOR_FRENZYA_TOUNT_SPRINT":[513,30,"blocked","dashes"],"EU_WARRIOR_GUARDA_AGGRO":[513,40,"buff",""],"EU_WARRIOR_GUARDA_ALL_BLOCK":[513,90,"buff",""],"EU_WARRIOR_GUARDA_DIVIDE":[513,20,"buff",""],"EU_WARRIOR_GUARDA_INTERCEPT":[513,60,"buff",""],"EU_WARRIOR_GUARDA_MAGIC":[513,40,"buff",""],"EU_WARRIOR_GUARDA_MAGIC_BLOCK":[513,70,"buff",""],"EU_WARRIOR_GUARDA_PHYSICAL":[513,30,"buff",""],"EU_WARRIOR_ONEHANDA_CRITICAL":[513,40,"attack",""],"EU_WARRIOR_ONEHANDA_PIERCE":[513,20,"attack",""],"EU_WARRIOR_ONEHANDA_SHIELD":[513,10,"attack",""],"EU_WARRIOR_ONEHANDA_STRIKE":[513,4,"attack",""],"EU_WARRIOR_SHIELDP_ATTACK":[513,4,"passive",""],"EU_WARRIOR_SHIELDP_BLOCK":[513,20,"passive",""],"EU_WARRIOR_SHIELDP_CRITICALDOWN":[513,30,"passive",""],"EU_WARRIOR_SHIELDP_DEFENSE":[513,6,"passive",""],"EU_WARRIOR_TWOHANDA_CHARGE":[513,20,"attack",""],"EU_WARRIOR_TWOHANDA_CRY":[513,40,"attack",""],"EU_WARRIOR_TWOHANDA_DASH":[513,4,"attack",""],"EU_WARRIOR_TWOHANDA_RISING":[513,10,"attack",""],"EU_WARRIOR_TWOHANDP_ATTACK":[513,4,"passive",""],"EU_WARRIOR_TWOHANDP_CRITICALUP":[513,20,"passive",""],"EU_WARRIOR_TWOHANDP_RETURN":[513,30,"passive",""],"EU_WIZARD_COLDA_AREA":[514,20,"attack",""],"EU_WIZARD_COLDA_INVISIBLE":[514,30,"blocked","hides the character"],"EU_WIZARD_COLDA_MANADRY":[514,16,"other",""],"EU_WIZARD_COLDA_POINT":[514,4,"attack",""],"EU_WIZARD_EARTHA_ABNORMAL":[514,16,"other",""],"EU_WIZARD_EARTHA_AREA":[514,20,"attack",""],"EU_WIZARD_EARTHA_GUARD":[514,30,"buff",""],"EU_WIZARD_EARTHA_POINT":[514,4,"attack",""],"EU_WIZARD_FIREA_DETECT":[514,30,"buff",""],"EU_WIZARD_FIREA_POINT":[514,4,"attack",""],"EU_WIZARD_FIREA_SPRAY":[514,20,"attack",""],"EU_WIZARD_FIREA_TRAP":[514,10,"blocked","hides the character"],"EU_WIZARD_MANAP_DECREASE":[514,10,"passive",""],"EU_WIZARD_MANAP_RANGE":[514,40,"passive",""],"EU_WIZARD_MENTALA_DAMAGEUP":[514,20,"buff",""],"EU_WIZARD_PSYCHICA_AREA":[514,20,"attack",""],"EU_WIZARD_PSYCHICA_LIGHT":[514,4,"attack",""],"EU_WIZARD_PSYCHICA_TELEPORT":[514,30,"blocked","teleports"],"EU_WIZARD_PSYCHICA_UNTOUCH":[514,16,"other",""],"EU_WIZARD_SPIRITP_COLD":[514,4,"passive",""],"EU_WIZARD_SPIRITP_EARTH":[514,4,"passive",""],"EU_WIZARD_SPIRITP_FIRE":[514,4,"passive",""],"EU_WIZARD_SPIRITP_PSYCHIC":[514,4,"passive",""]};
+// BUILD_BLOCKED_GROUPS: skill group -> why leveling never uses it
+const BUILD_BLOCKED_GROUPS = {"246":"roots the character","247":"roots the character","248":"roots the character","261":"teleports","283":"roots the character","284":"roots the character","299":"resurrects a party member","300":"resurrects a party member","301":"resurrects a party member","339":"roots the character","459":"hides the character","460":"hides the character","475":"changes the character","524":"hides the character","525":"hides the character","529":"hides the character","530":"hides the character","542":"teleports","543":"teleports","573":"changes the character","574":"changes the character","600":"standing aura that drains MP","601":"standing aura that drains MP","604":"standing aura that drains MP","605":"standing aura that drains MP","624":"standing aura that drains MP","625":"standing aura that drains MP","626":"standing aura that drains MP","627":"standing aura that drains MP","628":"standing aura that drains MP","629":"standing aura that drains MP","630":"standing aura that drains MP","661":"changes the character","663":"changes the character","682":"dashes","752":"roots the character","768":"teleports","784":"roots the character","800":"resurrects a party member"};
+const BUILDS = [
+ {
+  "key": "glaive",
+  "label": "Glaive nuker",
+  "race": 0,
+  "weapon": [
+   5
+  ],
+  "shield": false,
+  "masteries": [
+   258,
+   275,
+   274
+  ],
+  "rotation": [
+   "CH_SPEAR_ROUNDAREA",
+   "CH_SPEAR_FRONTAREA",
+   "CH_SPEAR_STUN",
+   "CH_SPEAR_PIERCE"
+  ],
+  "buffs": [
+   "CH_FIRE_GONGUP",
+   "CH_FIRE_GANGGI",
+   "CH_LIGHTNING_GWANTONG",
+   "CH_SPEAR_SPIN"
+  ],
+  "imbue": "CH_FIRE_GIGONGTA",
+  "about": "Heuksal, Fire, Lightning. Glaive area hits, Fire buffs, fire imbue. Strength."
+ },
+ {
+  "key": "spear",
+  "label": "Spear fighter",
+  "race": 0,
+  "weapon": [
+   4
+  ],
+  "shield": false,
+  "masteries": [
+   258,
+   274,
+   275
+  ],
+  "rotation": [
+   "CH_SPEAR_ROUNDAREA",
+   "CH_SPEAR_FRONTAREA",
+   "CH_SPEAR_STUN",
+   "CH_SPEAR_PIERCE"
+  ],
+  "buffs": [
+   "CH_LIGHTNING_GWANTONG",
+   "CH_FIRE_GONGUP",
+   "CH_FIRE_GANGGI",
+   "CH_SPEAR_SPIN"
+  ],
+  "imbue": "CH_LIGHTNING_GIGONGTA",
+  "about": "Heuksal, Lightning, Fire. Spear hits, Lightning and Fire buffs, lightning imbue. Strength."
+ },
+ {
+  "key": "blade",
+  "label": "Blade tank",
+  "race": 0,
+  "weapon": [
+   3
+  ],
+  "shield": true,
+  "masteries": [
+   257,
+   276,
+   273
+  ],
+  "rotation": [
+   "CH_SWORD_SMASH",
+   "CH_SWORD_GEOMGI",
+   "CH_SWORD_KNOCKDOWN",
+   "CH_SWORD_DOWNATTACK",
+   "CH_SWORD_SPECIAL"
+  ],
+  "buffs": [
+   "CH_SWORD_SHIELD",
+   "CH_COLD_SHIELD",
+   "CH_COLD_GANGGI"
+  ],
+  "imbue": "CH_COLD_GIGONGTA",
+  "about": "Bicheon with blade and shield, Force, Cold. Tough, with shield buffs and a cold imbue. Strength."
+ },
+ {
+  "key": "sword",
+  "label": "Sword fighter",
+  "race": 0,
+  "weapon": [
+   2
+  ],
+  "shield": true,
+  "masteries": [
+   257,
+   275,
+   274
+  ],
+  "rotation": [
+   "CH_SWORD_SMASH",
+   "CH_SWORD_GEOMGI",
+   "CH_SWORD_KNOCKDOWN",
+   "CH_SWORD_DOWNATTACK",
+   "CH_SWORD_SPECIAL"
+  ],
+  "buffs": [
+   "CH_SWORD_SHIELD",
+   "CH_FIRE_GONGUP",
+   "CH_FIRE_GANGGI",
+   "CH_FIRE_SHIELD",
+   "CH_LIGHTNING_GWANTONG"
+  ],
+  "imbue": "CH_FIRE_GIGONGTA",
+  "about": "Bicheon with sword and shield, Fire, Lightning. More damage than the tank. Strength."
+ },
+ {
+  "key": "bow",
+  "label": "Bow nuker",
+  "race": 0,
+  "weapon": [
+   6
+  ],
+  "shield": false,
+  "masteries": [
+   259,
+   275,
+   274
+  ],
+  "rotation": [
+   "CH_BOW_AREA",
+   "CH_BOW_PIERCE",
+   "CH_BOW_POWER",
+   "CH_BOW_CRITICAL",
+   "CH_BOW_SPECIAL"
+  ],
+  "buffs": [
+   "CH_FIRE_GONGUP",
+   "CH_FIRE_GANGGI",
+   "CH_LIGHTNING_GWANTONG"
+  ],
+  "imbue": "CH_FIRE_GIGONGTA",
+  "about": "Pacheon, Fire, Lightning. Bow shots from range, Fire buffs, fire imbue. Strength."
+ },
+ {
+  "key": "force",
+  "label": "Force support",
+  "race": 0,
+  "weapon": [
+   2
+  ],
+  "shield": true,
+  "masteries": [
+   276,
+   273,
+   257
+  ],
+  "rotation": [
+   "CH_SWORD_SMASH",
+   "CH_SWORD_GEOMGI",
+   "CH_SWORD_KNOCKDOWN"
+  ],
+  "buffs": [
+   "CH_COLD_SHIELD",
+   "CH_COLD_GANGGI"
+  ],
+  "imbue": "CH_COLD_GIGONGTA",
+  "learn": [
+   "CH_WATER_HEAL",
+   "CH_WATER_CUREAREA",
+   "CH_WATER_CURE",
+   "CH_WATER_SELFHEAL"
+  ],
+  "about": "Force, Cold, Bicheon with sword and shield. Learns the heals and cures for a party; fights with a sword."
+ },
+ {
+  "key": "wizard",
+  "label": "Wizard",
+  "race": 1,
+  "weapon": [
+   11
+  ],
+  "shield": false,
+  "masteries": [
+   514,
+   518
+  ],
+  "rotation": [
+   "EU_WIZARD_FIREA_SPRAY",
+   "EU_WIZARD_FIREA_POINT",
+   "EU_WIZARD_COLDA_AREA",
+   "EU_WIZARD_COLDA_POINT"
+  ],
+  "buffs": [
+   "EU_WIZARD_MENTALA_DAMAGEUP",
+   "EU_CLERIC_BLESSA_INT",
+   "EU_CLERIC_BLESSA_MAGICAL"
+  ],
+  "imbue": "",
+  "about": "Wizard and Cleric. Fire and Cold spells, Cleric blessings. Intelligence."
+ },
+ {
+  "key": "warlock",
+  "label": "Warlock",
+  "race": 1,
+  "weapon": [
+   10
+  ],
+  "shield": false,
+  "masteries": [
+   516,
+   518
+  ],
+  "rotation": [
+   "EU_WARLOCK_DOTA_BURN",
+   "EU_WARLOCK_DOTA_POISON",
+   "EU_WARLOCK_DOTA_BLOODING",
+   "EU_WARLOCK_DOTA_DISEASE",
+   "EU_WARLOCK_BLOODA_POINT"
+  ],
+  "buffs": [
+   "EU_CLERIC_BLESSA_INT",
+   "EU_CLERIC_BLESSA_MAGICAL"
+  ],
+  "imbue": "",
+  "about": "Warlock and Cleric. Damage over time spells, Cleric blessings. Intelligence."
+ },
+ {
+  "key": "warrior",
+  "label": "Warrior",
+  "race": 1,
+  "weapon": [
+   7
+  ],
+  "shield": true,
+  "masteries": [
+   513,
+   518
+  ],
+  "rotation": [
+   "EU_WARRIOR_ONEHANDA_PIERCE",
+   "EU_WARRIOR_ONEHANDA_SHIELD",
+   "EU_WARRIOR_ONEHANDA_STRIKE",
+   "EU_WARRIOR_ONEHANDA_CRITICAL"
+  ],
+  "buffs": [
+   "EU_WARRIOR_FRENZYA_DAMAGE",
+   "EU_WARRIOR_FRENZYA_HEALTH",
+   "EU_WARRIOR_GUARDA_PHYSICAL",
+   "EU_WARRIOR_GUARDA_MAGIC",
+   "EU_CLERIC_BLESSA_STR"
+  ],
+  "imbue": "",
+  "about": "Warrior with one-hand sword and shield, Cleric. Tough, with Cleric blessings. Strength."
+ },
+ {
+  "key": "rogue",
+  "label": "Rogue",
+  "race": 1,
+  "weapon": [
+   13
+  ],
+  "shield": false,
+  "masteries": [
+   515,
+   518
+  ],
+  "rotation": [
+   "EU_ROG_DAGGERA_CHAIN",
+   "EU_ROG_DAGGERA_WOUND",
+   "EU_ROG_DAGGERA_SCREW",
+   "EU_ROG_DAGGERA_SLASH"
+  ],
+  "buffs": [
+   "EU_ROG_DAGGERA_SPEED",
+   "EU_CLERIC_BLESSA_STR"
+  ],
+  "imbue": "EU_ROG_POISONA_BLADE",
+  "about": "Rogue with dagger, Cleric. Quick dagger hits, poison blade. Strength."
+ },
+ {
+  "key": "cleric",
+  "label": "Cleric",
+  "race": 1,
+  "weapon": [
+   15
+  ],
+  "shield": false,
+  "masteries": [
+   518,
+   514
+  ],
+  "rotation": [
+   "EU_CLERIC_BATTLEA_SACRIFICE",
+   "EU_CLERIC_BATTLEA_CROSS"
+  ],
+  "buffs": [
+   "EU_CLERIC_BLESSA_INT",
+   "EU_CLERIC_BLESSA_MAGICAL"
+  ],
+  "imbue": "",
+  "learn": [
+   "EU_CLERIC_HEALA_TARGET"
+  ],
+  "about": "Cleric and Wizard. Learns the heals; fights with holy attacks. Intelligence."
+ },
+ {
+  "key": "bard",
+  "label": "Bard",
+  "race": 1,
+  "weapon": [
+   14
+  ],
+  "shield": false,
+  "masteries": [
+   517,
+   518
+  ],
+  "rotation": [
+   "EU_BARD_BATTLAA_EXPLOSION",
+   "EU_BARD_BATTLAA_DAMAGE"
+  ],
+  "buffs": [
+   "EU_BARD_SPEEDUPA_MSPEED",
+   "EU_CLERIC_BLESSA_INT"
+  ],
+  "imbue": "",
+  "about": "Bard and Cleric. Music attacks, speed buff. Intelligence."
+ }
+];
+
+
+const LEVEL_SPOT_REACH_M = 5000, LEVEL_SPOT_BELOW = 5, LEVEL_SPOT_ABOVE = 2, LEVEL_SPOT_KEEP = 2, LEVEL_GEAR_MAX_PLUS = 3, LEVEL_GEAR_CHECK_MS = 20000, LEVEL_SPOT_WALK_FAILS = 5, LEVEL_TIER_GAP = 3, LEVEL_MOVE_CHECK_MS = 10000, LEVEL_MOVE_STEP_MS = 15000, LEVEL_MOVE_RETRY_MS = 600000;
 const LEVEL_WEAPON_MASTERY = { 2: 257, 3: 257, 4: 258, 5: 258, 6: 259, 7: 513, 8: 513, 9: 513, 10: 516, 11: 514, 12: 515, 13: 515, 14: 517, 15: 518 };
 const LEVEL_INT_MASTERIES = [514, 516, 517, 518], LEVEL_SKILL_CHECK_MS = 5000;
+const LEVEL_ELEMENT_MASTERIES = [273, 274, 275], LEVEL_IMBUE_SKILL = /GIGONGTA|POISON\w*_BLADE|MALL_PET_SKILL/;
+const levelFamily = s => String(s?.nameSymbol || '').replace(/^SN_SKILL_/, '').replace(/_[A-Z]$/, '');
+const LEVEL_PART = { 1: 'helmet', 2: 'shoulders', 3: 'chest', 4: 'legs', 5: 'gloves', 6: 'boots', '1a': 'necklace', '2a': 'earrings', '3a': 'ring' };
 const LEVEL_ARMOUR_SOCKET = { 1: 0, 2: 2, 3: 1, 4: 4, 5: 3, 6: 5 }, LEVEL_ACCESSORY_SOCKETS = { 1: [9], 2: [10], 3: [11, 12] };
 const Leveling = {
   spots: LEVEL_SPOTS, gear: LEVEL_GEAR, shopsData: LEVEL_SHOPS,
+  builds: BUILDS, blockedGroups: BUILD_BLOCKED_GROUPS, warned: new Set(), familyCache: null,
   skillAt: 0,
-  current: null, skipped: new Set(), tried: new Set(), refused: new Set(), checkAt: 0, due_: '', index: null, message: '',
+  current: null, walkFails: 0, move: null, moveAt: 0, moveFailed: new Set(), moveFailedAt: new Map(), movedFrom: new Set(), skipped: new Set(), tried: new Set(), refused: new Set(), checkAt: 0, due_: '', index: null, message: '',
   cfg() { return Settings.profile.leveling; },
   spotsOn() { const c = this.cfg(); return !!(c.on && c.spots); },
   gearOn() { const c = this.cfg(); return !!(c.on && c.gear); },
-  reset() { this.current = null; this.skipped.clear(); this.tried.clear(); this.refused.clear(); this.due_ = ''; this.checkAt = 0; },
+  reset() { this.current = null; this.walkFails = 0; this.skipped.clear(); this.tried.clear(); this.refused.clear(); this.due_ = ''; this.checkAt = 0; },
+
   key(s) { return s[0] + ':' + s[1] + ':' + s[3]; },
   home() { return Town.cfg().arrival || World.pose(); },
+  townOf(p) {
+    let best = null, bestD = Infinity;
+    for (const t of Town.towns) { const d = t.arrival ? dist2D(p, t.arrival) : Infinity; if (d < bestD) { best = t; bestD = d; } }
+    return best;
+  },
   spot(level) {
     const home = this.home();
     if (!home || !Number.isInteger(level)) return null;
-    const far = clamp(Number(this.cfg().maxM) || 400, 50, 5000) * 10;
-    let best = null, fallback = null;
+    const far = LEVEL_SPOT_REACH_M * 10, routes = Route.areas?.length > 0;
+    const homeTown = this.townOf(home)?.key, own = { best: null, fallback: null, above: null }, other = { best: null, fallback: null, above: null };
+    this.owners ||= new Map();
     for (const s of this.spots) {
-      if (s[4] > level || this.skipped.has(this.key(s))) continue;
+      if (s[4] > level + LEVEL_SPOT_ABOVE || this.skipped.has(this.key(s))) continue;
       const center = { regionId: s[0], x: s[1], y: s[2], z: s[3] }, d = dist2D(home, center);
-      if (!(d <= far)) continue;
-      const pick = { level: s[4], center, key: this.key(s), auto: true, score: s[4] * 400 + Math.min(s[7], 12) * 40 - d / 30 };
-      if (s[4] < level - LEVEL_SPOT_BELOW) { if (!fallback || pick.score > fallback.score) fallback = pick; continue; }
-      if (!best || pick.score > best.score) best = pick;
+      if (!(d <= far) && !(Number.isFinite(d) && routes && Route.commonArea(home, center))) continue;
+      const key = this.key(s);
+      if (!this.owners.has(key)) this.owners.set(key, this.townOf(center)?.key ?? null);
+      const owner = this.owners.get(key), g = !homeTown || !owner || owner === homeTown ? own : other;
+      if (g === other && !this.moveOpen(owner)) continue;
+      const pick = { level: s[4], center, key, auto: true, townKey: owner, score: s[4] * 400 + Math.min(s[7], 12) * 40 - d / 30 };
+      if (s[4] > level) { pick.score = -s[4] * 400 + Math.min(s[7], 12) * 40 - d / 30; if (!g.above || pick.score > g.above.score) g.above = pick; continue; }
+      if (s[4] < level - LEVEL_SPOT_BELOW) { if (!g.fallback || pick.score > g.fallback.score) g.fallback = pick; continue; }
+      if (!g.best || pick.score > g.best.score) g.best = pick;
     }
-    best ||= fallback;
+    const best = own.best || own.above || other.best || own.fallback || other.above || other.fallback;
     const cur = this.current, H = Hunt.cfg();
     if (cur && cur.owner === World.charName && !this.skipped.has(cur.key) && cur.level <= level && LevelSpot.same(cur.center, H.center) &&
         (!best || best.level - cur.level <= LEVEL_SPOT_KEEP)) return cur;
@@ -11837,7 +12439,16 @@ const Leveling = {
   reqLevel(item) { return Town.requiredLevel(item) ?? this.row(item.refObjId)?.[6] ?? null; },
   tids(item) { const tf = item.typeFlags >>> 0; return [(tf >>> 7) & 15, (tf >>> 11) & 31]; },
   town() { const c = Town.cfg(); return Town.detect(c.vendor || c.smith || c.arrival || World.pose()); },
+  model(ref) {
+    if (ref >= 1907 && ref <= 1919) return { country: 0, sex: 1 };
+    if (ref >= 1920 && ref <= 1932) return { country: 0, sex: 0 };
+    if (ref >= 14717 && ref <= 14729) return { country: 1, sex: 1 };
+    if (ref >= 14730 && ref <= 14742) return { country: 1, sex: 0 };
+    return null;
+  },
   who() {
+    const own = this.model(World.local()?.refObjId);
+    if (own) return own;
     let country = null, sex = null;
     for (const i of (World.gp?.inventory || []).filter(i => i.slot < 13)) {
       const r = this.row(i.refObjId), code = i.codename || Items.data?.get(i.refObjId)?.code || '';
@@ -11847,37 +12458,63 @@ const Leveling = {
     return { country, sex };
   },
   replaceable(item) {
-    if (Equip.protected(item) || Items.soxOf(item) > 0 || (item.plus ?? 0) > LEVEL_GEAR_MAX_PLUS) return false;
-    if (item.tooltip?.fields?.rarity !== undefined && item.tooltip.fields.rarity !== 0) return false;
-    if (/_(RARE|MAGIC|LEGEND|MYTH|HONOR)/i.test(item.codename || Items.data?.get(item.refObjId)?.code || '')) return false;
+    if (Equip.protected(item) || (item.plus ?? 0) > LEVEL_GEAR_MAX_PLUS) return false;
     return Number.isInteger(this.reqLevel(item));
   },
-  plan() {
+  homeWeapon() {
+    const c = this.cfg();
+    if (World.charName && c.weapon?.name === World.charName && c.weapon.tid4) return c.weapon.tid4;
+    const w = (World.gp?.inventory || []).find(i => i.slot === 6 && ItemType.isEquipment(i.typeFlags) && this.tids(i)[0] === 6);
+    if (!w || !World.charName) return null;
+    c.weapon = { name: World.charName, tid4: this.tids(w)[1] };
+    Settings.saveProfile();
+    return c.weapon.tid4;
+  },
+  weaponTypes() {
+    if (!this.cfg().on) return null;
+    const build = this.build();
+    if (build) return build.weapon;
+    const own = this.homeWeapon();
+    return own ? [own] : null;
+  },
+  plan(notes) {
     const gp = World.gp, level = gp?.progression?.level, town = this.town();
     if (!gp || !Number.isInteger(level) || !town) return [];
     const { country, sex } = this.who();
     if (country === null) return [];
-    const rows = (this.gear[town.key] || []).filter(r => (r[4] === country || r[4] === 3) && (r[5] === 2 || sex === null || r[5] === sex) && r[6] <= level && !this.refused.has(r[0]));
+    const rows = (this.gear[town.key] || []).filter(r => (r[4] === country || r[4] === 3) && (r[5] === 2 || r[5] === sex) && r[6] <= level && !this.refused.has(r[0]));
     const worn = new Map((gp.inventory || []).filter(i => i.slot < 13).map(i => [i.slot, i]));
     const best = (tid3, tid4) => rows.filter(r => r[2] === tid3 && r[3] === tid4).sort((a, b) => b[6] - a[6] || b[7] - a[7])[0] || null;
     const wants = [];
-    const consider = (socket, tid3, tid4, fill) => {
+    const consider = (socket, tid3, tid4, fill, label) => {
       const r = best(tid3, tid4), item = worn.get(socket);
-      if (!r) return;
-      if (!item) { if (fill) wants.push({ row: r, socket, role: r[1] }); return; }
-      if (item.refObjId !== r[0] && this.replaceable(item) && r[6] > this.reqLevel(item)) wants.push({ row: r, socket, role: r[1] });
+      if (!r) { notes?.push(label + ': the town sells none at your level'); return; }
+      if (!item) { if (fill) wants.push({ row: r, socket, role: r[1], fill: true }); return; }
+      if (item.refObjId === r[0] || !(r[6] > (this.reqLevel(item) ?? Infinity))) {
+        notes?.push(label + ': ' + (this.reqLevel(item) === null ? 'its level is unknown, kept' : 'already as good as level ' + r[6] + ' in town'));
+      } else if (!this.replaceable(item)) notes?.push(label + ': kept (enhanced above +' + LEVEL_GEAR_MAX_PLUS + ' or protected)');
+      else wants.push({ row: r, socket, role: r[1] });
     };
-    const weapon = worn.get(6);
-    if (weapon) consider(6, 6, this.tids(weapon)[1], false);
+    const weapon = worn.get(6), build = this.build(), types = this.weaponTypes();
+    if (types && weapon && !types.includes(this.tids(weapon)[1])) {
+      const r = best(6, types[0]);
+      if (!r) notes?.push('weapon: the town sells no ' + (build ? build.label : 'weapon of your type') + ' at your level');
+      else if (!this.replaceable(weapon)) notes?.push('weapon: kept (enhanced above +' + LEVEL_GEAR_MAX_PLUS + ' or protected)');
+      else wants.push({ row: r, socket: 6, role: r[1] });
+    } else if (weapon) consider(6, 6, this.tids(weapon)[1], false, 'weapon');
     const second = worn.get(7);
-    if (second && ItemType.isEquipment(second.typeFlags) && this.tids(second)[0] === 4) consider(7, 4, this.tids(second)[1], false);
+    if (second && ItemType.isEquipment(second.typeFlags) && this.tids(second)[0] === 4) consider(7, 4, this.tids(second)[1], false, 'shield');
+    else if (build?.shield && !second && weapon) {
+      const r = rows.filter(r => r[2] === 4).sort((a, b) => b[6] - a[6] || b[7] - a[7])[0];
+      if (r) wants.push({ row: r, socket: 7, role: r[1], fill: true });
+    }
     const materials = {};
     for (const s of [0, 1, 2, 3, 4, 5]) { const i = worn.get(s); if (i) { const t3 = this.tids(i)[0]; materials[t3] = (materials[t3] || 0) + 1; } }
     const material = Number(Object.keys(materials).sort((a, b) => materials[b] - materials[a])[0]);
-    if (material) for (const [tid4, socket] of Object.entries(LEVEL_ARMOUR_SOCKET)) consider(socket, material, Number(tid4), true);
+    if (material) for (const [tid4, socket] of Object.entries(LEVEL_ARMOUR_SOCKET)) consider(socket, material, Number(tid4), true, LEVEL_PART[tid4]);
     if (this.cfg().accessories) {
       const tid3 = country === 1 ? 12 : 5;
-      for (const [tid4, sockets] of Object.entries(LEVEL_ACCESSORY_SOCKETS)) for (const socket of sockets) consider(socket, tid3, Number(tid4), true);
+      for (const [tid4, sockets] of Object.entries(LEVEL_ACCESSORY_SOCKETS)) for (const socket of sockets) consider(socket, tid3, Number(tid4), true, LEVEL_PART[tid4 + 'a']);
     }
     let budget = toBigInt(gp.progression?.gold ?? 0) - BigInt(Math.max(0, Number(this.cfg().reserve) || 0));
     const out = [];
@@ -11888,20 +12525,30 @@ const Leveling = {
     }
     return out;
   },
+  unlocking(level) {
+    const town = this.town(), { country, sex } = this.who();
+    const levels = [...new Set((this.gear[town?.key] || []).filter(r => (r[4] === country || r[4] === 3) && (r[5] === 2 || r[5] === sex)).map(r => r[6]))].sort((a, b) => a - b);
+    const next = levels.findIndex(l => l > level);
+    return next > 0 && levels[next] - levels[next - 1] < LEVEL_TIER_GAP;
+  },
   due() {
     if (!this.gearOn() || Town.trip) return '';
     if (now() < this.checkAt) return this.due_;
     this.checkAt = now() + LEVEL_GEAR_CHECK_MS;
-    const plan = this.plan(), key = World.charName + '|' + plan.map(w => w.socket + ':' + w.row[0]).join(',');
-    this.due_ = plan.length && !this.tried.has(key) ? 'better gear to buy (level ' + World.gp.progression.level + ')' : '';
-    this.dueKey = key;
+    const plan = this.plan().filter(w => !w.fill), key = World.charName + '|' + plan.map(w => w.socket + ':' + w.row[0]).join(','), level = World.gp.progression.level;
+    this.due_ = plan.length && !this.tried.has(key) && !this.unlocking(level) ? 'better gear to buy (level ' + level + ')' : '';
     return this.due_;
   },
   begin(t) {
     t.gear = [];
+    const c = this.cfg(), next = c.on && c.move && !this.move ? this.nextTown(World.gp?.progression?.level) : null;
+    t.move = next?.key || '';
+    if (next) Log.info('Leveling: after the services this trip goes on to ' + next.name + ' and makes it the return point.');
     if (!this.gearOn()) return;
-    t.gear = this.plan().map(w => ({ ...w }));
-    this.tried.add(World.charName + '|' + t.gear.map(w => w.socket + ':' + w.row[0]).join(','));
+    const notes = [];
+    t.gear = this.plan(notes).map(w => ({ ...w }));
+    if (notes.length) Log.info('Leveling gear, not bought: ' + notes.join('; ') + '.');
+    this.tried.add(World.charName + '|' + t.gear.filter(w => !w.fill).map(w => w.socket + ':' + w.row[0]).join(','));
     this.due_ = ''; this.checkAt = now() + LEVEL_GEAR_CHECK_MS;
     const town = this.town(), shops = this.shopsData[town?.key] || {};
     t.shops = {};
@@ -11962,7 +12609,7 @@ const Leveling = {
         if (!offer) { this.skip(t, w, 'this merchant does not sell it'); return; }
         const gold = toBigInt(gp.progression?.gold ?? 0), reserve = BigInt(Math.max(0, Number(this.cfg().reserve) || 0));
         if (toBigInt(offer.price) + reserve > gold) { this.skip(t, w, 'not enough gold'); return; }
-        if (World.freeBagSlots() < 2) { this.skip(t, w, 'the bag is full'); return; }
+        if (World.freeBagSlots() < 1) { this.skip(t, w, 'the bag is full'); return; }
         const slots = World.items().filter(i => i.refObjId === w.row[0]).map(i => i.slot);
         if (Cmd.raw({ kind: 'shop-buy', tab: offer.tab, slot: offer.slot, quantity: 1 }, 'Leveling: buy ' + Items.name(w.row[0])))
           t.pending = { kind: 'gear-buy', want: w, ref: w.row[0], before: slots.length, slots, at: now() };
@@ -11988,44 +12635,281 @@ const Leveling = {
   },
   status() {
     if (!this.cfg().on) return 'Zero-setup leveling is off.';
+    if (this.move) return this.message;
     const level = World.gp?.progression?.level, cur = this.current;
     const spot = this.spotsOn() ? (cur ? 'Hunting at the level ' + cur.level + ' spot.' : 'No spot picked yet.') : 'Spots: your own.';
     return spot + ' ' + (this.gearOn() ? (this.message || (Number.isInteger(level) ? 'Gear: checked at level ' + level + '.' : '')) : 'Gear buying off.');
   },
+  nextTown(level) {
+    const home = this.town();
+    if (!home || !Number.isInteger(level)) return null;
+    const { country, sex } = this.who();
+    if (country === null) return null;
+    const mine = r => (r[4] === country || r[4] === 3) && (r[5] === 2 || r[5] === sex);
+    const homeMax = Math.max(0, ...(this.gear[home.key] || []).filter(mine).map(r => r[6]));
+    let pick = null;
+    for (const [key, rows] of Object.entries(this.gear)) {
+      const town = Town.towns.find(t => t.key === key);
+      if (key === home.key || !this.moveOpen(key) || !town?.services?.gate) continue;
+      const start = Math.min(...rows.filter(r => mine(r) && r[6] > homeMax && r[6] <= level).map(r => r[6]));
+      if (Number.isFinite(start) && (!pick || start < pick.start)) pick = { town, start };
+    }
+    return pick?.town || null;
+  },
+  moveOpen(key) {
+    const c = this.cfg(), town = Town.towns.find(t => t.key === key);
+    if (!c.on || !c.move || !town?.services?.gate || this.movedFrom.has(key)) return false;
+    if (this.moveFailed.has(key)) {
+      if (now() - (this.moveFailedAt.get(key) ?? -Infinity) < LEVEL_MOVE_RETRY_MS) return false;
+      this.moveFailed.delete(key); this.moveFailedAt.delete(key);
+    }
+    return true;
+  },
+  foreign(spot) {
+    const home = this.townOf(this.home())?.key;
+    return !!(spot?.townKey && home && spot.townKey !== home);
+  },
+  moveDue() {
+    const c = this.cfg();
+    if (!c.on || !c.move || this.move || Town.trip) return '';
+    if (now() < this.moveAt) return this.moveDue_ || '';
+    this.moveAt = now() + LEVEL_MOVE_CHECK_MS;
+    const town = this.nextTown(World.gp?.progression?.level);
+    this.moveDue_ = town ? 'moving to ' + town.name + ' (its gear is next for your level)' : '';
+    return this.moveDue_;
+  },
+  moveTick() { if (this.move) this.moveStep(this.move); },
+  startMove(key) {
+    const town = Town.towns.find(t => t.key === key), home = this.townOf(this.home());
+    if (this.move || Town.trip || !town?.services?.gate || !this.moveOpen(key) || !World.inWorld() || World.isDead()) return false;
+    const s = town.services.gate, stand = Town.standPoint(s, town.arrival);
+    if (home?.key) this.movedFrom.add(home.key);
+    this.move = { key: town.key, home: home?.key, name: town.name, phase: 'walk', at: now(), tries: 0, character: World.charName,
+      gate: { ...stand.point, refObjId: s.refObjId, npc: { regionId: s.regionId, x: s.x, y: s.y, z: s.z } } };
+    this.moveDue_ = '';
+    this.message = 'Moving to ' + town.name + ': its merchants sell the next gear for your level.';
+    Log.info('Leveling: ' + this.message); UI.toast(this.message, 'info', 8000);
+    if (Hunt.running) Hunt.stop();
+    const started = WalkBack.startTo(this.move.gate, { label: 'the ' + town.name + ' world statue', stop: 60,
+      onDone: () => { if (this.move) { this.move.phase = 'select'; this.move.at = now(); } },
+      onFail: reason => this.moveFail(reason) });
+    if (!started && this.move) this.moveFail('the walk did not start');
+    return true;
+  },
+  moveStep(m) {
+    if (m.character !== World.charName) { this.move = null; return; }
+    if (m.phase === 'walk' || !World.inWorld()) return;
+    if (World.isDead()) return this.moveFail('the character died');
+    const gp = World.gp, retry = why => {
+      if (++m.tries >= 3) return this.moveFail(why);
+      if (gp.npcConversation?.phase) Cmd.raw({ kind: 'npc-close' }, 'Leveling: close the statue menu');
+      m.phase = 'select'; m.at = now();
+    };
+    if (m.phase === 'select') {
+      if (now() - m.at > LEVEL_MOVE_STEP_MS) return this.moveFail('the ' + m.name + ' world statue could not be selected');
+      const statue = [...World.ents.values()].find(e => Town.serviceEntity('gate', e) && e.refObjId === m.gate.refObjId && dist2D(e, m.gate.npc) < 300);
+      if (!statue || gp.targetPending || gp.inventoryPending) return;
+      if (gp.target !== statue.gid) { if (Cmd.spaced('select')) Cmd.select(statue.gid); return; }
+      if (!((gp.targetCapabilities ?? 0) & 0x40)) return this.moveFail('the ' + m.name + ' world statue offers no return point');
+      m.gid = statue.gid; m.phase = 'menu'; m.at = now(); m.talked = false;
+      return;
+    }
+    if (m.phase === 'menu') {
+      if (gp.target !== m.gid) return retry('the statue selection changed');
+      if (!(gp.npcConversation?.phase === 'menu' && gp.npcConversation.gid === m.gid)) {
+        if (!m.talked && now() - m.at > 1000 && Cmd.raw({ kind: 'npc-talk' }, 'Leveling: open the statue menu')) m.talked = true;
+        if (now() - m.at > LEVEL_MOVE_STEP_MS) retry('the statue menu did not open');
+        return;
+      }
+      if (Cmd.raw({ kind: 'recall-appoint', gid: m.gid }, 'Leveling: make ' + m.name + ' the return point')) { m.phase = 'appoint'; m.at = now(); m.appointed = false; }
+      return;
+    }
+    if (m.phase === 'appoint') {
+      if (m.appointed) {
+        if (gp.npcConversation?.phase) Cmd.raw({ kind: 'npc-close' }, 'Leveling: close the statue menu');
+        return this.moveDone(m);
+      }
+      if (now() - m.at >= LEVEL_MOVE_STEP_MS) retry('the world statue did not set the return point');
+    }
+  },
+  notice(n) { if (this.move?.phase === 'appoint' && /REBIRTH_POINT_APPOINT/.test(String(n?.key || ''))) this.move.appointed = true; },
+  moveDone(m) {
+    this.move = null;
+    const done = Town.autoSetup(true, m.key);
+    if (!done) return this.moveFail('the town services could not be set up', m);
+    Town.lastScrollPoint = null; Town.deathPoint = null;
+    this.reset();
+    this.message = 'Moved to ' + m.name + ': it is the return point now, and the bot hunts and shops there.';
+    Log.info('Leveling: ' + this.message); UI.toast(this.message, 'info', 8000);
+    let spot = this.spotsOn() ? this.spot(World.gp?.progression?.level) : null; const H = Hunt.cfg();
+    if (spot && this.foreign(spot)) spot = null;
+    if (spot) { H.center = { ...spot.center }; Settings.saveProfile(); bus.emit('center'); }
+    if (!Town.validate()) {
+      Hunt.running = true;
+      Town.begin();
+      if (Town.trip) { Town.trip.why = Town.lastTrip.why = 'first visit to ' + m.name; return; }
+      if (!Hunt.running) return;
+    }
+    WalkBack.start(true);
+  },
+  moveFail(reason, m = this.move) {
+    if (!m) return;
+    if (m.home) this.movedFrom.delete(m.home);
+    this.move = null; this.moveAt = now() + LEVEL_MOVE_CHECK_MS;
+    const died = World.isDead();
+    if (!died) { this.moveFailed.add(m.key); this.moveFailedAt.set(m.key, now()); }
+    this.message = 'Move to ' + m.name + ' stopped: ' + reason + (died ? '; it is tried again after the revive.' : '; the return point is unchanged, it is tried again in ' + Math.round(LEVEL_MOVE_RETRY_MS / 60000) + ' minutes.');
+    Log.warn('Leveling: ' + this.message); UI.toast(this.message, 'warn', 8000);
+    if (WalkBack.active?.onDone) WalkBack.cancel('', true);
+    if (died) Hunt.start(); else if (World.inWorld()) WalkBack.start(true);
+  },
   skillsOn() { const c = this.cfg(); return !!(c.on && c.skills); },
   prepare() {
-    const c = this.cfg(), gp = World.gp, weapon = (gp?.inventory || []).find(i => i.slot === 6);
-    if (!this.skillsOn() || !World.charName || c.prepared === World.charName || !World.inWorld() || !weapon || !gp.progression) return false;
-    const mastery = LEVEL_WEAPON_MASTERY[this.tids(weapon)[1]];
+    const c = this.cfg(), gp = World.gp, weapon = (gp?.inventory || []).find(i => i.slot === 6), build = this.build();
+    if (!this.skillsOn() || !World.charName || c.prepared === World.charName || !World.inWorld() || (!weapon && !build) || !gp.progression) return false;
+    const mastery = build ? build.masteries[0] : LEVEL_WEAPON_MASTERY[this.homeWeapon() ?? this.tids(weapon)[1]];
     if (!mastery) return false;
     const M = Settings.profile.mastery, S = Settings.profile.statPoints, stats = gp.progression.stats || {}, done = [];
-    if (!M.enabled || !M.ids.length) { M.enabled = true; M.ids = [mastery]; M.gap = 0; done.push(AutoMastery.name(mastery) + ' mastery'); }
-    if (!M.skills || M.scope !== 'masteries') { M.skills = true; M.scope = 'masteries'; done.push('its skills'); }
+    if (build) { M.enabled = true; M.ids = [...build.masteries]; M.gap = 0; done.push(build.masteries.map(id => AutoMastery.name(id)).join(', ') + ' for the ' + build.label + ' build'); }
+    else if (!M.enabled || !M.ids.length) { M.enabled = true; M.ids = [mastery]; M.gap = 0; done.push(AutoMastery.name(mastery) + ' mastery'); }
+    const scope = build ? 'build' : 'masteries';
+    if (!M.skills || M.scope !== scope) { M.skills = true; M.scope = scope; done.push('its skills'); }
     if (!S.enabled) {
       const caster = LEVEL_INT_MASTERIES.includes(mastery) || (stats.intellect ?? 0) > (stats.strength ?? 0);
       Object.assign(S, { enabled: true, str: caster ? 0 : 1, int: caster ? 1 : 0 });
       done.push('stat points to ' + (caster ? 'Intelligence' : 'Strength'));
     }
     c.prepared = World.charName;
+    this.addElements(M);
     AutoMastery.reset(); StatPoints.reset(); Settings.saveProfile();
     if (done.length) { this.message = 'Leveling set up: ' + done.join(', ') + '.'; Log.info(this.message); UI.toast(this.message, 'info', 7000); }
     return true;
+  },
+  addElements(M) {
+    const c = this.cfg(), weapon = (World.gp?.inventory || []).find(i => i.slot === 6);
+    if (c.elements === World.charName || !M.enabled || !weapon) return false;
+    c.elements = World.charName;
+    if (this.build()) return false;
+    if (M.ids.length !== 1 || M.ids[0] !== LEVEL_WEAPON_MASTERY[this.homeWeapon() ?? this.tids(weapon)[1]]) return false;
+    const add = LEVEL_ELEMENT_MASTERIES.filter(id => !M.ids.includes(id));
+    if (!add.length) return false;
+    M.ids = [...M.ids, ...add];
+    return true;
+  },
+  imbueTick() {
+    const M = Settings.profile.macro, c = this.cfg(), done = new Set(c.imbued || []);
+    const build = this.build();
+    if (build) return this.buildImbue(build, M, c, done);
+    const skill = UI.learnedSkills(true).find(s => LEVEL_IMBUE_SKILL.test(s.nameSymbol || '') && !done.has(s.group ?? s.id));
+    if (!skill) return false;
+    done.add(skill.group ?? skill.id); c.imbued = [...done];
+    if (!M.imbue) { M.imbue = { id: skill.id, group: skill.group ?? skill.id }; this.message = 'Imbue in use: ' + World.skillName(skill.id) + '.'; Log.info('Leveling: ' + this.message); UI.toast(this.message, 'info', 5000); }
+    Settings.saveProfile();
+    return true;
+  },
+  buildImbue(build, M, c, done) {
+    if (!build.imbue) return false;
+    const groups = this.familyGroups().get(build.imbue) || [];
+    const skill = UI.learnedSkills(true).filter(s => groups.includes(s.group ?? s.id) && !done.has(s.group ?? s.id)).sort((a, b) => (b.group ?? b.id) - (a.group ?? a.id))[0];
+    if (!skill) return false;
+    const group = skill.group ?? skill.id;
+    done.add(group); c.imbued = [...done];
+    if (!M.imbue || groups.includes(M.imbue.group) && M.imbue.group < group) {
+      M.imbue = { id: skill.id, group };
+      this.message = 'Imbue in use: ' + World.skillName(skill.id) + '.'; Log.info('Leveling: ' + this.message); UI.toast(this.message, 'info', 5000);
+    }
+    Settings.saveProfile();
+    return true;
+  },
+  petTick() {
+    const c = this.cfg(), P = Hunt.cfg().pickup;
+    if (!World.charName || c.pet === World.charName || !Loot.pet()) return false;
+    c.pet = World.charName;
+    if (P.collector === 'pet' || Object.keys(P.by || {}).length) { Settings.saveProfile(); return false; }
+    P.collector = 'pet';
+    this.message = 'Your pickup pet now collects the drops, gold and gear included.';
+    Log.info('Leveling: ' + this.message); UI.toast(this.message, 'info', 6000);
+    Settings.saveProfile();
+    return true;
+  },
+  build() { const key = this.cfg().build; return key && key !== 'auto' ? this.builds.find(b => b.key === key) || null : null; },
+  fits(b) { const { country } = this.who(); return country === null || country === undefined || b.race === country; },
+  about() { const b = this.build(); return b ? b.about : 'Uses the weapon you wear: its mastery, then Cold, Lightning and Fire. Skills that root or block the character are never used.'; },
+  familyGroups() {
+    const w = World.groups;
+    if (this.familyCache?.src === w && this.familyCache.size === w.size) return this.familyCache.map;
+    const map = new Map();
+    for (const [group, rows] of w) {
+      const f = levelFamily(rows[0]);
+      if (!f || this.blockedGroups[group]) continue;
+      if (!map.has(f)) map.set(f, []);
+      map.get(f).push(group);
+    }
+    for (const list of map.values()) list.sort((a, b) => a - b);
+    this.familyCache = { src: w, size: w.size, map };
+    return map;
+  },
+  buildGroups() {
+    const b = this.build();
+    if (!b) return [];
+    const fg = this.familyGroups(), out = [], seen = new Set();
+    const add = f => { for (const g of fg.get(f) || []) if (!seen.has(g)) { seen.add(g); out.push(g); } };
+    [...b.rotation, ...b.buffs, b.imbue, ...(b.learn || [])].filter(Boolean).forEach(add);
+    for (const [f, e] of Object.entries(BUILD_SKILLS)) if (e[2] === 'passive' && b.masteries.includes(e[0])) add(f);
+    return out;
+  },
+  setBuild(key) {
+    const c = this.cfg();
+    c.build = key === 'auto' || this.builds.some(b => b.key === key) ? key : 'auto';
+    c.prepared = ''; c.elements = ''; c.added = []; c.imbued = []; this.skillAt = 0;
+    AutoMastery.reset(); Settings.saveProfile();
+  },
+  dropBlocked() {
+    const c = this.cfg(), M = Settings.profile.macro, added = new Set(c.added || []), names = [];
+    for (const list of [M.rotations.normal, M.buffs]) {
+      for (let i = list.length - 1; i >= 0; i--) {
+        const group = list[i].group ?? list[i].id, why = this.blockedGroups[group];
+        if (!why) continue;
+        if (added.has(group)) { names.push(World.skillName(list[i].id)); list.splice(i, 1); }
+        else if (!this.warned.has(group)) { this.warned.add(group); Log.warn('Leveling: ' + World.skillName(list[i].id) + ' (added by you) ' + why + '; it stays in your list.'); }
+      }
+    }
+    if (!names.length) return;
+    Settings.saveProfile();
+    this.message = 'Taken out: ' + names.join(', ') + ' (they keep the character from moving).';
+    Log.info('Leveling: ' + this.message); UI.toast(this.message, 'info', 6000);
   },
   skillTick() {
     if (!this.skillsOn() || now() < this.skillAt) return;
     this.skillAt = now() + LEVEL_SKILL_CHECK_MS;
     this.prepare();
+    this.dropBlocked();
     if (!World.inWorld() || !World.groups.size) return;
-    const c = this.cfg(), M = Settings.profile.macro, mine = new Set(AutoMastery.masteryGroups()), added = new Set(c.added || []), names = [];
-    const take = (s, list, extra) => {
+    if (World.charName && this.cfg().elements !== World.charName && this.cfg().prepared === World.charName && this.addElements(Settings.profile.mastery)) { AutoMastery.reset(); Settings.saveProfile(); }
+    this.imbueTick();
+    this.petTick();
+    const c = this.cfg(), M = Settings.profile.macro, build = this.build(), mine = new Set(AutoMastery.masteryGroups()), added = new Set(c.added || []), names = [];
+    const fg = build ? this.familyGroups() : null, learned = new Set(Learned.rows().map(s => s.group ?? s.id));
+    const rank = fams => { const r = new Map(); fams.forEach((f, i) => (fg.get(f) || []).forEach(g => r.set(g, i))); return r; };
+    const take = (s, list, extra, ranks) => {
       const group = s.group ?? s.id;
-      if (!mine.has(group) || added.has(group)) return;
+      if (this.blockedGroups[group] || added.has(group)) return;
+      if (build) {
+        if (!ranks.has(group)) return;
+        const tiers = fg.get(levelFamily(s)) || [], at = tiers.indexOf(group);
+        if (tiers.slice(at + 1).some(g => learned.has(g))) { added.add(group); return; }
+        for (const g of tiers.slice(0, at)) { const i = list.findIndex(e => (e.group ?? e.id) === g); if (i >= 0 && added.has(g)) list.splice(i, 1); }
+      } else if (!mine.has(group)) return;
       added.add(group);
       if (list.some(e => (e.group ?? e.id) === group)) return;
-      list.push({ id: s.id, group, ...extra }); names.push(World.skillName(s.id));
+      const entry = { id: s.id, group, ...extra };
+      const place = build ? list.findIndex(e => ranks.has(e.group ?? e.id) && ranks.get(e.group ?? e.id) > ranks.get(group)) : -1;
+      if (place >= 0) list.splice(place, 0, entry); else list.push(entry);
+      names.push(World.skillName(s.id));
     };
-    for (const s of UI.learnedSkills(false)) take(s, M.rotations.normal, {});
-    for (const s of UI.learnedSkills(true)) take(s, M.buffs, { enabled: true, mode: 'hunt', refreshS: 3 });
+    const attackRanks = build ? rank(build.rotation) : null, buffRanks = build ? rank(build.buffs) : null;
+    for (const s of UI.learnedSkills(false)) take(s, M.rotations.normal, {}, attackRanks);
+    for (const s of UI.learnedSkills(true)) take(s, M.buffs, { enabled: true, mode: 'hunt', refreshS: 3 }, buffRanks);
     if (added.size === (c.added || []).length) return;
     c.added = [...added]; Settings.saveProfile();
     if (names.length) { this.message = 'New skills in use: ' + names.join(', ') + '.'; Log.info('Leveling: ' + this.message); UI.toast(this.message, 'info', 5000); }
@@ -12034,7 +12918,7 @@ const Leveling = {
     const c = this.cfg(), T = Town.cfg();
     c.on = on;
     if (on) {
-      c.prepared = ''; this.skillAt = 0;
+      c.prepared = ''; c.elements = ''; c.imbued = []; c.pet = ''; this.skillAt = 0; this.moveFailed.clear(); this.moveFailedAt.clear(); this.movedFrom.clear();
       T.noXp = { ...T.noXp, on: true, action: 'nextSpot' };
       if (!T.enabled && World.inWorld()) Setup.setupTown();
     }
@@ -12042,28 +12926,31 @@ const Leveling = {
     UI.toast(on ? 'Zero-setup leveling on: the bot picks spots for your level and buys better NPC gear on town trips.' : 'Zero-setup leveling off.', 'info', 6000);
   },
   draw() {
-    const c = () => this.cfg(), status = el('p', this.status(), 'muted');
-    UI.refreshers.push(() => { status.textContent = this.status(); });
+    const c = () => this.cfg(), status = el('p', this.status(), 'muted'), about = el('p', this.about(), 'muted');
+    UI.refreshers.push(() => { status.textContent = this.status(); about.textContent = this.about(); });
     return UI.group('Zero-setup leveling',
-      el('p', 'For levelling a character with no setup: the bot picks a hunting spot for your level from the game data, moves on as you level, and buys the next tier of weapon, armour and accessories from the town merchants on its town trips. Nothing better than ordinary +' + LEVEL_GEAR_MAX_PLUS + ' gear is ever replaced or sold. It can also raise your weapon\'s mastery, learn its skills, put new attack skills and buffs to use and spend stat points (Strength, or Intelligence for a caster); what you already set up there is kept.', 'muted'),
+      el('p', 'For levelling a character with no setup: the bot picks a hunting spot for your level from the game data, moves on as you level, and buys the next tier of weapon, armour and accessories from the town merchants on its town trips. Gear above +' + LEVEL_GEAR_MAX_PLUS + ' or protected gear is never replaced; Seal gear is replaced when the town sells a higher level, but kept in the bag, never sold. It can also raise your weapon\'s mastery, learn its skills, put new attack skills and buffs to use and spend stat points (Strength, or Intelligence for a caster); what you already set up there is kept.', 'muted'),
       UI.check('Level up by itself', () => c().on, v => this.enable(v)),
       UI.check('Pick hunting spots for my level', () => c().spots, v => { c().spots = v; this.reset(); }),
-      UI.number('Spots at most this far from town (m)', () => c().maxM, v => { c().maxM = v; this.reset(); }, 50, 5000, 50),
       UI.check('Buy better gear from the town merchants', () => c().gear, v => { c().gear = v; }),
       UI.check('Also buy earrings, necklaces and rings', () => c().accessories, v => { c().accessories = v; }),
       UI.check('Sell the replaced piece back', () => c().sellOld, v => { c().sellOld = v; }),
-      UI.check('Raise my weapon mastery, learn its skills and use them', () => c().skills, v => { c().skills = v; c().prepared = ''; this.skillAt = 0; }),
+      UI.check('Move to the next town when this one has no better gear (Jangan, then Donwhang, then Hotan)', () => c().move, v => { c().move = v; this.moveFailed.clear(); this.moveFailedAt.clear(); this.movedFrom.clear(); }),
+      UI.check('Raise my weapon mastery, learn its skills and use them', () => c().skills, v => { c().skills = v; c().prepared = ''; c().elements = ''; c().imbued = []; this.skillAt = 0; }),
+      UI.select('Character build', () => [['auto', 'Auto (from my weapon)'], ...this.builds.filter(b => this.fits(b) || b.key === c().build).map(b => [b.key, b.label])], () => this.build()?.key || 'auto', v => this.setBuild(v)),
+      about,
       UI.number('Always keep this much gold', () => c().reserve, v => { c().reserve = v; }, 0, 100000000, 1000),
       status);
   },
 };
+bus.on('notice', n => Leveling.notice(n));
 
 
 // Hunting spot by level. The profile keeps a list of spots, each used from a character level on; the highest one at or
 // below the character's level is the hunting spot. When the level crosses into a new spot, the hunting spot switches
 // and the bot walks there. Off by default; it only acts while the bot is hunting and nothing else owns the character.
 const LevelSpot = {
-  nextAt: 0, message: '',
+  nextAt: 0, message: '', retry: false,
   // Session state: a no-XP move can put hunting on a spot above the character's level gate; the level rule alone
   // must not pull it back while the character is still below that gate. Kept per character, never saved.
   heldLevel: 0, heldFor: '',
@@ -12088,6 +12975,8 @@ const LevelSpot = {
     if (Leveling.spotsOn()) {
       const next = Leveling.advance(level);
       if (!next) return false;
+      if (Leveling.foreign(next) && Leveling.startMove(next.townKey)) return true;
+      if (Leveling.foreign(next)) return false;
       const H = Hunt.cfg();
       H.center = { ...next.center };
       Settings.saveProfile(); bus.emit('center');
@@ -12110,6 +12999,14 @@ const LevelSpot = {
     if (pose && dist2D(pose, H.center) > Math.max(H.radius, 100)) WalkBack.start(true);
     return true;
   },
+  skipCurrent() {
+    const cur = Leveling.current;
+    if (!cur) return;
+    Leveling.skipped.add(cur.key); Leveling.current = null;
+    if (++Leveling.walkFails > LEVEL_SPOT_WALK_FAILS) { Log.warn('Leveling: could not walk to ' + LEVEL_SPOT_WALK_FAILS + ' spots in a row; not trying more.'); return; }
+    this.retry = true; this.nextAt = 0;
+    Log.info('Leveling: could not walk to the level ' + cur.level + ' spot; trying another.');
+  },
   // Add (or replace the entry of) a level with the current hunting spot.
   add(level) {
     const center = Settings.profile.hunt.center;
@@ -12126,16 +13023,22 @@ const LevelSpot = {
     if (!(this.cfg().on || Leveling.spotsOn()) || now() < this.nextAt) return false;
     this.nextAt = now() + 3000;
     const level = World.gp?.progression?.level;
-    if (!World.inWorld() || World.isDead() || !Hunt.running || !Number.isInteger(level)) return false;
-    if (Town.trip || Restock.trip || WalkBack.active || Travel.active || Quest.trip || Resurrect.trip || Controller.resumeAfterRevive) return false;
+    const walking = Leveling.spotsOn() && WalkBack.active?.resume && !Travel.active, retry = this.retry && Leveling.spotsOn();
+    if (!World.inWorld() || World.isDead() || !(Hunt.running || walking || retry) || !Number.isInteger(level)) return false;
+    if (Town.trip || Restock.trip || WalkBack.active && !walking || Travel.active || Quest.trip || Resurrect.trip || Controller.resumeAfterRevive) return false;
+    this.retry = false;
     const spot = (Leveling.spotsOn() ? null : this.heldSpot()) || this.spotFor(level), H = Hunt.cfg();
     if (!spot || this.same(spot.center, H.center)) return false;
+    if (Leveling.spotsOn() && Leveling.foreign(spot)) {
+      if (Leveling.startMove(spot.townKey)) return true;
+      return false;
+    }
     H.center = { ...spot.center };
     Settings.saveProfile(); bus.emit('center');
     this.message = spot.auto ? 'Level ' + level + ': hunting moved to a level ' + spot.level + ' spot.' : 'Level ' + level + ': moved the hunting spot to the one from level ' + spot.level + '.';
     Log.info('Level spot: ' + this.message); UI.toast(this.message, 'info', 5000);
     const pose = World.pose();
-    if (pose && dist2D(pose, H.center) > Math.max(H.radius, 100)) WalkBack.start(true);
+    if (walking || retry || pose && dist2D(pose, H.center) > Math.max(H.radius, 100)) WalkBack.start(true);
     return true;
   },
 };
@@ -13423,6 +14326,7 @@ const AutoMastery = {
     (m.buffs || []).forEach(add); add(m.imbue);
     // The whole learned skill line: every other skill group the character already has, after the ones it uses.
     if (this.cfg().scope === 'all') for (const g of World.groups.keys()) if (!seen.has(g) && this.groupLevel(g)) { seen.add(g); groups.push(g); }
+    if (this.cfg().scope === 'build') for (const g of Leveling.buildGroups()) if (!seen.has(g)) { seen.add(g); groups.push(g); }
     if (this.cfg().scope === 'masteries') for (const g of this.masteryGroups()) if (!seen.has(g)) { seen.add(g); groups.push(g); }
     return groups;
   },
@@ -13474,7 +14378,7 @@ const AutoMastery = {
     const summary = () => { for (const line of quiet.slice(0, 6)) skipped.push(line); if (quiet.length > 6) skipped.push('and ' + (quiet.length - 6) + ' more skills'); };
     for (const group of groups) {
       const current = this.groupLevel(group);
-      if (!current && this.cfg().scope !== 'masteries') { quiet.push(name(group) + ': not learned yet'); continue; }
+      if (!current && !['masteries', 'build'].includes(this.cfg().scope)) { quiet.push(name(group) + ': not learned yet'); continue; }
       const row = (World.groups.get(group) || []).find(s => s.level === current + 1);
       if (!row) { quiet.push(name(group) + ': already at its highest level (' + current + ')'); continue; }
       const label = name(group) + ' level ' + row.level;
@@ -13575,7 +14479,7 @@ const AutoMastery = {
     }
     box.append(UI.number('Keep this many levels below my level', () => this.cfg().gap, v => this.cfg().gap = v, 0, 50),
       UI.check('Upgrade my rotation and buff skills automatically', () => this.cfg().skills, v => { this.cfg().skills = v; this.pending = null; this.blocked.clear(); }),
-      UI.select('Skills to upgrade', [['rotation', 'Only skills in my rotations, buffs and imbue'], ['all', 'All skills I have learned'], ['masteries', 'Every skill of my chosen masteries (learns new ones)']], () => ['all', 'masteries'].includes(this.cfg().scope) ? this.cfg().scope : 'rotation', v => { this.cfg().scope = v; this.pending = null; this.blocked.clear(); }),
+      UI.select('Skills to upgrade', [['rotation', 'Only skills in my rotations, buffs and imbue'], ['all', 'All skills I have learned'], ['masteries', 'Every skill of my chosen masteries (learns new ones)'], ['build', 'The skills of my character build (learns new ones)']], () => ['all', 'masteries', 'build'].includes(this.cfg().scope) ? this.cfg().scope : 'rotation', v => { this.cfg().scope = v; this.pending = null; this.blocked.clear(); }),
       UI.number('Keep this many skill points unspent', () => this.cfg().reserve, v => this.cfg().reserve = v, 0, 100000000),
       UI.select('Order when both are ticked', [['masteries', 'Masteries first'], ['skills', 'Skills first'], ['alternate', 'Alternate']], () => this.cfg().order, v => this.cfg().order = v));
     this.note = el('p', this.message, 'muted');
@@ -15093,7 +15997,7 @@ const ProfileShare = {
     const r = p.potion.restock, t = r.town;
     return this.clone({ center: p.hunt.center, vendor: r.vendor, route: r.route, offers: r.offers,
       town: { arrival: t.arrival, storage: t.storage, vendor: t.vendor, smith: t.smith, gate: t.gate }, buffSets: p.macro.buffSets, gear: p.items.gear, wardrobe: p.wardrobe, follow: p.trace.name, pullPoints: p.lure.points,
-      leveled: { prepared: p.leveling.prepared, added: p.leveling.added } });
+      leveled: { prepared: p.leveling.prepared, added: p.leveling.added, elements: p.leveling.elements, imbued: p.leveling.imbued, pet: p.leveling.pet, weapon: p.leveling.weapon } });
   },
   restore(p, own) {
     const r = p.potion.restock, t = r.town;
@@ -17776,7 +18680,7 @@ const Alchemy = {
 };
 
 
-const RELEASE_NOTES = [{"version": "2.0.8", "title": "OSB works again after the game's 2026-11-11 update", "items": ["Since the game's 2026-11-11 update, the bot stayed on \"Waiting for game world\" and did not start. The game now sends most of its updates as only the parts that changed, and OSB read each one as the whole game state. OSB now adds each update to the state it already has, so it enters the world and works as before."]}, {"version": "2.0.7", "title": "The pickup pet leaves you room, the Unique hunt knows which uniques are alive, live uniques on Setup", "items": ["With the bot stopped, the pickup pet no longer keeps your inventory locked. It waits 3 s after any click, key or scroll in the game (not in the OSB window), takes only drops within 25 m of it, keeps at most about a third of any 10 seconds for itself, and waits until a return scroll, reverse return scroll or teleport has finished. Your scrolls, potions and Item Mall work again while it collects in your pauses. New in Loot → Collection: \"Pet collects while the bot is stopped\" (on), \"Pet waits after your clicks and keys (s)\" (3) and \"Pet reach while the bot is stopped (m)\" (25).", "The Unique hunt now stops after killing its unique even when the game did not show the death in the usual way: a unique shown dead, announced as killed, or disappearing at low HP right after your hits counts as your kill. Your own hits during manual control count too.", "The bot remembers which uniques are alive or dead, from the game's announcements, what it sees and its kills. The hunt skips uniques known to be dead; when all chosen uniques are dead it stays where it is (\"Waiting: Tiger Girl was killed 12 min ago.\") and goes on when one appears again. \"Trust a unique's death for (min)\" (30) is in Combat → Unique hunt.", "At the game's unique nests the bot now looks around for about 2 seconds and moves on when no unique is there. \"Wait at each spot\" is for your own spots only and is 0 by default; settings that saved a wait keep it.", "New on the Setup page, under the Unique hunt card: the Uniques list, ordered by level, lowest first, with each state as a coloured pill (Alive green, Slain red, Not up amber, Unknown dim), the map and the nest count. The Hunt ticks choose which uniques the Unique hunt looks for, and ticking one turns on \"Patrol the game's unique nests\". Click a unique for a small map of its nests and how far the nearest one is.", "The list shows each unique once. OSB knows the 13 uniques by the game's own monster numbers, so a second monster with the same name (Cerberus, Captin Ivy) no longer adds a row or sends the patrol to the wrong spawn points; old ticks and states saved under such a copy move to the real unique. The levels of all 13 are built in, and Lord Yarkan has one more nest, from a player's report.", "New switch, off by default: \"Check the game site's unique tracker\". When you turn it on, OSB reads opensro.online/uniques at most every 2 minutes while the Setup page is open or the Unique hunt runs, without cookies and without any data about you. Only each unique's state, level and map are read, never who killed it. Until you turn it on, OSB makes no request to the game site for it."]}, {"version": "2.0.6", "title": "Unique hunt, buff weapon changes that wait for the pet, fewer repeated warnings", "items": ["New Unique hunt on the Setup page. Start it and the bot patrols for uniques, fights only uniques with your Unique rotation, berserk, buffs and potions, collects the unique's drops first and then stops. Your hunting spot, monster classes and rotations stay as they are; Combat → Unique hunt has all the settings.", "The patrol walks your own named spots, and with \"Patrol the game's unique nests\" also the places where the uniques you tick spawn, read from the game's own data, nearest first and within a distance you choose (1000 m by default). The bot can also remember where it saw uniques. When the game announces that a unique appeared, the patrol goes to its spots first, and the map rings the chosen nests.", "When the unique it went for dies, a new \"Unique killed\" chime plays (on by default, with a Test button), and the log and Session stats count it. The bot leaves a unique alone when other players have already brought it below 75% HP (you can change this), and gives up when others clearly out-damage you. A unique that hits you is always fought back.", "A buff weapon change no longer stops hunting with \"Equipment move unconfirmed\" while the pickup pet or another action keeps the game's inventory busy. A weapon change does not start while a pet pickup is on its way, and the pet waits while a weapon change runs. When the game refuses a weapon move and nothing moved, the bot sends it once more; if it is refused again, the log says so and hunting goes on unless no weapon is worn.", "A drop the game refuses to give your pet twice is given up until it disappears.", "\"Manual control: resurrection travel cancelled.\" is logged only when a walk to a corpse is really cancelled, and the Activity log notes which game command started a manual-control pause."]}, {"version": "2.0.5", "title": "The pickup pet keeps collecting while you play by hand, resurrection retry settings", "items": ["New in Loot → Collection: \"Pet keeps collecting while I play by hand\" (on by default). When you walk, attack or use skills yourself, the pickup pet now keeps collecting, with the bot running or stopped. Only the pet moves; your character's own pickups and hunting still pause after manual control. Turn it off to have the pet wait as before.", "Your own inventory use goes first. A pet pickup keeps the game's inventory busy until the pet reaches the drop, and meanwhile the game greys out its inventory and Item Mall buttons and quietly ignores a purchase. Now the pet sends no new pickup for 2.5 s after you use or move an item, pick something up or use a shop, storage, trade, stall or alchemy, and for 60 s after you open or use the Item Mall. It also waits while a trade, stall or alchemy window is open, and leaves a short gap after each pickup so your clicks get through. The bot's own item drops, pet-to-bag moves and Item Mall buying wait the same way. The bot never repeats a command of yours, so a purchase is never sent twice.", "A drop the pet cannot reach is now given up after a few tries instead of being tried again and again.", "The pet status line shows how much of the last minute pet pickups kept the inventory busy. With detailed capture on, the Activity log shows how long each pet pickup took. These numbers stay on your computer.", "New on the Party page: \"Wait between resurrection attempts (s)\" (31 s by default, the game's 30 s answer window plus one tick; 31 to 300) and \"Max resurrection attempts per player (0 = no limit)\". After the last attempt the bot stops offering Rebirth to that player and says so once; it starts counting again when the player is alive again, leaves the party or the list, or when you press Start."]}, {"version": "2.0.4", "title": "Resurrection from anyone, resurrecting helpers outside the party, zero-setup leveling", "items": ["New on the Party page: \"Accept resurrection from any player\" (off by default). When you are dead, the bot also answers Yes to a Rebirth from a player outside your party. The log names who resurrected you. With it on, any living player in view counts as a helper for \"Wait for a party resurrection\".", "New on the Party page: \"Also resurrect these players (not in the party)\". Enter up to 20 character names, for example a lure character helping a full party from outside it. A listed player who is dead, in view and within the maximum distance is resurrected like a party member, during hunting and while stopped. Nobody else outside the party is targeted. If the game refuses Rebirth on one of them, the bot says so once and skips that player for 10 minutes.", "\"Max every skill\" (Settings, Auto mastery) is now a switch. While it is on, it spends new skill points as you get them. Off by default.", "New on the Setup page: zero-setup leveling, \"Level up by itself\" (off by default). The bot picks a hunting spot for your level from built-in game data, buys the next tier of NPC weapon, armour and accessories on town trips, and can raise your weapon's mastery, learn its skills and spend stat points. Seal and rare gear, +4 and higher, and anything you protect are never replaced, and a gold reserve is never spent.", "Auto mastery has a new choice under \"Skills to upgrade\": \"Every skill of my chosen masteries\", which also learns new skills.", "The Update button can be clicked again in the compact window, the classic window keeps one size on every tab, and the wide window splits its boxes evenly."]}, {"version": "2.0.3", "title": "Fewer silent stops, town trips that retry, pet loot to your bag", "items": ["A monster the bot cannot reach no longer stops hunting when the game does not confirm that it was released. The bot asks again once, then leaves that monster alone for a minute and hunts on. Protect party members follows the same rule.", "Every stop now says why in the log, for example \"Hunting stopped: stopped by you (F8)\". A stop you make (F8, Start / stop, Stop all, or a stop from OSB Manager) is never undone; a stop the bot makes by itself is started again after 2 minutes when \"Start again when the bot stops by itself\" is on.", "Auto-start no longer gives up when the page was reloaded or the connection came back: it waits for the reconnect.", "The same game refusal and the same missing skill icon appear at most once a minute, with a count.", "Town trips no longer stop when the warehouse, a merchant or the world statue does not open, for example while the town is still loading. The bot waits, walks back and tries again, three tries per service.", "New option under Loot, Bag and pet space: \"Move pet loot to my bag when the pet is nearly full\". The loot is stored or sold on the next town trip like pet loot.", "Reverse Return Scrolls have one switch on the Town page: \"Buy Reverse Return Scrolls from the Item mall (silk)\". No merchant sells them for gold, so the merchant switch is gone; if it was on, the Item mall switch is turned on. Nothing is bought while the silk budget is 0.", "Item mall \"low stock ≤\" now includes the number itself, so a low mark of 0 buys when the item runs out."]}, {"version": "2.0.2", "title": "Attack rotations for every monster class", "items": ["Combat > Skills has one attack rotation per monster class: Normal, Champion, Party, Giant, Party champion, Party giant, Elite and Unique.", "An empty rotation uses the next filled class below it in that order, down to Normal, and its tab says which one, for example \"Empty: uses Party giant\".", "Your existing rotations stay. Party champions and party giants start with a copy of your Party rotation, so they fight as before.", "The SoX chime and notice now have one switch per seal: Star, Moon and Sun. If the chime was on, all three are ticked; if it was off, none are."]}, {"version": "2.0.1", "title": "Protect your party members", "items": ["New on the Party page: Protect party members. When a monster hits a member you ticked, the bot attacks that monster.", "Tick single members or All party members. Members who left stay in the list, greyed out.", "It works within a distance you choose (40 m by default) and inside your hunting area, and never attacks players.", "Your potions, death and return rules and town trips come first. Monsters in Skip these mobs and monsters other players fight are left alone.", "With Also with Attack monsters off, a support character protects the party too."]}];
+const RELEASE_NOTES = [{"version": "2.0.9", "title": "Smarter town trips, zero-setup leveling with character builds, auto party invite and your own SoX sound", "items": ["Town trips walk only to the services that have something to do. A trip with only gear to buy no longer visits the warehouse, and a trip with nothing left goes straight back.", "A merchant whose saved standing spot is blocked (inside a forge, behind a fence) is reached from another spot beside it, and the spot that works is saved.", "A completely full bag no longer stops the trip when the bag holds something for the warehouse: the warehouse goes first and makes room.", "With \"Walking back may use teleports and ferries (beta; pays their fee)\" on, walking back across a river takes the ferry when the walk would go the long way round, or has no way at all.", "\"Wear better gear\" now swaps a weapon only for one of the same type.", "Zero-setup leveling picks spots for new characters and skips spots it cannot reach, buys gear for your own race and sex (a whole tier in one trip once all of it is open), replaces weak Seal gear but keeps it in the bag, keeps the weapon type you started with, always walks back and never buys reverse scrolls, and lets a summoned pickup pet collect the drops. When a town's gear runs out it moves on to the next town (Jangan, then Donwhang, then Hotan) and makes that town's statue your return point.", "New on the Setup page: \"Character build\". Leave it on Auto, or pick Glaive nuker, Blade tank, Bow nuker, Wizard, Cleric and more. Leveling never uses skills that root your character, such as Crystal Wall and Fire Wall.", "New on the Party page, off by default: \"Auto-invite players\". List the characters to invite and the bot invites them while they are in view; \"Also invite anyone nearby\" invites everyone within a radius you set. Only the party leader invites, never into a full party, never while the character is dead, and never on an account that joins a party leader. A player who does not answer is asked again after 30 seconds, then 1, 2, 4 minutes and so on, up to 10 minutes.", "Your own sound for SoX drops: \"Choose SoX sound…\" on the Loot page takes an audio file of up to 1 MB. It stays in this browser only and is never sent anywhere. \"Clear SoX sound\" brings back the built-in chime. The Star, Moon and Sun switches still decide which drops play it."]}, {"version": "2.0.8", "title": "OSB works again after the game's 2026-11-11 update", "items": ["Since the game's 2026-11-11 update, the bot stayed on \"Waiting for game world\" and did not start. The game now sends most of its updates as only the parts that changed, and OSB read each one as the whole game state. OSB now adds each update to the state it already has, so it enters the world and works as before."]}, {"version": "2.0.7", "title": "The pickup pet leaves you room, the Unique hunt knows which uniques are alive, live uniques on Setup", "items": ["With the bot stopped, the pickup pet no longer keeps your inventory locked. It waits 3 s after any click, key or scroll in the game (not in the OSB window), takes only drops within 25 m of it, keeps at most about a third of any 10 seconds for itself, and waits until a return scroll, reverse return scroll or teleport has finished. Your scrolls, potions and Item Mall work again while it collects in your pauses. New in Loot → Collection: \"Pet collects while the bot is stopped\" (on), \"Pet waits after your clicks and keys (s)\" (3) and \"Pet reach while the bot is stopped (m)\" (25).", "The Unique hunt now stops after killing its unique even when the game did not show the death in the usual way: a unique shown dead, announced as killed, or disappearing at low HP right after your hits counts as your kill. Your own hits during manual control count too.", "The bot remembers which uniques are alive or dead, from the game's announcements, what it sees and its kills. The hunt skips uniques known to be dead; when all chosen uniques are dead it stays where it is (\"Waiting: Tiger Girl was killed 12 min ago.\") and goes on when one appears again. \"Trust a unique's death for (min)\" (30) is in Combat → Unique hunt.", "At the game's unique nests the bot now looks around for about 2 seconds and moves on when no unique is there. \"Wait at each spot\" is for your own spots only and is 0 by default; settings that saved a wait keep it.", "New on the Setup page, under the Unique hunt card: the Uniques list, ordered by level, lowest first, with each state as a coloured pill (Alive green, Slain red, Not up amber, Unknown dim), the map and the nest count. The Hunt ticks choose which uniques the Unique hunt looks for, and ticking one turns on \"Patrol the game's unique nests\". Click a unique for a small map of its nests and how far the nearest one is.", "The list shows each unique once. OSB knows the 13 uniques by the game's own monster numbers, so a second monster with the same name (Cerberus, Captin Ivy) no longer adds a row or sends the patrol to the wrong spawn points; old ticks and states saved under such a copy move to the real unique. The levels of all 13 are built in, and Lord Yarkan has one more nest, from a player's report.", "New switch, off by default: \"Check the game site's unique tracker\". When you turn it on, OSB reads opensro.online/uniques at most every 2 minutes while the Setup page is open or the Unique hunt runs, without cookies and without any data about you. Only each unique's state, level and map are read, never who killed it. Until you turn it on, OSB makes no request to the game site for it."]}, {"version": "2.0.6", "title": "Unique hunt, buff weapon changes that wait for the pet, fewer repeated warnings", "items": ["New Unique hunt on the Setup page. Start it and the bot patrols for uniques, fights only uniques with your Unique rotation, berserk, buffs and potions, collects the unique's drops first and then stops. Your hunting spot, monster classes and rotations stay as they are; Combat → Unique hunt has all the settings.", "The patrol walks your own named spots, and with \"Patrol the game's unique nests\" also the places where the uniques you tick spawn, read from the game's own data, nearest first and within a distance you choose (1000 m by default). The bot can also remember where it saw uniques. When the game announces that a unique appeared, the patrol goes to its spots first, and the map rings the chosen nests.", "When the unique it went for dies, a new \"Unique killed\" chime plays (on by default, with a Test button), and the log and Session stats count it. The bot leaves a unique alone when other players have already brought it below 75% HP (you can change this), and gives up when others clearly out-damage you. A unique that hits you is always fought back.", "A buff weapon change no longer stops hunting with \"Equipment move unconfirmed\" while the pickup pet or another action keeps the game's inventory busy. A weapon change does not start while a pet pickup is on its way, and the pet waits while a weapon change runs. When the game refuses a weapon move and nothing moved, the bot sends it once more; if it is refused again, the log says so and hunting goes on unless no weapon is worn.", "A drop the game refuses to give your pet twice is given up until it disappears.", "\"Manual control: resurrection travel cancelled.\" is logged only when a walk to a corpse is really cancelled, and the Activity log notes which game command started a manual-control pause."]}, {"version": "2.0.5", "title": "The pickup pet keeps collecting while you play by hand, resurrection retry settings", "items": ["New in Loot → Collection: \"Pet keeps collecting while I play by hand\" (on by default). When you walk, attack or use skills yourself, the pickup pet now keeps collecting, with the bot running or stopped. Only the pet moves; your character's own pickups and hunting still pause after manual control. Turn it off to have the pet wait as before.", "Your own inventory use goes first. A pet pickup keeps the game's inventory busy until the pet reaches the drop, and meanwhile the game greys out its inventory and Item Mall buttons and quietly ignores a purchase. Now the pet sends no new pickup for 2.5 s after you use or move an item, pick something up or use a shop, storage, trade, stall or alchemy, and for 60 s after you open or use the Item Mall. It also waits while a trade, stall or alchemy window is open, and leaves a short gap after each pickup so your clicks get through. The bot's own item drops, pet-to-bag moves and Item Mall buying wait the same way. The bot never repeats a command of yours, so a purchase is never sent twice.", "A drop the pet cannot reach is now given up after a few tries instead of being tried again and again.", "The pet status line shows how much of the last minute pet pickups kept the inventory busy. With detailed capture on, the Activity log shows how long each pet pickup took. These numbers stay on your computer.", "New on the Party page: \"Wait between resurrection attempts (s)\" (31 s by default, the game's 30 s answer window plus one tick; 31 to 300) and \"Max resurrection attempts per player (0 = no limit)\". After the last attempt the bot stops offering Rebirth to that player and says so once; it starts counting again when the player is alive again, leaves the party or the list, or when you press Start."]}, {"version": "2.0.4", "title": "Resurrection from anyone, resurrecting helpers outside the party, zero-setup leveling", "items": ["New on the Party page: \"Accept resurrection from any player\" (off by default). When you are dead, the bot also answers Yes to a Rebirth from a player outside your party. The log names who resurrected you. With it on, any living player in view counts as a helper for \"Wait for a party resurrection\".", "New on the Party page: \"Also resurrect these players (not in the party)\". Enter up to 20 character names, for example a lure character helping a full party from outside it. A listed player who is dead, in view and within the maximum distance is resurrected like a party member, during hunting and while stopped. Nobody else outside the party is targeted. If the game refuses Rebirth on one of them, the bot says so once and skips that player for 10 minutes.", "\"Max every skill\" (Settings, Auto mastery) is now a switch. While it is on, it spends new skill points as you get them. Off by default.", "New on the Setup page: zero-setup leveling, \"Level up by itself\" (off by default). The bot picks a hunting spot for your level from built-in game data, buys the next tier of NPC weapon, armour and accessories on town trips, and can raise your weapon's mastery, learn its skills and spend stat points. Seal and rare gear, +4 and higher, and anything you protect are never replaced, and a gold reserve is never spent.", "Auto mastery has a new choice under \"Skills to upgrade\": \"Every skill of my chosen masteries\", which also learns new skills.", "The Update button can be clicked again in the compact window, the classic window keeps one size on every tab, and the wide window splits its boxes evenly."]}, {"version": "2.0.3", "title": "Fewer silent stops, town trips that retry, pet loot to your bag", "items": ["A monster the bot cannot reach no longer stops hunting when the game does not confirm that it was released. The bot asks again once, then leaves that monster alone for a minute and hunts on. Protect party members follows the same rule.", "Every stop now says why in the log, for example \"Hunting stopped: stopped by you (F8)\". A stop you make (F8, Start / stop, Stop all, or a stop from OSB Manager) is never undone; a stop the bot makes by itself is started again after 2 minutes when \"Start again when the bot stops by itself\" is on.", "Auto-start no longer gives up when the page was reloaded or the connection came back: it waits for the reconnect.", "The same game refusal and the same missing skill icon appear at most once a minute, with a count.", "Town trips no longer stop when the warehouse, a merchant or the world statue does not open, for example while the town is still loading. The bot waits, walks back and tries again, three tries per service.", "New option under Loot, Bag and pet space: \"Move pet loot to my bag when the pet is nearly full\". The loot is stored or sold on the next town trip like pet loot.", "Reverse Return Scrolls have one switch on the Town page: \"Buy Reverse Return Scrolls from the Item mall (silk)\". No merchant sells them for gold, so the merchant switch is gone; if it was on, the Item mall switch is turned on. Nothing is bought while the silk budget is 0.", "Item mall \"low stock ≤\" now includes the number itself, so a low mark of 0 buys when the item runs out."]}, {"version": "2.0.2", "title": "Attack rotations for every monster class", "items": ["Combat > Skills has one attack rotation per monster class: Normal, Champion, Party, Giant, Party champion, Party giant, Elite and Unique.", "An empty rotation uses the next filled class below it in that order, down to Normal, and its tab says which one, for example \"Empty: uses Party giant\".", "Your existing rotations stay. Party champions and party giants start with a copy of your Party rotation, so they fight as before.", "The SoX chime and notice now have one switch per seal: Star, Moon and Sun. If the chime was on, all three are ticked; if it was off, none are."]}];
 
 // Check trusted repository metadata; never execute downloaded update code. The check sends no user data and is on by default;
 // the player can switch it off (Settings, Privacy), and then this module makes no request at all.
@@ -18040,6 +18944,7 @@ const Diagnostics = {
     if (Travel.active && !WalkBack.active) return Travel.status();
     if (WalkBack.active) return WalkBack.status();
     if (Restock.trip || Resurrect.trip) return 'Travelling; waiting to reach the destination.';
+    if (Leveling.move) return String(Leveling.message || 'Zero-setup leveling: moving to the next town.').slice(0, 200);
     if (!Hunt.running) return AutoStart.pending() ? AutoStart.message || 'Auto-start: waiting.' : Retry.stop && Retry.message ? Retry.message : 'Bot stopped.';
     if (now() - Manual.lastAt < Hunt.cfg().manualPauseS * 1000) return 'Hunting paused after manual control.';
     if (Restock.activeShop() || World.gp?.storage) return 'Hunting paused: close shop or storage.';
@@ -18081,6 +18986,7 @@ const Diagnostics = {
       joinRequest: !!matching?.request, acceptanceSent: !!matching?.request && Party.answered === `${matching.request.a}:${matching.request.b}:${matching.request.expires}`,
       requestRemainingMs: Number.isFinite(World.simNow()) && Number.isFinite(matching?.request?.expires) ? Math.max(0, matching.request.expires - World.simNow()) : null,
       townActive: !!Town.trip,
+      levelingOn: !!c.leveling?.on, levelingMove: ['walk', 'select', 'menu', 'appoint'].includes(Leveling.move?.phase) ? Leveling.move.phase : null, levelingBuild: Leveling.build()?.key || null,
       townPhase: ['recall', 'recall-wait', 'revive-arrival', 'walk-arrival', 'service-wait', 'walk-storage', 'open-storage', 'store', 'close-storage', 'walk-vendor', 'open-vendor', 'buy', 'close-vendor', 'walk-smith', 'open-smith', 'sell', 'gear', 'repair', 'close-smith', 'walk-armor', 'open-armor', 'close-armor', 'walk-accessory', 'open-accessory', 'close-accessory', 'walk-gate', 'open-gate', 'mall-reverse', 'reverse', 'reverse-wait', 'leave', 'settle'].includes(Town.trip?.phase) ? Town.trip.phase : null,
       scrollAttempts: this.number(Town.trip?.scrollAttempts), scrollAccepted: !!Town.trip?.scrollRequest?.accepted,
       returnScroll: !!Town.scroll(0x09ec), reverseScroll: !!Town.scroll(0x19ec),
@@ -19230,6 +20136,10 @@ const Equip = {
     if (!stats || !slots.length) return null;
     const need = Leveling.reqLevel(item);
     if (!Number.isInteger(need) || need > level || !Town.masteriesMet(item)) return null;
+    if (this.family(item) === 6) {
+      const type = (item.typeFlags >>> 11) & 31, types = Leveling.weaponTypes();
+      if (types ? !types.includes(type) : !worn.some(w => this.family(w) === 6 && ((w.typeFlags >>> 11) & 31) === type)) return null;
+    }
     const family = worn.filter(w => this.family(w) === this.family(item) && slots.includes(w.slot));
     if (!family.length) return null;
     let target = null, targetStats = null, targetScore = 0;
@@ -19856,6 +20766,7 @@ const UI = {
     b.addEventListener('click', event => { try { action(event); } catch (e) { this.toast(e.message, 'warn'); } });
     return b;
   },
+  tipped(node, text) { node.title = text; return node; },
   row(...nodes) { const r = el('div', null, 'row'); r.append(...nodes); return r; },
   field(title, input) { const label = el('label', null, 'field'); input.setAttribute('aria-label', title); label.append(el('span', title), input); return label; },
   check(title, get, set) {
@@ -20551,7 +21462,7 @@ const UI = {
       petReach.title = 'While the bot is stopped the pet only takes drops this close to it, so each pickup holds the game inventory only briefly.';
       options.append(petStopped, petHold, petReach);
       options.append(this.check('Chime when pet bag is full', () => L().petFullSound, v => { L().petFullSound = v; Loot.fullAlert = null; }), this.button('Test pet chime', () => Sound.test()),
-        ...SOX_SEALS.map((seal, i) => this.check(`Chime and notice when ${['Star', 'Moon', 'Sun'][i]} gear is picked up`, () => L().soxSeals[seal], v => L().soxSeals[seal] = v)), this.button('Test SoX chime', () => Sound.test('sox')));
+        ...SOX_SEALS.map((seal, i) => this.check(`Chime and notice when ${['Star', 'Moon', 'Sun'][i]} gear is picked up`, () => L().soxSeals[seal], v => L().soxSeals[seal] = v)), this.button('Test SoX chime', () => Sound.test('sox')), this.soxSoundPicker());
       this.petNote = el('p', '', 'muted pet-note'); options.append(this.petNote);
       options.append(this.row(...[['Elixirs only','elixirs'],['Elixirs + gold','elixirs-gold'],['All items','all']].map(([label,mode]) => this.button(label, () => { Loot.preset(mode); this.draw(); }))));
       for (const [key, label] of [['soxOnly', 'Equipment: only SoX (Star / Moon / Sun)'], ['skipStar', "Equipment: don't pick up Star gear (Moon and Sun still are)"], ['afterKillOnly', 'Character: finish the current fight before picking up']]) options.append(this.check(label, () => L()[key], v => L()[key] = v));
@@ -20567,6 +21478,21 @@ const UI = {
         this.check('Chime on a level up', () => Settings.profile.sounds.levelUp, v => Settings.profile.sounds.levelUp = v),
         this.check('Chime when a unique monster comes into view', () => Settings.profile.sounds.unique, v => Settings.profile.sounds.unique = v),
         el('p', 'Short chimes, one per switch, all off by default (the player one uses the player alert detection). A click in the game unlocks the sound when the browser blocked it. The pet and SoX chimes above preview the sound.', 'muted')));
+  },
+  soxSoundPicker() {
+    const file = el('input'); file.type = 'file'; file.accept = 'audio/*,.mp3,.wav,.ogg,.m4a'; file.hidden = true;
+    const name = () => Sound.custom('sox')?.name;
+    const status = el('p', name() ? 'SoX sound: ' + name() : 'SoX sound: built-in chime', 'muted');
+    const choose = this.button('Choose SoX sound…', () => file.click()), clear = this.button('Clear SoX sound', () => { Sound.clearCustom('sox'); this.draw(); });
+    choose.title = 'Pick an audio file (at most 1 MB) to play instead of the built-in chime for every ticked seal. It is checked by playing it, kept only in this browser and never sent anywhere. It is not part of your settings, share codes or backups.';
+    clear.title = 'Go back to the built-in chime.'; clear.hidden = !name();
+    file.addEventListener('change', async () => {
+      const chosen = file.files?.[0]; file.value = ''; if (!chosen) return;
+      try { await Sound.setCustom('sox', chosen); UI.toast('SoX sound set to ' + chosen.name + '.'); Sound.test('sox'); this.draw(); }
+      catch (e) { UI.toast('Could not use that sound: ' + e.message + '.', 'warn'); }
+    });
+    const box = el('div'); box.append(file, this.row(choose, clear), status);
+    return box;
   },
   section_lootWho(host) {
     const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();
@@ -20710,6 +21636,7 @@ const UI = {
         this.number('Every (minutes)', () => town().every.minutes, v => town().every.minutes = v, 5, 600),
         this.check('Revive in town and go back to the hunting spot', () => town().revive, v => town().revive = v),
         this.check('Revive a dead pet with a Grass of life', () => town().revivePet, v => town().revivePet = v),
+        ...(Leveling.cfg().on ? [el('p', 'Zero-setup leveling is on: the character walks back.', 'muted')] : []),
         this.select('After death, reverse to', [['recall', 'Last return-scroll location (hunting area)'], ['death', 'Death location']], () => town().deathReturn, v => { town().deathReturn = v; Activity.emit({category:'settings',code:'reverse-choice-changed',text:'Revival reverse destination changed to ' + v + '.',details:{choice:v === 'death' ? 3 : 2}}); }),
         el('p', 'Service trips reverse to their departure point. After death, use the selected destination. A missing game destination stops the trip; it never substitutes another point. Without a reverse scroll, or with Back to the hunting spot set to Walk, the trip walks back to the saved hunting spot instead.', 'muted'),
         el('p', 'Worn gear means the most worn repairable item you are wearing, measured against its own maximum durability; the trip repairs it. A broken weapon (0 durability) has its own switch, on by default. The XP and timer clocks run only while hunting and restart with every trip.', 'muted'),
@@ -20724,6 +21651,7 @@ const UI = {
         this.select('Town', townOptions, () => this.townPick, v => { this.townPick = v; Town.choose(v); }),
         el('p', 'Pick your town: the bot saves its arrival point, warehouse, potion merchant, repair merchant and world statue. You do not need to be in town.', 'muted'),
         this.check('Use return scroll → town services → back to the hunting spot', () => town().enabled, v => { town().enabled = v; if (v) Town.fillMissing(this.townPick); this.draw(); }),
+        ...(Leveling.cfg().on ? [el('p', 'Zero-setup leveling is on: the character walks back.', 'muted')] : []),
         this.select('Back to the hunting spot', [['reverse', 'Reverse return scroll (walks when none is carried)'], ['walk', 'Walk']], () => town().returnBy, v => { town().returnBy = v; this.draw(); }),
         ...(town().returnBy === 'walk' ? [] : [
           this.check('Buy Reverse Return Scrolls from the Item mall (silk)', () => Settings.profile.mall.reverse.on, v => { Settings.profile.mall.reverse.on = v; this.draw(); }),
@@ -20964,8 +21892,13 @@ const UI = {
         this.check("Leave someone else's party when the party leader is back", () => party().leaveIfNotLeader, v => { party().leaveIfNotLeader = v; Party.reset(); }),
         el('p', 'For your other accounts. While you are not in a party, the bot accepts a party invitation from that character, or finds their party listing on the party-matching board and applies to it. The main account needs Auto-recruit and Auto-accept party-matching joins ticked. It also rejoins after a disconnect, once the character is back in the game. Leave this off on the main account.', 'muted'),
         el('p', 'With the leave option on, a party led by someone else is left only once the party leader is in view near your hunting spot. If the party leader disconnects, the party the game hands to another member stays together until they are back.', 'muted'),
+        this.tipped(this.check('Auto-invite players', () => party().autoInvite, v => { party().autoInvite = v; Party.reset(); }), 'Off by default. Sends a party invite to the listed players while they are in view, and to anyone within the radius if the nearby option is on. Only the party leader (or any member, if the party lets members invite) can invite, never into a full party and never while this account joins a party leader.'),
+        this.tipped(this.text('Invite these players', () => party().inviteNames, v => party().inviteNames = v, 'names, comma separated'), 'Up to 20 character names, any letter case. A listed player is invited at any distance while in view.'),
+        this.tipped(this.check('Also invite anyone nearby', () => party().inviteAnyone, v => party().inviteAnyone = v), 'Invites every other player within the radius, listed or not. This can annoy other players; leave it off unless you want an open party.'),
+        this.tipped(this.number('Invite radius (m)', () => party().inviteRadius / 10, v => party().inviteRadius = v * 10, 1, 100), 'How close a player must be for Also invite anyone nearby. Listed names ignore it.'),
+        el('p', 'Off by default. A player who does not answer is asked again after 30 seconds, then 1, 2, 4 minutes and so on, up to 10 minutes. They still have to accept, or use auto-accept on their side. An account that joins a party leader never invites; only the leader account does. It works while hunting is stopped unless the option below is on.', 'muted'),
         this.check('Only join and accept parties while the bot is running', () => party().onlyWhileRunning, v => { party().onlyWhileRunning = v; Party.reset(); }),
-        el('p', 'Off by default: Auto-recruit, Auto-accept and joining the party leader also work while hunting is stopped. Turn this on to make all of them wait until you press Start. Resurrection is not affected.', 'muted'),
+        el('p', 'Off by default: Auto-recruit, Auto-accept, Auto-invite and joining the party leader also work while hunting is stopped. Turn this on to make all of them wait until you press Start. Resurrection is not affected.', 'muted'),
         this.check('Accept resurrection from party members', () => party().acceptRes, v => party().acceptRes = v),
         this.check('Accept resurrection from any player', () => party().acceptResAny, v => party().acceptResAny = v),
         this.number('Wait for a party resurrection (s)', () => party().reviveWaitS, v => party().reviveWaitS = v, 5, 600),
@@ -21240,6 +22173,7 @@ const UI = {
     if (this.is('Party') && this.partyNote) {
       const notes = [Settings.profile.party.autoRecruit ? Party.message : 'Auto-recruit off.'];
       if (Settings.profile.party.joinMain && Party.joinMessage) notes.push(Party.joinMessage);
+      if (Settings.profile.party.autoInvite && Party.inviteMessage) notes.push(Party.inviteMessage);
       if (Settings.profile.party.autoRes || Resurrect.names().length) notes.push(Resurrect.message);
       this.partyNote.textContent = notes.join(' ');
     }

@@ -104,6 +104,10 @@ const Equip = {
     if (!stats || !slots.length) return null;
     const need = Leveling.reqLevel(item);
     if (!Number.isInteger(need) || need > level || !Town.masteriesMet(item)) return null;
+    if (this.family(item) === 6) {
+      const type = (item.typeFlags >>> 11) & 31, types = Leveling.weaponTypes();
+      if (types ? !types.includes(type) : !worn.some(w => this.family(w) === 6 && ((w.typeFlags >>> 11) & 31) === type)) return null;
+    }
     const family = worn.filter(w => this.family(w) === this.family(item) && slots.includes(w.slot));
     if (!family.length) return null;
     let target = null, targetStats = null, targetScore = 0;

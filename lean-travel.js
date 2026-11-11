@@ -4,6 +4,7 @@
 // its menu, send travel-gate type 2 with the destination's teleport id, and confirm the arrival.
 const TRAVEL_HOP = 3000;        // a hop (menu and load screen) weighs like this much walking
 const TRAVEL_WALK = 1.3;        // a walk is longer than the straight line
+const TRAVEL_GOLD = 5;
 const TRAVEL_REACH = 150;       // stop this close to the teleporter: it stands on a dock or a ship; the game talks within 20 m
 const TRAVEL_FIND = 300;        // the teleporter stands within this of its table position
 const TRAVEL_STEP_MS = 15000;   // selecting, the menu, and the hop starting
@@ -35,7 +36,7 @@ const Travel = {
   },
   // Cheapest mix of walks and hops (Dijkstra over the start, the goal and every teleporter). Steps alternate between
   // { kind: 'walk', to } and { kind: 'hop', from, to, fee }; null when no mix reaches the goal.
-  plan(from, to, banned = new Set()) {
+  plan(from, to, banned = new Set(), walks = null) {
     if (!from || !to || ((from.regionId | to.regionId) & DUNGEON)) return null;
     const nodes = [...this.nodes().values()], gold = toBigInt(World.gp?.progression?.gold ?? 0);
     const points = [{ pose: from }, { pose: to }, ...nodes.map(node => ({ pose: node.pose, node }))];
@@ -46,6 +47,9 @@ const Travel = {
       hops.get(source).push({ destination, fee });
     }
     const cost = points.map(() => Infinity), came = [], done = [];
+    const known = v => v !== null && v !== undefined;
+    const vf = points.map(p => walks?.from ? walks.from(p.pose) : null), vt = points.map(p => walks?.to ? walks.to(p.pose) : null);
+    const apart = (i, j) => [vf, vt].some(v => known(v[i]) && known(v[j]) && Number.isFinite(v[i]) !== Number.isFinite(v[j]));
     cost[0] = 0;
     for (;;) {
       let i = -1;
@@ -54,11 +58,18 @@ const Travel = {
       done[i] = true;
       const relax = (j, value, step) => { if (value < cost[j]) { cost[j] = value; came[j] = { from: i, step }; } };
       for (let j = 1; j < points.length; j++) {
-        if (j !== i && !done[j] && this.walkable(points[i].pose, points[j].pose)) relax(j, cost[i] + dist2D(points[i].pose, points[j].pose) * TRAVEL_WALK, { kind: 'walk' });
+        if (j === i || done[j]) continue;
+        let real = i === 0 && j === 1 && Number.isFinite(walks?.direct) ? walks.direct : null;
+        if (!known(real) && i === 0) real = vf[j];
+        if (!known(real) && j === 1) real = vt[i];
+        if (known(real)) { if (Number.isFinite(real)) relax(j, cost[i] + real, { kind: 'walk' }); continue; }
+        if (apart(i, j) || !this.walkable(points[i].pose, points[j].pose)) continue;
+        const floor = Math.max(0, ...[vf, vt].filter(v => Number.isFinite(v[i]) && Number.isFinite(v[j])).map(v => Math.abs(v[i] - v[j])));
+        relax(j, cost[i] + Math.max(dist2D(points[i].pose, points[j].pose) * TRAVEL_WALK, floor), { kind: 'walk' });
       }
       for (const hop of points[i].node ? hops.get(points[i].node.id) || [] : []) {
         const j = index.get(hop.destination);
-        relax(j, cost[i] + TRAVEL_HOP + hop.fee, { kind: 'hop', fee: hop.fee });
+        relax(j, cost[i] + TRAVEL_HOP + hop.fee * TRAVEL_GOLD, { kind: 'hop', fee: hop.fee });
       }
     }
     if (cost[1] === Infinity) return null;
@@ -71,11 +82,23 @@ const Travel = {
     return steps;
   },
   // WalkBack asks first: true when the walk needs a teleport or a ferry and the trip has started here instead.
-  begin(pose, dest, resume) {
-    if (!this.on() || !Number.isFinite(dist2D(pose, dest)) || this.walkable(pose, dest)) return false;
-    const steps = this.plan(pose, dest);
+  begin(pose, dest, resume, opts = {}) {
+    if (!this.on() || !Number.isFinite(dist2D(pose, dest))) return false;
+    if (!this.walkable(pose, dest)) return this.start(this.plan(pose, dest), dest, resume, opts);
+    const walks = dist2D(pose, dest) > WALK_LEG ? this.walks(pose, dest) : null;
+    return !!walks && this.start(this.plan(pose, dest, new Set(), walks), dest, resume, opts);
+  },
+  walks(from, to, direct = null) {
+    const a = Route.reach(from), b = Route.reach(to);
+    return a || b || direct !== null ? { from: a || null, to: b || null, direct } : null;
+  },
+  load(from, to) {
+    return Promise.all([from, to].map(p => Route.areaFor(p)).filter(Boolean).map(a => Route.load(a.name).catch(() => null)));
+  },
+  start(steps, dest, resume, opts = {}) {
     if (!steps?.some(s => s.kind === 'hop')) return false;
-    this.active = { dest: { ...dest }, resume, steps, index: 0, phase: '', at: now(), banned: new Set(), replans: 0, manualAt: Manual.lastAt };
+    this.active = { dest: { ...dest }, resume, steps, index: 0, phase: '', at: now(), banned: new Set(), replans: 0, manualAt: Manual.lastAt,
+      label: opts.label || '', onDone: opts.onDone || null, onFail: opts.onFail || null };
     const hops = steps.filter(s => s.kind === 'hop'), fees = hops.reduce((n, s) => n + s.fee, 0);
     Log.info('Travel: the hunting spot needs ' + hops.length + ' teleport' + (hops.length === 1 ? '' : 's') + ' or ferr' + (hops.length === 1 ? 'y' : 'ies') + (fees ? ' (' + fees + ' gold)' : '') + '.');
     this.next();
@@ -85,14 +108,16 @@ const Travel = {
     const a = this.active, step = a?.steps[a.index];
     if (!a) return;
     if (!step) {
-      this.active = null; this.message = 'Back at the hunting spot.';
+      this.active = null;
+      if (a.onDone) { this.message = ''; return a.onDone(); }
+      this.message = 'Back at the hunting spot.';
       UI.toast(this.message, 'info', 2500);
       if (a.resume) Hunt.start();
       return;
     }
     a.phase = step.kind === 'walk' ? 'walk' : 'select'; a.at = now(); a.gid = 0; a.talked = false; a.transition = false; a.refused = '';
     if (step.kind === 'hop') { this.message = 'Travel: using ' + step.from.label + (step.fee ? ' (' + step.fee + ' gold).' : '.'); return; }
-    const last = a.index === a.steps.length - 1, label = last ? 'the hunting spot' : step.node?.label || 'the teleporter';
+    const last = a.index === a.steps.length - 1, label = last ? a.label || 'the hunting spot' : step.node?.label || 'the teleporter';
     this.message = 'Travel: walking to ' + label + '.';
     WalkBack.startTo(step.to, { label, stop: last ? 12 : TRAVEL_REACH,
       onDone: () => { if (this.active === a) { a.index++; this.next(); } },
@@ -163,11 +188,13 @@ const Travel = {
     return false;
   },
   fail(reason) {
-    if (!this.active) return;
+    const a = this.active;
+    if (!a) return;
     this.active = null;
     WalkBack.cancel('', false);
     this.message = 'Travel stopped: ' + reason + '.';
     Log.warn(this.message); UI.toast(this.message, 'warn', 6000);
+    a.onFail?.(this.message);
   },
   cancel() { this.active = null; },
   status() { return this.active ? this.message : ''; },

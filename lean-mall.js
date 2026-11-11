@@ -71,7 +71,7 @@ const MallBuyer = {
   buyers() {
     const c = this.cfg(), out = [];
     if (c.on) this.generalBuyers(c, out);
-    if (c.reverse?.on) out.push(this.reverseBuyer());
+    if (c.reverse?.on && !Leveling.cfg().on) out.push(this.reverseBuyer());
     return out;
   },
   generalBuyers(c, out) {

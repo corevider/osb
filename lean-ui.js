@@ -135,6 +135,7 @@ const UI = {
     b.addEventListener('click', event => { try { action(event); } catch (e) { this.toast(e.message, 'warn'); } });
     return b;
   },
+  tipped(node, text) { node.title = text; return node; },
   row(...nodes) { const r = el('div', null, 'row'); r.append(...nodes); return r; },
   field(title, input) { const label = el('label', null, 'field'); input.setAttribute('aria-label', title); label.append(el('span', title), input); return label; },
   check(title, get, set) {
@@ -830,7 +831,7 @@ const UI = {
       petReach.title = 'While the bot is stopped the pet only takes drops this close to it, so each pickup holds the game inventory only briefly.';
       options.append(petStopped, petHold, petReach);
       options.append(this.check('Chime when pet bag is full', () => L().petFullSound, v => { L().petFullSound = v; Loot.fullAlert = null; }), this.button('Test pet chime', () => Sound.test()),
-        ...SOX_SEALS.map((seal, i) => this.check(`Chime and notice when ${['Star', 'Moon', 'Sun'][i]} gear is picked up`, () => L().soxSeals[seal], v => L().soxSeals[seal] = v)), this.button('Test SoX chime', () => Sound.test('sox')));
+        ...SOX_SEALS.map((seal, i) => this.check(`Chime and notice when ${['Star', 'Moon', 'Sun'][i]} gear is picked up`, () => L().soxSeals[seal], v => L().soxSeals[seal] = v)), this.button('Test SoX chime', () => Sound.test('sox')), this.soxSoundPicker());
       this.petNote = el('p', '', 'muted pet-note'); options.append(this.petNote);
       options.append(this.row(...[['Elixirs only','elixirs'],['Elixirs + gold','elixirs-gold'],['All items','all']].map(([label,mode]) => this.button(label, () => { Loot.preset(mode); this.draw(); }))));
       for (const [key, label] of [['soxOnly', 'Equipment: only SoX (Star / Moon / Sun)'], ['skipStar', "Equipment: don't pick up Star gear (Moon and Sun still are)"], ['afterKillOnly', 'Character: finish the current fight before picking up']]) options.append(this.check(label, () => L()[key], v => L()[key] = v));
@@ -846,6 +847,21 @@ const UI = {
         this.check('Chime on a level up', () => Settings.profile.sounds.levelUp, v => Settings.profile.sounds.levelUp = v),
         this.check('Chime when a unique monster comes into view', () => Settings.profile.sounds.unique, v => Settings.profile.sounds.unique = v),
         el('p', 'Short chimes, one per switch, all off by default (the player one uses the player alert detection). A click in the game unlocks the sound when the browser blocked it. The pet and SoX chimes above preview the sound.', 'muted')));
+  },
+  soxSoundPicker() {
+    const file = el('input'); file.type = 'file'; file.accept = 'audio/*,.mp3,.wav,.ogg,.m4a'; file.hidden = true;
+    const name = () => Sound.custom('sox')?.name;
+    const status = el('p', name() ? 'SoX sound: ' + name() : 'SoX sound: built-in chime', 'muted');
+    const choose = this.button('Choose SoX sound…', () => file.click()), clear = this.button('Clear SoX sound', () => { Sound.clearCustom('sox'); this.draw(); });
+    choose.title = 'Pick an audio file (at most 1 MB) to play instead of the built-in chime for every ticked seal. It is checked by playing it, kept only in this browser and never sent anywhere. It is not part of your settings, share codes or backups.';
+    clear.title = 'Go back to the built-in chime.'; clear.hidden = !name();
+    file.addEventListener('change', async () => {
+      const chosen = file.files?.[0]; file.value = ''; if (!chosen) return;
+      try { await Sound.setCustom('sox', chosen); UI.toast('SoX sound set to ' + chosen.name + '.'); Sound.test('sox'); this.draw(); }
+      catch (e) { UI.toast('Could not use that sound: ' + e.message + '.', 'warn'); }
+    });
+    const box = el('div'); box.append(file, this.row(choose, clear), status);
+    return box;
   },
   section_lootWho(host) {
     const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();
@@ -989,6 +1005,7 @@ const UI = {
         this.number('Every (minutes)', () => town().every.minutes, v => town().every.minutes = v, 5, 600),
         this.check('Revive in town and go back to the hunting spot', () => town().revive, v => town().revive = v),
         this.check('Revive a dead pet with a Grass of life', () => town().revivePet, v => town().revivePet = v),
+        ...(Leveling.cfg().on ? [el('p', 'Zero-setup leveling is on: the character walks back.', 'muted')] : []),
         this.select('After death, reverse to', [['recall', 'Last return-scroll location (hunting area)'], ['death', 'Death location']], () => town().deathReturn, v => { town().deathReturn = v; Activity.emit({category:'settings',code:'reverse-choice-changed',text:'Revival reverse destination changed to ' + v + '.',details:{choice:v === 'death' ? 3 : 2}}); }),
         el('p', 'Service trips reverse to their departure point. After death, use the selected destination. A missing game destination stops the trip; it never substitutes another point. Without a reverse scroll, or with Back to the hunting spot set to Walk, the trip walks back to the saved hunting spot instead.', 'muted'),
         el('p', 'Worn gear means the most worn repairable item you are wearing, measured against its own maximum durability; the trip repairs it. A broken weapon (0 durability) has its own switch, on by default. The XP and timer clocks run only while hunting and restart with every trip.', 'muted'),
@@ -1003,6 +1020,7 @@ const UI = {
         this.select('Town', townOptions, () => this.townPick, v => { this.townPick = v; Town.choose(v); }),
         el('p', 'Pick your town: the bot saves its arrival point, warehouse, potion merchant, repair merchant and world statue. You do not need to be in town.', 'muted'),
         this.check('Use return scroll → town services → back to the hunting spot', () => town().enabled, v => { town().enabled = v; if (v) Town.fillMissing(this.townPick); this.draw(); }),
+        ...(Leveling.cfg().on ? [el('p', 'Zero-setup leveling is on: the character walks back.', 'muted')] : []),
         this.select('Back to the hunting spot', [['reverse', 'Reverse return scroll (walks when none is carried)'], ['walk', 'Walk']], () => town().returnBy, v => { town().returnBy = v; this.draw(); }),
         ...(town().returnBy === 'walk' ? [] : [
           this.check('Buy Reverse Return Scrolls from the Item mall (silk)', () => Settings.profile.mall.reverse.on, v => { Settings.profile.mall.reverse.on = v; this.draw(); }),
@@ -1243,8 +1261,13 @@ const UI = {
         this.check("Leave someone else's party when the party leader is back", () => party().leaveIfNotLeader, v => { party().leaveIfNotLeader = v; Party.reset(); }),
         el('p', 'For your other accounts. While you are not in a party, the bot accepts a party invitation from that character, or finds their party listing on the party-matching board and applies to it. The main account needs Auto-recruit and Auto-accept party-matching joins ticked. It also rejoins after a disconnect, once the character is back in the game. Leave this off on the main account.', 'muted'),
         el('p', 'With the leave option on, a party led by someone else is left only once the party leader is in view near your hunting spot. If the party leader disconnects, the party the game hands to another member stays together until they are back.', 'muted'),
+        this.tipped(this.check('Auto-invite players', () => party().autoInvite, v => { party().autoInvite = v; Party.reset(); }), 'Off by default. Sends a party invite to the listed players while they are in view, and to anyone within the radius if the nearby option is on. Only the party leader (or any member, if the party lets members invite) can invite, never into a full party and never while this account joins a party leader.'),
+        this.tipped(this.text('Invite these players', () => party().inviteNames, v => party().inviteNames = v, 'names, comma separated'), 'Up to 20 character names, any letter case. A listed player is invited at any distance while in view.'),
+        this.tipped(this.check('Also invite anyone nearby', () => party().inviteAnyone, v => party().inviteAnyone = v), 'Invites every other player within the radius, listed or not. This can annoy other players; leave it off unless you want an open party.'),
+        this.tipped(this.number('Invite radius (m)', () => party().inviteRadius / 10, v => party().inviteRadius = v * 10, 1, 100), 'How close a player must be for Also invite anyone nearby. Listed names ignore it.'),
+        el('p', 'Off by default. A player who does not answer is asked again after 30 seconds, then 1, 2, 4 minutes and so on, up to 10 minutes. They still have to accept, or use auto-accept on their side. An account that joins a party leader never invites; only the leader account does. It works while hunting is stopped unless the option below is on.', 'muted'),
         this.check('Only join and accept parties while the bot is running', () => party().onlyWhileRunning, v => { party().onlyWhileRunning = v; Party.reset(); }),
-        el('p', 'Off by default: Auto-recruit, Auto-accept and joining the party leader also work while hunting is stopped. Turn this on to make all of them wait until you press Start. Resurrection is not affected.', 'muted'),
+        el('p', 'Off by default: Auto-recruit, Auto-accept, Auto-invite and joining the party leader also work while hunting is stopped. Turn this on to make all of them wait until you press Start. Resurrection is not affected.', 'muted'),
         this.check('Accept resurrection from party members', () => party().acceptRes, v => party().acceptRes = v),
         this.check('Accept resurrection from any player', () => party().acceptResAny, v => party().acceptResAny = v),
         this.number('Wait for a party resurrection (s)', () => party().reviveWaitS, v => party().reviveWaitS = v, 5, 600),
@@ -1519,6 +1542,7 @@ const UI = {
     if (this.is('Party') && this.partyNote) {
       const notes = [Settings.profile.party.autoRecruit ? Party.message : 'Auto-recruit off.'];
       if (Settings.profile.party.joinMain && Party.joinMessage) notes.push(Party.joinMessage);
+      if (Settings.profile.party.autoInvite && Party.inviteMessage) notes.push(Party.inviteMessage);
       if (Settings.profile.party.autoRes || Resurrect.names().length) notes.push(Resurrect.message);
       this.partyNote.textContent = notes.join(' ');
     }

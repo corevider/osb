@@ -60,7 +60,7 @@ const DEFAULT_PROFILE = {
     // Attribute percentages: the lowest variance value (0 to 31) wanted per NATTR_ name, 0 or missing = leave it alone.
     attr: { targets: {}, limit: 100 } },
   statPoints: { enabled: false, str: 1, int: 0, reserve: 0 },
-  leveling: { on: false, spots: true, gear: true, accessories: true, sellOld: true, reserve: 5000, maxM: 400, skills: true, prepared: '', added: [] },
+  leveling: { on: false, spots: true, gear: true, accessories: true, sellOld: true, move: true, reserve: 5000, skills: true, prepared: '', added: [], elements: '', imbued: [], pet: '', build: 'auto', weapon: null },
   // Auto Quest: learned tokens bind a quest codename (QNO_...) to its refId, and learned targets
   // name the monster types whose kills advance each refId. Both fill themselves while playing.
   quest: { on: false, accept: true, picked: [], include: '', exclude: '', skip: [], learned: {}, targets: {} },
@@ -71,7 +71,7 @@ const DEFAULT_PROFILE = {
   pet: { attack: { on: false, recall: true, radius: 15, timeout: 3, resend: 5 } },
   scroll: { damageInc: false, damageAbs: false },
   mall: { on: false, budgetSilk: 0, hp: { on: false, low: 10, target: 1000 }, mp: { on: false, low: 10, target: 1000 }, damageInc: { on: false, low: 5, target: 20 }, damageAbs: { on: false, low: 5, target: 20 }, reverse: { on: false, low: 1, target: 5 } },
-  party: { autoAcceptMatching: false, autoRecruit: false, joinMain: false, mainName: '', leaveIfNotLeader: false, onlyWhileRunning: false, acceptNames: '', autoRes: false, acceptRes: false, acceptResAny: false, resNames: '', reviveWaitS: 20, resRadius: 300, resWaitS: 31, resMax: 0, title: 'Hunting party', min: 1, max: 90, purpose: 0, expShare: true, itemShare: true,
+  party: { autoAcceptMatching: false, autoRecruit: false, joinMain: false, mainName: '', leaveIfNotLeader: false, onlyWhileRunning: false, acceptNames: '', autoInvite: false, inviteNames: '', inviteAnyone: false, inviteRadius: 300, autoRes: false, acceptRes: false, acceptResAny: false, resNames: '', reviveWaitS: 20, resRadius: 300, resWaitS: 31, resMax: 0, title: 'Hunting party', min: 1, max: 90, purpose: 0, expShare: true, itemShare: true,
     support: { enabled: false, whileStopped: false, range: 30, heal: { id: 0, group: 0, pct: 60, self: false }, group: { id: 0, group: 0, pct: 60, count: 2 }, buffs: [] },
     protect: { enabled: false, all: false, names: [], range: 40, whileNoAttack: false } },
   wardrobe: { on: true, phantom: true, realAnim: true, hideAvatars: false,
@@ -172,6 +172,10 @@ function botProfile(input) {
   if (typeof P.petWhileStopped !== 'boolean') P.petWhileStopped = pickupDefaults.petWhileStopped;
   P.petInputHoldS = Number.isFinite(P.petInputHoldS) ? clamp(Math.round(P.petInputHoldS), 0, 30) : pickupDefaults.petInputHoldS;
   P.petIdleRadius = Number.isFinite(P.petIdleRadius) ? clamp(Math.round(P.petIdleRadius / 10) * 10, 50, 500) : pickupDefaults.petIdleRadius;
+  const party = result.party, partyDefaults = DEFAULT_PROFILE.party;
+  party.autoInvite = party.autoInvite === true; party.inviteAnyone = party.inviteAnyone === true;
+  if (typeof party.inviteNames !== 'string') party.inviteNames = partyDefaults.inviteNames;
+  party.inviteRadius = Number.isFinite(party.inviteRadius) ? clamp(Math.round(party.inviteRadius / 10) * 10, 10, 1000) : partyDefaults.inviteRadius;
   const protect = result.party.protect;
   for (const key of ['enabled', 'all', 'whileNoAttack']) protect[key] = protect[key] === true;
   protect.range = Number.isFinite(protect.range) ? clamp(Math.round(protect.range), 5, 100) : DEFAULT_PROFILE.party.protect.range;
@@ -264,12 +268,57 @@ const Sound = {
     });
     bus.on('profile', () => { this.level = null; });
   },
+  customKinds: ['sox'],
+  customMaxBytes: 1024 * 1024,
+  buffers: {},
+  customKey(kind) { return 'sound:' + kind; },
+  custom(kind) { return this.customKinds.includes(kind) ? Store.get(this.customKey(kind), null) : null; },
+  setCustom(kind, file) {
+    return new Promise((resolve, reject) => {
+      if (!this.customKinds.includes(kind)) return reject(new Error('this alert has no custom sound'));
+      if (!file) return reject(new Error('no file'));
+      if (file.size > this.customMaxBytes) return reject(new Error('the file is larger than 1 MB'));
+      const reader = new W.FileReader();
+      reader.onerror = () => reject(new Error('the file could not be read'));
+      reader.onload = async () => {
+        const data = String(reader.result || '');
+        this.unlock();
+        try { await this.decode(data); } catch { return reject(new Error('the browser cannot play that file')); }
+        if (!Store.set(this.customKey(kind), { name: String(file.name || 'sound').slice(0, 80), data })) return reject(new Error('browser storage is full'));
+        delete this.buffers[kind];
+        resolve();
+      };
+      reader.readAsDataURL(file);
+    });
+  },
+  clearCustom(kind) { Store.remove(this.customKey(kind)); delete this.buffers[kind]; },
+  async decode(dataUrl) {
+    const ctx = this.ctx;
+    if (!ctx) throw new Error('no audio');
+    const bytes = Uint8Array.from(W.atob(dataUrl.slice(dataUrl.indexOf(',') + 1)), c => c.charCodeAt(0));
+    return await ctx.decodeAudioData(bytes.buffer);
+  },
+  playBuffer(buffer) {
+    const ctx = this.ctx, source = ctx.createBufferSource(), gain = ctx.createGain();
+    source.buffer = buffer; gain.gain.value = 0.8;
+    source.connect(gain); gain.connect(ctx.destination);
+    source.onended = () => { source.disconnect(); gain.disconnect(); };
+    source.start();
+  },
+  playCustom(kind, custom) {
+    const cached = this.buffers[kind];
+    if (cached?.data === custom.data) { this.playBuffer(cached.buffer); return; }
+    this.decode(custom.data).then(buffer => { this.buffers[kind] = { data: custom.data, buffer }; this.playBuffer(buffer); })
+      .catch(() => { this.clearCustom(kind); this.play(kind); });
+  },
   play(kind) {
     const tone = this.tones[kind];
     if (!tone) return false;
     try {
       const ctx = this.ctx;
       if (!ctx || ctx.state !== 'running') return false;
+      const custom = this.custom(kind);
+      if (custom?.data) { this.playCustom(kind, custom); return true; }
       tone.notes.forEach((frequency, i) => {
         const oscillator = ctx.createOscillator(), gain = ctx.createGain();
         const at = ctx.currentTime + i * tone.gap;

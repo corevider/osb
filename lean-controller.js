@@ -256,6 +256,7 @@ const Controller = {
   townReturn() {
     const c = Town.cfg();
     if (!c.enabled) return false;
+    Town.follow();
     const here = Town.detect(), home = Town.detect(c.vendor || c.storage || c.arrival || {});
     if (!here || !home || here.key !== home.key) return false;
     Log.info('Far from the hunting spot, in town: doing town services before going back.');
@@ -315,6 +316,7 @@ const Controller = {
       StatPoints.tick();
       this.guard('Level spot', () => LevelSpot.tick());
       this.guard('Leveling skills', () => Leveling.skillTick());
+      this.guard('Leveling town', () => Leveling.moveTick());
       Potion.tick();
       ItemRules.trackGear();
       if (!ItemRules.dropTick()) ItemRules.balanceTick();

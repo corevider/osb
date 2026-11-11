@@ -27,6 +27,8 @@ SPOT_RADIUS = 500
 SPOT_MIN = 3
 SPOT_SPREAD = 4
 SPOT_GAP = 900
+SPARSE_RADIUS = 900
+SPARSE_MIN = 2
 MAX_LEVEL = 120
 
 def rows(pattern):
@@ -77,29 +79,36 @@ grid = {}
 for p in points:
     grid.setdefault((math.floor(p[0] / SPOT_CELL), math.floor(p[1] / SPOT_CELL)), []).append(p)
 
-reach = math.ceil(SPOT_RADIUS / SPOT_CELL)
-candidates = []
-for (gx, gz) in grid:
-    cx, cz = (gx + 0.5) * SPOT_CELL, (gz + 0.5) * SPOT_CELL
-    near = [p for dx in range(-reach, reach + 1) for dz in range(-reach, reach + 1)
-            for p in grid.get((gx + dx, gz + dz), ()) if math.dist((p[0], p[1]), (cx, cz)) <= SPOT_RADIUS]
-    if len(near) < SPOT_MIN:
-        continue
-    levels = sorted(p[3] for p in near)
-    median = levels[len(levels) // 2]
-    near = [p for p in near if abs(p[3] - median) <= SPOT_SPREAD // 2]
-    if len(near) < SPOT_MIN:
-        continue
-    mx, mz = sum(p[0] for p in near) / len(near), sum(p[1] for p in near) / len(near)
-    y = sorted(p[2] for p in near)[len(near) // 2]
-    candidates.append((len(near), median, mx, mz, y, min(p[3] for p in near), max(p[3] for p in near)))
+def cluster(radius, minimum):
+    reach = math.ceil(radius / SPOT_CELL)
+    found = []
+    for (gx, gz) in grid:
+        cx, cz = (gx + 0.5) * SPOT_CELL, (gz + 0.5) * SPOT_CELL
+        near = [p for dx in range(-reach, reach + 1) for dz in range(-reach, reach + 1)
+                for p in grid.get((gx + dx, gz + dz), ()) if math.dist((p[0], p[1]), (cx, cz)) <= radius]
+        if len(near) < minimum:
+            continue
+        levels = sorted(p[3] for p in near)
+        median = levels[len(levels) // 2]
+        near = [p for p in near if abs(p[3] - median) <= SPOT_SPREAD // 2]
+        if len(near) < minimum:
+            continue
+        mx, mz = sum(p[0] for p in near) / len(near), sum(p[1] for p in near) / len(near)
+        y = sorted(p[2] for p in near)[len(near) // 2]
+        found.append((len(near), median, mx, mz, y, min(p[3] for p in near), max(p[3] for p in near)))
+    return sorted(found, key=lambda s: -s[0])
 
-candidates.sort(key=lambda s: -s[0])
+
+def keep(spots, candidates):
+    for s in candidates:
+        if any(abs(s[1] - k[1]) <= SPOT_SPREAD and math.dist((s[2], s[3]), (k[2], k[3])) < SPOT_GAP for k in spots):
+            continue
+        spots.append(s)
+
+
 spots = []
-for s in candidates:
-    if any(abs(s[1] - k[1]) <= SPOT_SPREAD and math.dist((s[2], s[3]), (k[2], k[3])) < SPOT_GAP for k in spots):
-        continue
-    spots.append(s)
+keep(spots, cluster(SPOT_RADIUS, SPOT_MIN))
+keep(spots, cluster(SPARSE_RADIUS, SPARSE_MIN))
 spots.sort(key=lambda s: (s[1], -s[0]))
 spot_rows = []
 for count, level, wx, wz, y, lo, hi in spots:

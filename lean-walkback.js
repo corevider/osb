@@ -49,6 +49,7 @@ const WalkBack = {
     if (!dest || !pose || !World.inWorld() || World.isDead()) return false;
     if (!Number.isFinite(dist2D(pose, dest))) { onFail?.('The destination is in another world or dungeon.'); return false; }
     this.cancel();
+    if (!Travel.active && !Trade.run && Travel.begin(pose, dest, false, { label, onDone, onFail })) return true;
     this.launch(dest, [{ ...dest }], pose, false, { label, stop, onDone, onFail });
     return !!this.active;
   },
@@ -74,23 +75,39 @@ const WalkBack = {
     const check = RouteCheck.available();
     let planned = null;
     if (!check) { try { planned = Route.plan(pose, dest); } catch { planned = null; } }
-    if (planned) return this.useNav(planned, pose);
+    if (planned) { if (this.ferry(planned)) return; return this.useNav(planned, pose); }
     const a = this.active, token = {};
     a.plan = { at: now(), token, limit: check ? CHECK_MS + 5000 : WALK_PLAN_MS };
     a.source = 'planning';
     Log.info('Route: loading navdata for ' + routeArea.name + (check ? ' and checking it against the game map.' : '.'));
-    Route.checked(pose, dest).then(next => {
+    (Travel.on() ? Travel.load(pose, dest) : Promise.resolve()).then(() => {
+      if (this.active !== a || a.plan?.token !== token || this.ferry(undefined)) return null;
+      return Route.checked(pose, dest);
+    }).then(next => {
       if (this.active !== a || a.plan?.token !== token) return;
+      if (this.ferry(next)) return;
       if (next) this.useNav(next, World.pose());
       else this.useLegs();
     }, () => {
       if (this.active === a && a.plan?.token === token) this.useLegs();
     });
   },
+  ferry(route) {
+    const a = this.active, pose = World.pose();
+    if (!a || !pose || !Travel.on() || Travel.active || Trade.run) return false;
+    const walk = route === undefined ? null : route?.length ? route.length + (dist2D(route.points[route.points.length - 1], a.destination) || 0) : Infinity;
+    const steps = Travel.plan(pose, a.destination, new Set(), Travel.walks(pose, a.destination, walk));
+    if (!steps?.some(s => s.kind === 'hop')) return false;
+    Log.info('Route: ' + (Number.isFinite(walk) ? 'the walk is ' + Math.round(walk / 10) + ' m the long way round' : 'no walk reaches it') + '; taking a ferry or teleport instead.');
+    if (route === undefined) a.plan = null;
+    this.active = null;
+    return Travel.start(steps, a.destination, a.resume, a.onDone || a.onFail ? { label: a.label, onDone: a.onDone, onFail: a.onFail } : {});
+  },
   cancel(reason = '', halt = true) {
     if (!this.active) return;
-    const failed = this.active.onFail;
+    const failed = this.active.onFail, a = this.active;
     this.active = null;
+    if (reason && halt && !failed && a.resume && Leveling.spotsOn() && Leveling.current?.auto && LevelSpot.same(Leveling.current.center, a.destination)) LevelSpot.skipCurrent();
     if (halt && World.inWorld() && !World.isDead()) Cmd.move(World.pose());
     // A caller-owned walk reports its own failures; only a reasoned cancel is a failure, a plain cancel is the caller's.
     if (failed && reason) failed(reason); else if (reason) UI.toast(reason, 'warn', 4000);
@@ -194,6 +211,7 @@ const WalkBack = {
       this.active = null;
       if (a.onDone) return a.onDone();
       UI.toast('Back at the hunting spot.', 'info', 2500);
+      Leveling.walkFails = 0;
       if (a.resume) Hunt.start();
       return;
     }

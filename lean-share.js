@@ -13,7 +13,7 @@ const ProfileShare = {
     const r = p.potion.restock, t = r.town;
     return this.clone({ center: p.hunt.center, vendor: r.vendor, route: r.route, offers: r.offers,
       town: { arrival: t.arrival, storage: t.storage, vendor: t.vendor, smith: t.smith, gate: t.gate }, buffSets: p.macro.buffSets, gear: p.items.gear, wardrobe: p.wardrobe, follow: p.trace.name, pullPoints: p.lure.points,
-      leveled: { prepared: p.leveling.prepared, added: p.leveling.added } });
+      leveled: { prepared: p.leveling.prepared, added: p.leveling.added, elements: p.leveling.elements, imbued: p.leveling.imbued, pet: p.leveling.pet, weapon: p.leveling.weapon } });
   },
   restore(p, own) {
     const r = p.potion.restock, t = r.town;
