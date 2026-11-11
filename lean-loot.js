@@ -8,6 +8,8 @@ const PET_GIVE_UP_ATTEMPTS = 6;
 const PET_LOCK_BUDGET_MS = 15000;
 const PET_REJECTED_MAX = 2;
 const PET_GEAR_HOLD_MS = 1000;
+const PET_IDLE_WINDOW_MS = 10000, PET_IDLE_SHARE = 1 / 3, PET_TRAVEL_SETTLE_MS = 3000;
+const PET_INPUT_HOLD_S = 3, PET_IDLE_RADIUS = 250, PET_INPUT_TYPES = ['pointerdown', 'keydown', 'wheel'], OSB_HOTKEYS = new Set(['F6', 'F7', 'F8']);
 const PLAYER_INV_KINDS = new Set(['item-use', 'item-drop', 'inventory-move', 'avatar-move', 'equip', 'pickup', 'cos-pickup', 'cos-transfer', 'cos-drop', 'immortal', 'attr']);
 const PLAYER_INV_PREFIXES = /^(?:mall|shop|cos-shop|storage|stall|exchange|alchemy|gear)-/;
 const Loot = {
@@ -20,6 +22,9 @@ const Loot = {
   playerMallAt: -Infinity,
   petSentAt: -Infinity,
   petEndAt: -Infinity,
+  inputAt: -Infinity,
+  travelAt: -Infinity,
+  lastPetLockMs: 0,
   lock: null,
   petLocks: [],
   spent: new Map(),
@@ -78,10 +83,37 @@ const Loot = {
     if (Hunt.running && World.gp.inventoryPending) return 'Pet waiting for pickup / inventory transaction to finish.' + share;
     if (Hunt.running && this.pressed()) return 'Pet waiting briefly for potion use.' + share;
     if (BuffGear.run || now() - BuffGear.wantAt < PET_GEAR_HOLD_MS) return 'Pet waiting: buff gear is changing.' + share;
-    const yielding = this.playerFirst();
+    const yielding = this.playerFirst() || this.playerYield();
     if (yielding) return 'Pet waiting: ' + yielding + share;
+    if (!Hunt.running && !this.petWhileStopped()) return 'Pet waits while the bot is stopped (Pet collects while the bot is stopped is off).' + share;
     if (this.active?.petGid === pet.rec.gid) return 'Pet collecting: ' + (this.active.name || this.active.gid) + (this.active.retryAt ? ' (retry pending).' : '.') + share;
-    return `Pet ready: ${Math.max(0, pet.rec.status - pet.rec.inventory.length)} empty slots. Collects while hunting and while the bot is stopped.` + share;
+    return `Pet ready: ${Math.max(0, pet.rec.status - pet.rec.inventory.length)} empty slots. Collects while hunting` +
+      (this.petWhileStopped() ? `, and while the bot is stopped drops within ${Math.round(this.petIdleRadius() / 10)} m of the pet in your pauses.` : '.') + share;
+  },
+  petWhileStopped() { return Hunt.cfg().pickup.petWhileStopped !== false; },
+  inputHoldMs() { const v = Number(Hunt.cfg().pickup.petInputHoldS); return clamp(Number.isFinite(v) ? v : PET_INPUT_HOLD_S, 0, 30) * 1000; },
+  petIdleRadius() { return clamp(Number(Hunt.cfg().pickup.petIdleRadius) || PET_IDLE_RADIUS, 50, 500); },
+  noteInput(e) {
+    if (!e || e.isTrusted === false || e.type === 'keydown' && OSB_HOTKEYS.has(e.code)) return;
+    const path = typeof e.composedPath === 'function' ? e.composedPath() : [];
+    if (UI.root?.host && path.includes(UI.root.host) || RenderControl.mask && path.includes(RenderControl.mask)) return;
+    this.inputAt = now();
+  },
+  listenInput(target = W) {
+    for (const type of PET_INPUT_TYPES) target.addEventListener(type, e => this.noteInput(e), { capture: true, passive: true });
+  },
+  noteTravel() { this.travelAt = now(); },
+  playerYield() {
+    const t = now();
+    if (World.gp?.returnScroll || t - this.travelAt < PET_TRAVEL_SETTLE_MS) return 'a return scroll or teleport is under way.';
+    if (Hunt.running && !(t - Manual.lastAt < Hunt.cfg().manualPauseS * 1000)) return '';
+    if (t - this.inputAt < this.inputHoldMs()) return 'you are playing; it collects in your pauses.';
+    if (!Hunt.running && this.overCap()) return 'leaving the inventory free for you.';
+    return '';
+  },
+  overCap() {
+    const cap = PET_IDLE_WINDOW_MS * PET_IDLE_SHARE;
+    return this.lockMsSince(now() - PET_IDLE_WINDOW_MS) + Math.min(this.lastPetLockMs, cap) > cap;
   },
   petWhileManual() { const P = Hunt.cfg().pickup; return P.petWhileManual !== false && P.enabled && this.petMode(); },
   notePlayer(kind) {
@@ -98,7 +130,7 @@ const Loot = {
     if (t - this.playerInvAt < PLAYER_INV_HOLD_MS) return 'you are using the inventory.';
     return '';
   },
-  petBlocked() { return this.pressed() || !!this.lock?.pet || now() - this.petEndAt < PET_GAP_MS || !!BuffGear.run || now() - BuffGear.wantAt < PET_GEAR_HOLD_MS || !!this.playerFirst(); },
+  petBlocked() { return this.pressed() || !!this.lock?.pet || now() - this.petEndAt < PET_GAP_MS || !!BuffGear.run || now() - BuffGear.wantAt < PET_GEAR_HOLD_MS || !!this.playerFirst() || !!this.playerYield(); },
   petInFlight() { return !!this.lock?.pet || now() - this.petSentAt < PET_LOCK_LINK_MS; },
   lockOwner(t) {
     let owner = 'other', latest = t - PET_LOCK_LINK_MS;
@@ -109,6 +141,7 @@ const Loot = {
   },
   watchLock() {
     const pending = !!World.gp?.inventoryPending, t = now(), w = this.lock;
+    if (World.gp?.returnScroll) this.travelAt = t;
     if (pending && !w) {
       const a = this.active, pet = !!a?.petGid && t - this.petSentAt < PET_LOCK_LINK_MS;
       this.lock = { at: t, pet, owner: pet ? 'pet' : this.lockOwner(t), gid: a?.gid ?? 0 };
@@ -116,7 +149,7 @@ const Loot = {
       this.lock = null;
       if (!w.pet) return;
       const ms = t - w.at;
-      this.petEndAt = t;
+      this.petEndAt = t; this.lastPetLockMs = ms;
       this.petLocks.push({ at: w.at, end: t });
       while (this.petLocks.length && (this.petLocks[0].end < t - PET_LOCK_WINDOW_MS || this.petLocks.length > 300)) this.petLocks.shift();
       const spent = this.spent.get(w.gid);
@@ -125,12 +158,12 @@ const Loot = {
         text: 'Pet pickup held the inventory for ' + Math.round(ms) + ' ms.', details: { durationMs: Math.round(ms) } });
     }
   },
-  lockShare() {
-    const t = now(), from = t - PET_LOCK_WINDOW_MS;
-    let held = this.lock?.pet ? t - Math.max(from, this.lock.at) : 0;
+  lockMsSince(from) {
+    let held = this.lock?.pet ? now() - Math.max(from, this.lock.at) : 0;
     for (const l of this.petLocks) if (l.end > from) held += l.end - Math.max(from, l.at);
-    return clamp(held / PET_LOCK_WINDOW_MS, 0, 1);
+    return held;
   },
+  lockShare() { return clamp(this.lockMsSince(now() - PET_LOCK_WINDOW_MS) / PET_LOCK_WINDOW_MS, 0, 1); },
   lockNote() {
     const share = this.lockShare();
     return share > 0 ? ` Inventory held by pet pickups: ${Math.round(share * 100)}% of the last minute.` : '';
@@ -234,6 +267,7 @@ const Loot = {
       const pet = this.pet();
       if (!pet || !Number.isInteger(pet.rec.commandMode) || (pet.rec.commandMode & 128)) return 'pet';
       if (dist2D(pet.ent, e) > 500) return 'petFar';
+      if (!Hunt.running && dist2D(pet.ent, e) > this.petIdleRadius()) return 'petIdle';
     }
     return this.allowed(e) ? '' : 'full';
   },
@@ -277,6 +311,7 @@ const Loot = {
       const who = this.collector(e);
       if (by && who !== by) continue;
       const travel = dist2D(who === 'pet' ? this.pet()?.ent : pose, e);
+      if (who === 'pet' && !Hunt.running && !(travel <= this.petIdleRadius())) continue;
       const seal = this.sox(e);
       if (seal > tier || (seal === tier && travel < best)) { chosen = e; best = travel; tier = seal; }
     }
@@ -352,7 +387,7 @@ const Loot = {
   // The pet keeps collecting while the bot is stopped. Pet settings are left alone: with auto-grab on the game collects
   // natively (allowed() refuses), otherwise selective requests go out as during hunting. Character pickups stay bot-only.
   idleTick() {
-    if (Hunt.running || !this.petMode() || !Hunt.cfg().pickup.enabled || World.isDead() || World.gp?.storage || Restock.activeShop() ||
+    if (Hunt.running || !this.petMode() || !Hunt.cfg().pickup.enabled || !this.petWhileStopped() || World.isDead() || World.gp?.storage || Restock.activeShop() ||
         now() - Manual.lastAt < Hunt.cfg().manualPauseS * 1000 && !this.petWhileManual()) {
       if (this.active?.petGid) this.suspend();
       return;
@@ -367,9 +402,12 @@ const Loot = {
   suspend() { this.active = null; Hunt.lootGid = 0; },
   reset() {
     this.suspend(); this.skips.clear(); this.failureCounts.clear(); this.spent.clear(); this.petSetup = null; this.fullAlert = null;
-    this.lock = null; this.petLocks = []; this.petEndAt = this.petSentAt = -Infinity;
+    this.lock = null; this.petLocks = []; this.petEndAt = this.petSentAt = -Infinity; this.lastPetLockMs = 0;
   },
   init() {
+    this.listenInput();
+    bus.on('phase', () => this.noteTravel());
+    bus.on('reset', () => this.noteTravel());
     Hook.observers.push(command => { if (command?.kind === 'gameplay') this.notePlayer(command.command?.kind); });
     bus.on('gameplay', () => this.watchLock());
     bus.on('game-error', message => {

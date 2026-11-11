@@ -480,7 +480,8 @@ const Telemetry = {
   updateSwitch() {
     const box = el('div');
     box.append(this.toggle('Check GitHub for OSB updates', () => Updates.enabled(), v => Updates.setEnabled(v)),
-      el('p', 'OSB asks GitHub (api.github.com and raw.githubusercontent.com, corevider/osb) about every 15 minutes whether a newer version exists. It sends no data about you or your game. Turn it off to stop these requests; you then update by hand.', 'muted'));
+      el('p', 'OSB asks GitHub (api.github.com and raw.githubusercontent.com, corevider/osb) about every 15 minutes whether a newer version exists. It sends no data about you or your game. Turn it off to stop these requests; you then update by hand.', 'muted'),
+      el('p', 'Only if you turn on "Use the game site\'s unique tracker" (Combat, Unique hunt, or the Setup page\'s Uniques list; it is off by default), OSB reads the game site\'s unique tracker (opensro.online/uniques) while the unique hunt runs or the Setup page is shown, at most every 2 minutes, without cookies and without any data about you. With it off OSB makes no such request.', 'muted'));
     return box;
   },
   draw(host) {

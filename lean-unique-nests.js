@@ -1,6 +1,9 @@
 const UNIQUE_NEST_SAME = 400, UNIQUE_NEST_MAX = 40, UNIQUE_NEST_RETRY_MS = 600000, UNIQUE_KNOWN_KEY = 'unique:known', UNIQUE_KNOWN_MAX = 100;
 const UNIQUE_SYMBOL_CODES = { TIGER_GIRL: 'MOB_CH_TIGERWOMAN', IYUTARU: 'MOB_KK_ISYUTARU', URRUCHI: 'MOB_OA_URUCHI', BONELORD: 'MOB_TK_BONELORD', TAHOMET: 'MOB_RM_TAHOMET' };
-const UNIQUE_BUILT_IN_CODES = ['MOB_AM_IVY', 'MOB_EU_KERBEROS'], UNIQUE_NO_NESTS = Object.freeze([]);
+const UNIQUE_SYMBOL_REFS = { TIGER_GIRL: 1954, IYUTARU: 2002, URRUCHI: 1982, BONELORD: 3810, TAHOMET: 3875 };
+const UNIQUE_TABLE = Object.freeze({ 1954: 20, 5871: 24, 14778: 30, 1982: 40, 2002: 60, 3810: 80, 3875: 90, 14833: 98, 14834: 98, 14835: 99, 14836: 99, 14839: 100, 14838: 100 });
+const UNIQUE_EXTRA_NESTS = Object.freeze({ 3810: Object.freeze([Object.freeze({ regionId: 26247, x: 84, y: -40, z: 1004 })]) });
+const UNIQUE_NO_NESTS = Object.freeze([]);
 const UniqueNests = {
   pending: null, loaded: false, failed: false, failedAt: 0, rev: 0, names: new Map(), byName: new Map(), grouped: new Map(), cache: null, memo: null,
   cfg() { return Settings.profile.uniqueNests; },
@@ -13,6 +16,7 @@ const UniqueNests = {
     this.pending = Promise.all([SpawnData.load(), Assets.texts()]).then(([, texts]) => {
       this.index(texts);
       this.loaded = true; this.pending = null;
+      this.migrate();
       UniqueHunt.nestsReady();
     }).catch(e => {
       this.pending = null; this.failed = true; this.failedAt = now();
@@ -54,10 +58,37 @@ const UniqueNests = {
   seenRef(e) { if (Number.isInteger(e?.refObjId) && e.refObjId > 0) this.remember('refs', e.refObjId); },
   announced(name) { const n = String(name || '').trim().slice(0, 40); if (n) this.remember('names', n); },
   codesByName(name) { return this.byName.get(String(name || '').trim().toLowerCase()) || []; },
+  refsOf(code) { return SpawnData.refsByCode.get(code) || []; },
+  tableRefs(code) { return this.refsOf(code).filter(ref => ref in UNIQUE_TABLE); },
+  knownLevel(code) {
+    const ref = this.tableRefs(code)[0] ?? Object.entries(UNIQUE_SYMBOL_CODES).map(([symbol, c]) => c === code ? UNIQUE_SYMBOL_REFS[symbol] : 0).find(Boolean);
+    return UNIQUE_TABLE[ref] || 0;
+  },
+  symbolCode(symbol) { return UNIQUE_SYMBOL_REFS[symbol] ? SpawnData.code(UNIQUE_SYMBOL_REFS[symbol]) || UNIQUE_SYMBOL_CODES[symbol] : ''; },
+  pick(codes) {
+    const first = code => Math.min(...this.refsOf(code), Infinity), seen = new Set(this.known().refs);
+    const sorted = [...codes].sort((a, b) => first(a) - first(b));
+    return sorted.find(code => this.tableRefs(code).length) || sorted.find(code => this.refsOf(code).some(ref => seen.has(ref))) || sorted[0];
+  },
+  resolveName(name) {
+    const codes = this.codesByName(name);
+    return codes.length ? [this.pick(codes)] : [];
+  },
+  canon(code) {
+    if (!this.loaded || !code) return code;
+    const symbol = Object.keys(UNIQUE_SYMBOL_CODES).find(s => UNIQUE_SYMBOL_CODES[s] === code);
+    if (symbol && SpawnData.code(UNIQUE_SYMBOL_REFS[symbol])) return this.symbolCode(symbol);
+    const codes = this.codesByName(this.names.get(code));
+    return codes.length > 1 ? this.pick(codes) : code;
+  },
   identity(symbol, name) {
-    const codes = new Set(this.codesByName(name));
-    if (UNIQUE_SYMBOL_CODES[symbol]) codes.add(UNIQUE_SYMBOL_CODES[symbol]);
-    return [...codes];
+    const symbolic = this.symbolCode(symbol);
+    return symbolic ? [symbolic] : this.resolveName(name);
+  },
+  migrate() {
+    const C = this.cfg(), picks = [...new Set((C.picks || []).map(code => this.canon(code)))];
+    if (picks.join() !== (C.picks || []).join()) { C.picks = picks; Settings.saveProfile(); }
+    UniqueState.migrate(code => this.canon(code));
   },
   uniques() {
     const out = new Map(), add = (code, source) => {
@@ -66,26 +97,27 @@ const UniqueNests = {
       if (!out.get(code).sources.includes(source)) out.get(code).sources.push(source);
     };
     if (!this.loaded) return [];
-    for (const code of Object.values(UNIQUE_SYMBOL_CODES)) add(code, 'announced');
-    for (const code of UNIQUE_BUILT_IN_CODES) add(code, 'built-in');
+    for (const symbol of Object.keys(UNIQUE_SYMBOL_CODES)) add(this.symbolCode(symbol), 'announced');
+    for (const ref of Object.keys(UNIQUE_TABLE)) add(SpawnData.code(ref), 'built-in');
     const m = this.known();
-    for (const name of m.names) for (const code of this.codesByName(name)) add(code, 'notice');
-    for (const ref of m.refs) add(SpawnData.code(ref), 'seen');
+    for (const name of m.names) for (const code of this.resolveName(name)) add(code, 'notice');
+    for (const ref of m.refs) add(this.canon(SpawnData.code(ref)), 'seen');
     return [...out.values()].map(u => ({ ...u, nests: this.nestsOf(u.code).length })).sort((a, b) => a.name.localeCompare(b.name));
   },
   chosen() {
     const picks = this.cfg().picks || [];
-    return picks.length ? picks.filter(c => this.names.has(c)) : this.uniques().map(u => u.code);
+    return picks.length ? [...new Set(picks.map(c => this.canon(c)).filter(c => this.names.has(c)))] : this.uniques().map(u => u.code);
   },
   toggle(code, on) {
-    const C = this.cfg(), picks = new Set(C.picks || []);
-    if (on) picks.add(code); else picks.delete(code);
+    const C = this.cfg(), picks = new Set((C.picks || []).map(c => this.canon(c)));
+    if (on) picks.add(this.canon(code)); else picks.delete(this.canon(code));
     C.picks = [...picks]; Settings.saveProfile();
   },
   nestsOf(code) {
     if (this.grouped.has(code)) return this.grouped.get(code);
-    const groups = [];
-    for (const p of SpawnData.points(code)) if (!groups.some(g => dist2D(g, p) <= UNIQUE_NEST_SAME)) groups.push(p);
+    const groups = [], refs = this.tableRefs(code);
+    const extra = this.refsOf(code).flatMap(ref => UNIQUE_EXTRA_NESTS[ref] || []);
+    for (const p of [...SpawnData.points(code, refs.length ? refs : null), ...extra]) if (!groups.some(g => dist2D(g, p) <= UNIQUE_NEST_SAME)) groups.push(p);
     this.grouped.set(code, groups);
     return groups;
   },
@@ -123,6 +155,10 @@ const UniqueNests = {
     this.cache = { key, list };
     return list;
   },
+  label(u) {
+    const state = UniqueState.label(u.code);
+    return u.name + ' · ' + (u.nests ? u.nests + ' nest' + (u.nests === 1 ? '' : 's') : 'no nest in the game data') + (state ? ' · ' + state : '');
+  },
   state() {
     if (this.loaded) return 'loaded';
     if (this.pending) return 'loading';
@@ -132,7 +168,7 @@ const UniqueNests = {
     const C = () => this.cfg(), picker = el('div', null, 'sx-rows');
     let drawn = '';
     const fill = () => {
-      const sig = this.state() + ':' + this.rev + ':' + this.known().rev + ':' + C().on;
+      const sig = this.state() + ':' + this.rev + ':' + this.known().rev + ':' + C().on + ':' + UniqueState.rev + ':' + Math.floor(now() / 60000);
       if (sig === drawn) return;
       drawn = sig;
       if (!C().on) return picker.replaceChildren();
@@ -145,7 +181,7 @@ const UniqueNests = {
       picker.replaceChildren(...list.map(u => {
         const input = el('input'); input.type = 'checkbox'; input.checked = picks.has(u.code);
         input.addEventListener('change', () => this.toggle(u.code, input.checked));
-        return UI.field(u.name + ' · ' + (u.nests ? u.nests + ' nest' + (u.nests === 1 ? '' : 's') : 'no nest in the game data'), input);
+        return UI.field(this.label(u), input);
       }), el('p', 'None ticked: every unique in the list.', 'muted'));
     };
     fill();

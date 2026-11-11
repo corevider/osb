@@ -1063,4 +1063,228 @@ module.exports = function telemetryTests( { test: baseTest, source } ) {
 		assert.ok( hits.length > 0, "while the telemetry module did work between ticks" );
 		assert.ok( h.requests.every( r => !r.inTick ) );
 	} );
+
+	const attrOf = ( src, name ) => ( new RegExp( "\\b" + name + "=\"([^\"]*)\"" ).exec( src ) || [] )[ 1 ] ?? null;
+	class FakeDOMParser {
+		parseFromString( html ) {
+			const items = [ ...String( html ).matchAll( /<li\b([^>]*)>([\s\S]*?)<\/li>/g ) ].filter( m => /data-state="/.test( m[ 1 ] ) ).map( ( [ , attrs, inner ] ) => ( {
+				getAttribute: name => attrOf( attrs, name ),
+				querySelector: sel => {
+					if ( sel === "a[href^=\"/monsters/\"]" ) { const m = /<a\b([^>]*href="\/monsters\/[^"]*"[^>]*)>/.exec( inner ); return m ? { getAttribute: name => attrOf( m[ 1 ], name ) } : null; }
+					if ( sel === "[data-state]" ) { const m = /<\w+\b[^>]*data-state="[^"]*"[^>]*>([^<]*)</.exec( inner ); return m ? { textContent: m[ 1 ] } : null; }
+					if ( sel === "p" ) {
+						const m = /<p\b[^>]*>([\s\S]*?)<\/p>/.exec( inner ), text = html => html.replace( /<!--[\s\S]*?-->/g, "" ).replace( /<[^>]+>/g, "" );
+						if ( !m ) return null;
+						return { textContent: text( m[ 1 ] ), querySelector: q => { const sp = q === "span" && /<span\b[^>]*>([\s\S]*?)<\/span>/.exec( m[ 1 ] ); return sp ? { textContent: text( sp[ 1 ] ) } : null; } };
+					}
+					return null;
+				},
+			} ) );
+			return { querySelectorAll: sel => sel === "li[data-state]" ? items : [] };
+		}
+	}
+	const PILL = { alive: "Alive", slain: "Slain", unseen: "Not up" };
+	function trackerRow( ref, state, name ) {
+		return "<li class=\"sro-window flex flex-col\" data-state=\"" + state + "\"><div class=\"relative flex\"><span class=\"sro-stage\"><img alt=\"" + name + "\" src=\"/art/u.webp\"/></span>" +
+			"<div class=\"relative min-w-0 flex-1\"><h2 class=\"truncate\"><a class=\"\" href=\"/monsters/" + ref + "\">" + name + "</a></h2><p class=\"mt-0.5\"><span class=\"truncate\">Example Field</span><span class=\"shrink-0\">Lv <!-- -->20</span></p></div>" +
+			"<span class=\"sro-pill relative\" data-state=\"" + state + "\">" + ( PILL[ state ] || state ) + "</span></div>" +
+			"<div class=\"flex flex-col\"><p class=\"flex items-center\"><span class=\"truncate\">Slain by <a class=\"font-bold\" href=\"/p/samplehero\">Sample Hero</a><span class=\"text-parchment/55\"> 3h ago</span></span></p></div></li>";
+	}
+	const trackerPage = rows => "<!DOCTYPE html><html><head><title>Unique tracker</title></head><body><ul class=\"grid\">" + rows.map( r => trackerRow( ...r ) ).join( "" ) + "</ul></body></html>";
+	const TRACKER_ROWS = [ [ 1954, "slain", "Tiger Girl" ], [ 1982, "alive", "Uruchi" ], [ 2002, "unseen", "Isyutaru" ], [ 99999, "alive", "Unknown Beast" ] ];
+	function trackerHarness( { page = trackerPage( TRACKER_ROWS ), spot = true, on = true } = {} ) {
+		const h = harness( { stored: { "sroBotLean:v1:updateCheck": "false" } } );
+		h.win.DOMParser = FakeDOMParser;
+		h.Settings.profile.uniqueState.tracker = on;
+		h.page = page;
+		h.server.respond = entry => entry.url === "/uniques" ? ( typeof h.page === "function" ? h.page( entry ) : h.reply( 200, null, {}, h.page ) ) : h.server.default( entry );
+		Object.assign( h.SpawnData, { loaded: true, codes: new Map( [ [ 1954, { code: "MOB_CH_TIGERWOMAN", kind: "monster" } ], [ 1982, { code: "MOB_OA_URUCHI", kind: "monster" } ], [ 2002, { code: "MOB_KK_ISYUTARU", kind: "monster" } ] ] ) } );
+		if ( spot ) h.Settings.profile.unique.spots = [ { name: "Tiger Girl", regionId: 1, x: 100, y: 0, z: 100 } ];
+		h.trackerAsks = () => h.requests.filter( r => r.url === "/uniques" );
+		h.lines = () => h.Log.lines.map( l => l.text ).join( "\n" );
+		h.play = async ( ms, tick = 500 ) => { for ( let done = 0; done < ms; done += Math.min( 1000, ms - done ) ) await h.advance( Math.min( 1000, ms - done ), { ticks: tick } ); await h.advance( 0 ); };
+		return h;
+	}
+
+	test( "unique tracker: the page is parsed for state and monster id only; alive, slain, not up, an unknown id and a changed page", async () => {
+		const h = trackerHarness();
+		const rows = h.UniqueTracker.parse( h.page );
+		assert.deepEqual( JSON.parse( JSON.stringify( rows ) ), [ [ 1954, "slain", "" ], [ 1982, "alive", "" ], [ 2002, "unseen", "Not up" ], [ 99999, "alive", "" ] ].map( ( [ ref, state, label ] ) => ( { ref, state, label, level: 20, map: "Example Field" } ) ), "level and map are read; the last killer is not" );
+		h.UniqueTracker.apply( rows, h.now - START );
+		assert.equal( h.UniqueState.ofCode( "MOB_CH_TIGERWOMAN" ).state, "dead" ); assert.equal( h.UniqueState.ofCode( "MOB_CH_TIGERWOMAN" ).source, "tracker" );
+		assert.equal( h.UniqueState.ofCode( "MOB_OA_URUCHI" ).state, "alive" );
+		assert.equal( h.UniqueState.ofCode( "MOB_KK_ISYUTARU" ), null, "not up is unknown" );
+		assert.match( h.lines(), /states other than alive or slain are read as unknown: Not up\./ );
+		assert.match( h.lines(), /1 unique not in the game data were left out\./ );
+		const stored = [ ...h.storage.values() ].join( " " );
+		assert.ok( !stored.includes( "Sample Hero" ) && !stored.includes( "samplehero" ), "the last killer is never read or kept" );
+		assert.equal( h.UniqueTracker.parse( "<html><body><div class=\"new-layout\">Tiger Girl Alive</div></body></html>" ), null, "a changed page reads as nothing" );
+		assert.equal( h.UniqueTracker.parse( trackerPage( [] ) ), null );
+		h.win.DOMParser = undefined; assert.equal( h.UniqueTracker.parse( h.page ), null, "no DOMParser, no parse; innerHTML is never used" );
+		assert.ok( !/innerHTML/.test( fs.readFileSync( __dirname + "/lean-unique-tracker.js", "utf8" ) ) );
+	} );
+
+	test( "unique tracker: no request at all while the unique hunt is not running, even for hours with hunting on and off", async () => {
+		const h = trackerHarness();
+		await lifecycle( h );
+		h.Hunt.running = true; await h.play( 2 * HOUR, 1000 ); h.Hunt.running = false;
+		assert.equal( h.requests.length, 0, "zero requests: " + h.requests.map( r => r.url ).join( " " ) );
+	} );
+
+	test( "unique tracker: while the hunt runs only /uniques is asked, once at the start and then every 2 minutes, without cookies, outside the tick", async () => {
+		const h = trackerHarness();
+		h.UniqueHunt.start(); assert.ok( h.UniqueHunt.active );
+		await h.play( 11 * MINUTE, 500 );
+		const asks = h.trackerAsks();
+		assert.deepEqual( [ ...new Set( h.requests.map( r => r.url ) ) ], [ "/uniques" ], "nothing else is requested" );
+		assert.ok( asks.length >= 5 && asks.length <= 6, "asks: " + asks.length );
+		assert.ok( asks[ 0 ].at - START <= 1000, "read at the start" );
+		assert.ok( gaps( asks ).every( g => g >= 2 * MINUTE ), "at most every 2 minutes: " + gaps( asks ).join( "," ) );
+		for ( const r of asks ) {
+			assert.equal( r.method, "GET" ); assert.equal( r.body, undefined ); assert.equal( r.inTick, false, "not inside Controller.tick" );
+			assert.equal( r.init.credentials, "omit" ); assert.equal( r.init.cache, "no-store" ); assert.ok( r.init.signal, "with a timeout" );
+			assert.equal( r.url, "/uniques", "no query string" ); assert.deepEqual( r.headers, {}, "no headers about the user" );
+		}
+		h.UniqueHunt.stop( "stopped by you" ); const before = h.requests.length;
+		await h.play( HOUR, 1000 );
+		assert.equal( h.requests.length, before, "no request after the mode stopped" );
+	} );
+
+	test( "unique tracker: a failed or changed page backs off, logs once, and the switch off means no request", async () => {
+		const h = trackerHarness();
+		h.page = () => new TypeError( "Failed to fetch" );
+		h.UniqueHunt.start(); await h.play( 40 * MINUTE, 1000 );
+		const asks = h.trackerAsks();
+		assert.equal( asks.length, 4, "asks: " + asks.length );
+		gaps( asks ).forEach( ( g, i ) => assert.ok( g >= [ 4, 8, 16 ][ i ] * MINUTE && g < [ 4, 8, 16 ][ i ] * MINUTE + 2000, "backoff 4, 8, 16 min: " + gaps( asks ).join( "," ) ) );
+		assert.equal( h.Log.lines.filter( l => /unique list could not be read/.test( l.text ) ).length, 1, "logged once" );
+		assert.ok( h.UniqueHunt.active, "the mode goes on" );
+		const c = trackerHarness( { page: "<html><body><p>Maintenance</p></body></html>" } );
+		c.UniqueHunt.start(); await c.play( 10 * MINUTE, 1000 );
+		assert.equal( c.trackerAsks().length, 2, "a changed page also backs off" );
+		assert.equal( c.Log.lines.filter( l => /did not look as expected/.test( l.text ) ).length, 1 );
+		const o = trackerHarness();
+		o.Settings.profile.uniqueState.tracker = false;
+		o.UniqueHunt.start(); await o.play( 20 * MINUTE, 1000 );
+		assert.equal( o.requests.length, 0, "switch off: zero requests" );
+		o.Settings.profile.uniqueState.tracker = true; await o.play( 1000, 100 );
+		assert.equal( o.trackerAsks().length, 1, "switched on during the run: read" );
+	} );
+
+	test( "unique tracker: slain makes the mode stand still, alive sends it on, and a fresh in-game event is not overridden", async () => {
+		const h = trackerHarness( { page: trackerPage( [ [ 1954, "slain", "Tiger Girl" ] ] ) } );
+		h.Settings.profile.unique.waitS = 0;
+		h.UniqueHunt.start(); await h.play( 10000, 100 );
+		assert.match( h.UniqueHunt.status(), /^Waiting: Tiger Girl is slain on the unique tracker \(first seen less than a minute ago\)\.$/ );
+		const label = h.UniqueState.label( "MOB_CH_TIGERWOMAN" );
+		assert.equal( label, "slain on the unique tracker (first seen less than a minute ago)" );
+		await h.play( 3 * MINUTE, 1000 );
+		assert.match( h.UniqueHunt.status(), /first seen 3 min ago/, "the first time seen as slain is kept" );
+		h.page = trackerPage( [ [ 1954, "alive", "Tiger Girl" ] ] );
+		await h.play( 2 * MINUTE, 500 );
+		assert.match( h.UniqueHunt.status(), /^Patrolling: spot 1 of 1 \(Tiger Girl\)/ );
+		assert.match( h.lines(), /Unique tracker: Tiger Girl is alive\./ );
+		await h.play( h.UniqueTracker.nextAt - ( h.now - START ) - 20000, 1000 );
+		h.bus.emit( "notice", { key: "UIIT_MSG_DEAD_TIGER_GIRL", arguments: [], sequence: 9 } );
+		const reads = h.trackerAsks().length;
+		await h.play( 30000, 1000 );
+		assert.equal( h.trackerAsks().length, reads + 1, "the tracker was read again 20 s after the notice" );
+		assert.equal( h.UniqueState.ofCode( "MOB_CH_TIGERWOMAN" ).state, "dead", "a game notice from a moment ago beats the tracker's alive" );
+		assert.equal( h.UniqueState.ofCode( "MOB_CH_TIGERWOMAN" ).source, "notice" );
+	} );
+
+	test( "unique tracker: the switch persists in profiles, share codes and backups, and old files have it off", async () => {
+		const h = harness();
+		assert.equal( h.botProfile( { unique: { waitS: 5 } } ).uniqueState.tracker, false );
+		assert.equal( h.botProfile( { uniqueState: { tracker: true } } ).uniqueState.tracker, true );
+		assert.equal( h.botProfile( { uniqueState: { tracker: false } } ).uniqueState.tracker, false );
+		h.Settings.profile.uniqueState.tracker = true; h.Settings.saveProfile();
+		assert.equal( JSON.parse( h.ProfileShare.text( false ) ).profile.uniqueState.tracker, true );
+		const code = await h.ProfileShare.encode( h.ProfileShare.text( true ) ), g = harness();
+		g.ProfileShare.pending = await g.ProfileShare.preview( code ); assert.equal( g.ProfileShare.apply(), true );
+		assert.equal( g.Settings.profile.uniqueState.tracker, true );
+	} );
+
+	test( "unique tracker: off by default, so no request at all with the Setup page open, the unique hunt running and Refresh pressed", async () => {
+		assert.equal( harness().Settings.profile.uniqueState.tracker, false, "off by default" );
+		assert.equal( harness().DEFAULT_PROFILE.uniqueState.tracker, false );
+		const h = trackerHarness( { on: false } );
+		assert.equal( h.UniqueTracker.on(), false );
+		h.UniqueHunt.start();
+		for ( let done = 0; done < 10 * MINUTE; done += 500 ) { h.UniqueTracker.onSetup(); await h.advance( 500, { ticks: 500 } ); }
+		assert.match( h.UniqueTracker.refresh(), /tracker is off/ );
+		await h.advance( 30000, { ticks: 500 } );
+		assert.equal( h.requests.length, 0, "zero requests: " + h.requests.map( r => r.url ).join( " " ) );
+		assert.match( h.UniqueTracker.status(), /^Off\.$/ );
+	} );
+
+	test( "unique tracker: turning it on starts the 2 minute schedule, turning it off stops the requests, and the choice is kept", async () => {
+		const h = trackerHarness( { on: false } );
+		await shown( h, 3000 ); assert.equal( h.requests.length, 0 );
+		h.Settings.profile.uniqueState.tracker = true;
+		await shown( h, 5 * MINUTE );
+		assert.equal( h.trackerAsks().length, 3, "read at once, then at 2 and 4 min: " + h.trackerAsks().length );
+		assert.ok( gaps( h.trackerAsks() ).every( g => g >= 2 * MINUTE ) );
+		h.Settings.profile.uniqueState.tracker = false; h.Settings.saveProfile();
+		const before = h.requests.length;
+		await shown( h, 10 * MINUTE );
+		assert.equal( h.requests.length, before, "switched off: no further request" );
+		assert.equal( h.botProfile( JSON.parse( JSON.stringify( h.Settings.profile ) ) ).uniqueState.tracker, false );
+		h.Settings.profile.uniqueState.tracker = true;
+		assert.equal( h.botProfile( JSON.parse( JSON.stringify( h.Settings.profile ) ) ).uniqueState.tracker, true );
+	} );
+
+	async function shown( h, ms, visible = () => true ) {
+		for ( let done = 0; done < ms; done += 500 ) { if ( visible() ) h.UniqueTracker.onSetup(); await h.advance( 500 ); }
+		await h.advance( 0 );
+	}
+
+	test( "unique tracker: with the Setup page shown it is read at once and then at most every 2 minutes; hidden, nothing", async () => {
+		const h = trackerHarness();
+		await shown( h, 5 * MINUTE );
+		const asks = h.trackerAsks();
+		assert.equal( asks.length, 3, "at 0, 2 and 4 min: " + asks.length );
+		assert.ok( asks[ 0 ].at - START <= 500 ); assert.ok( gaps( asks ).every( g => g >= 2 * MINUTE ) );
+		assert.deepEqual( [ ...new Set( h.requests.map( r => r.url ) ) ], [ "/uniques" ] );
+		for ( const r of asks ) { assert.equal( r.init.credentials, "omit" ); assert.equal( r.inTick, false ); }
+		const before = h.requests.length;
+		await h.advance( HOUR, { ticks: 1000 } );
+		assert.equal( h.requests.length, before, "the page was hidden or another page shown: nothing" );
+		await shown( h, 1000 ); assert.equal( h.requests.length, before + 1, "shown again after a long time: read once" );
+		const o = trackerHarness(); o.Settings.profile.uniqueState.tracker = false;
+		await shown( o, 10 * MINUTE ); assert.equal( o.requests.length, 0, "switch off: nothing" );
+	} );
+
+	test( "unique tracker: Refresh never asks within 30 s of the last request, and a mode start soon after does not ask again", async () => {
+		const h = trackerHarness();
+		await shown( h, 1000 ); assert.equal( h.trackerAsks().length, 1 );
+		await shown( h, 20000 );
+		assert.match( h.UniqueTracker.refresh(), /^Asked moments ago; try again in 9 s\.$/ );
+		await shown( h, 1000 ); assert.equal( h.trackerAsks().length, 1, "refused within 30 s" );
+		await shown( h, 9000 );
+		assert.equal( h.UniqueTracker.refresh(), "Reading the unique tracker…" );
+		await shown( h, 1000 ); assert.equal( h.trackerAsks().length, 2, "allowed 30 s after the last request, before the 2 minutes" );
+		assert.ok( h.trackerAsks()[ 1 ].at - h.trackerAsks()[ 0 ].at >= 30000 );
+		h.UniqueHunt.start(); await h.play( 60000, 500 );
+		assert.equal( h.trackerAsks().length, 2, "the hunt started 31 s after a read waits for the 2 minutes" );
+		await h.play( 60000, 500 );
+		assert.equal( h.trackerAsks().length, 3, "then it is read 2 minutes after the last request" );
+		assert.ok( gaps( h.trackerAsks() ).every( g => g >= 30000 ) );
+		h.Settings.profile.uniqueState.tracker = false; assert.match( h.UniqueTracker.refresh(), /tracker is off/ );
+	} );
+
+	test( "unique tracker: the Setup list rows carry level and map from the tracker, the state and its source, and no player name", async () => {
+		const h = trackerHarness();
+		Object.assign( h.UniqueNests, { loaded: true, names: new Map( [ [ "MOB_CH_TIGERWOMAN", "Tiger Girl" ], [ "MOB_OA_URUCHI", "Uruchi" ], [ "MOB_KK_ISYUTARU", "Isyutaru" ] ] ) } );
+		h.UniqueNests.nestsOf = () => [];
+		await shown( h, 1000 );
+		const rows = h.UniqueList.rows();
+		assert.deepEqual( JSON.parse( JSON.stringify( rows.map( r => r.name ) ) ), [ "Isyutaru", "Tiger Girl", "Uruchi" ], "all at level 20: by name" );
+		assert.equal( rows[ 0 ].state, "not up" );
+		assert.match( h.UniqueList.text( rows[ 1 ] ), /^Tiger Girl · Slain · Lv 20 · Example Field · slain on the unique tracker \(first seen less than a minute ago\) · no nest in the game data \(unique tracker\)$/ );
+		assert.equal( h.UniqueList.text( rows[ 2 ] ), "Uruchi · Alive · Lv 20 · Example Field · no nest in the game data (unique tracker)" );
+		assert.equal( h.UniqueState.levelOf( "MOB_OA_URUCHI" ), 20, "the level is remembered" );
+		assert.match( h.UniqueList.updated(), /^Updated \d+ s ago from the unique tracker/ );
+		assert.ok( !JSON.stringify( rows ).includes( "Sample Hero" ) && ![ ...h.storage.values() ].join( " " ).includes( "Sample Hero" ) );
+	} );
 };

@@ -3,9 +3,11 @@ const UNIQUE_SEEN_KEY = 'unique:seen', UNIQUE_SEEN_MAX = 200, UNIQUE_SEEN_SAME =
 const UNIQUE_OTHERS_MS = 8000, UNIQUE_HIT_MS = 20000, UNIQUE_GIVE_UP_MS = 10000, UNIQUE_GIVE_UP_RATIO = 1.5, UNIQUE_GIVE_UP_LOSS = 0.05;
 const UNIQUE_COLLECT_MS = 40000, UNIQUE_COLLECT_SETTLE_MS = 3000, UNIQUE_OWN_DROP_MS = 8000, UNIQUE_OWN_DROP_DIST = 150;
 const UNIQUE_REACH_FACTOR = 1.5, UNIQUE_TRACKS_MAX = 64;
+const UNIQUE_SETTLE_MS = 2000, UNIQUE_SETTLE_QUIET_MS = 1000, UNIQUE_SETTLE_MAX_MS = 5000;
+const UNIQUE_LOW_PCT = 20, UNIQUE_LOW_HIT_MS = 5000, UNIQUE_LOST_NOTICE_MS = 15000, UNIQUE_WAIT_CHECK_MS = 1000;
 const UNIQUE_NOTICE_NAMES = { TIGER_GIRL: 'Tiger Girl', IYUTARU: 'Isyutaru', URRUCHI: 'Uruchi', BONELORD: 'Lord Yarkan', TAHOMET: 'Demon Shaitan' };
 const UniqueHunt = {
-  active: null, message: '', tracks: new Map(), hits: new Set(), seenGids: new Set(),
+  active: null, message: '', tracks: new Map(), hits: new Set(), seenGids: new Set(), spawnAt: -Infinity,
   cfg() { return Settings.profile.unique; },
   isUnique(e) {
     if (!e || e.kind !== 'monster') return false;
@@ -55,9 +57,10 @@ const UniqueHunt = {
     const pose = World.pose();
     this.tracks.clear(); this.hits.clear();
     this.active = { startedAt: now(), origin: { regionId: pose.regionId, x: pose.x, y: pose.y, z: pose.z }, anchor: null, index: -1, phase: 'patrol',
-      waitUntil: 0, walk: null, away: false, loops: 0, fails: new Map(), priority: '', priorityCodes: [], priorityDone: new Set(), goal: null, kill: null, cfg: null };
+      waitUntil: 0, walk: null, away: false, loops: 0, fails: new Map(), priority: '', priorityCodes: [], priorityDone: new Set(), goal: null, kill: null, lost: null, waiting: '', cfg: null };
     this.message = '';
     if (UniqueNests.on()) UniqueNests.load();
+    UniqueTracker.start();
     this.resume();
     Log.info('Unique hunt started: ' + this.plan() + '.');
     UI.toast('Unique hunt started.', 'info', 3000);
@@ -189,10 +192,17 @@ const UniqueHunt = {
   },
   othersFighting(e, sim = World.simNow() ?? 0) { return sim - (World.hitByOthers.get(e.gid) ?? -Infinity) < UNIQUE_OTHERS_MS; },
   hitUs(e, sim = World.simNow() ?? 0) { return sim - (World.attackers.get(e.gid) ?? -Infinity) < 6000; },
-  weHit(e, sim = World.simNow() ?? 0) {
-    const t = this.tracks.get(e.gid);
+  weHit(e, sim = World.simNow() ?? 0, t = this.tracks.get(e.gid)) {
     if (sim - (World.hitByUs.get(e.gid) ?? -Infinity) < UNIQUE_HIT_MS) { if (t) t.hitAt = now(); return true; }
-    return !!t && (t.ours > 0 || now() - (t.hitAt ?? -Infinity) < UNIQUE_HIT_MS);
+    return !!t && (t.ours > 0 || now() - (t.hitAt ?? -Infinity) < UNIQUE_HIT_MS || now() - (t.targetAt ?? -Infinity) < UNIQUE_HIT_MS);
+  },
+  lowAtLastSight(t) { return Number.isFinite(t.lastPct) && t.lastPct <= UNIQUE_LOW_PCT && now() - (t.oursAt ?? -Infinity) <= UNIQUE_LOW_HIT_MS; },
+  sight(e, t) {
+    const hp = World.hpOf(e.gid), pct = World.hpPctOf(e), hitSim = World.hitByUs.get(e.gid);
+    if (Number.isFinite(hp)) t.lastHp = hp;
+    if (pct !== null) t.lastPct = pct;
+    if (Number.isFinite(e.x)) t.pose = { regionId: e.regionId, x: e.x, y: e.y ?? 0, z: e.z };
+    if (hitSim !== undefined) t.oursAt = Math.max(t.oursAt ?? -Infinity, now() - Math.max(0, (World.simNow() ?? hitSim) - hitSim));
   },
   playersNear(e) {
     const party = new Set((World.gp?.social?.members || []).map(m => m?.name));
@@ -256,6 +266,7 @@ const UniqueHunt = {
         if (this.hits.has(key)) continue;
         this.hits.add(key);
         if (friendly) {
+          t.oursAt = now(); t.lastPct = World.hpPctOf(target) ?? t.lastPct;
           if (!t.engagedAt) { t.engagedAt = now(); t.engageHp = (World.hpOf(target.gid) ?? 0) + impact.damage; t.othersBefore = this.othersFighting(target); }
           t.ours += impact.damage;
         } else t.others.set(cast.caster, (t.others.get(cast.caster) || 0) + impact.damage);
@@ -263,20 +274,25 @@ const UniqueHunt = {
     }
     while (this.hits.size > 1024) this.hits.delete(this.hits.values().next().value);
   },
-  died(e, how, killer = '') {
-    const a = this.active, t = this.tracks.get(e.gid);
+  died(e, how, killer = '', t = this.tracks.get(e.gid)) {
+    const a = this.active;
     if (!a || !t || t.dead) return;
     t.dead = true;
-    const goal = a.goal?.gid === e.gid, hit = this.weHit(e);
+    const lost = a.lost?.gid === e.gid, goal = a.goal?.gid === e.gid || lost, hit = this.weHit(e, World.simNow() ?? 0, t);
+    const ours = hit && (goal || !a.goal && a.phase !== 'collect');
+    UniqueState.noteEntity(e, 'dead', ours ? 'kill' : 'seen');
+    if (lost) a.lost = null;
     if (!t.wanted && !hit) return;
     if (this.cfg().chime !== false) Sound.play('uniqueKilled');
     Log.info('Unique killed: ' + t.name + (killer ? ' (by ' + killer + ')' : '') + '.');
     UI.toast('Unique killed: ' + t.name, 'info', 8000);
-    if (goal && hit) {
+    if (ours) {
       Stats.session.uniques = (Stats.session.uniques || 0) + 1;
-      const at = Number.isFinite(e.x) ? { regionId: e.regionId, x: e.x, y: e.y ?? 0, z: e.z } : World.pose();
+      const at = Number.isFinite(e.x) ? { regionId: e.regionId, x: e.x, y: e.y ?? 0, z: e.z } : t.pose || World.pose();
       a.kill = { name: t.name, at: now(), pose: at, drops: new Set(), how };
-      a.goal = null; a.phase = 'collect'; a.anchor = at;
+      Log.info('Unique hunt: ' + t.name + ' counts as our kill (' + how + ').');
+      this.endWalk();
+      a.goal = null; a.phase = 'collect'; a.anchor = at; a.waiting = '';
       Hunt.targetGid = 0;
       return;
     }
@@ -298,11 +314,16 @@ const UniqueHunt = {
     if (a?.kill && e?.kind === 'ground-item') a.kill.drops.delete(e.gid);
     if (!a || !t) return;
     if (!t.dead && (e.appearanceState?.[0] === 2 || t.lastHp === 0)) this.died(e, 'its death');
-    if (!t.dead && a.goal?.gid === e.gid) this.lose('out of view');
+    if (!t.dead && a.goal?.gid === e.gid && this.lowAtLastSight(t)) this.died(e, 'it vanished at ' + Math.round(t.lastPct) + '% HP right after our hits');
+    if (!t.dead && a.goal?.gid === e.gid) {
+      a.lost = { gid: e.gid, name: t.name, at: now(), e: { gid: e.gid, kind: e.kind, name: e.name, refObjId: e.refObjId, ...(t.pose || {}) }, t };
+      this.lose('out of view');
+    }
     this.tracks.delete(e.gid);
   },
   onSpawn(e) {
-    if (e?.kind === 'monster' && monsterClass(e) === 'unique') UniqueNests.seenRef(e);
+    if (e?.kind === 'monster') this.spawnAt = now();
+    if (e?.kind === 'monster' && monsterClass(e) === 'unique') { UniqueNests.seenRef(e); UniqueState.noteEntity(e, World.isAlive(e) ? 'alive' : 'dead', 'seen'); }
     this.learn(e);
     const k = this.active?.kill;
     if (k && e?.kind === 'ground-item' && now() - k.at <= UNIQUE_OWN_DROP_MS && dist2D(e, k.pose) <= UNIQUE_OWN_DROP_DIST) k.drops.add(e.gid);
@@ -314,6 +335,7 @@ const UniqueHunt = {
     const killer = m[1] === 'ANYONE_DEAD' ? args[0] || '' : '';
     const name = UNIQUE_NOTICE_NAMES[m[2]] || (m[1] === 'ANYONE_DEAD' ? args[1] : args[0]) || n.name || '';
     if (m[2] === 'UNIC' && name) UniqueNests.announced(name);
+    if (name) UniqueState.noteNotice(m[2], name, m[1] === 'APPEAR' ? 'alive' : 'dead');
     const a = this.active;
     if (!a || !name) return;
     const codes = UniqueNests.identity(m[2], name);
@@ -328,13 +350,19 @@ const UniqueHunt = {
       a.priority = ''; a.priorityCodes = [];
       Log.info('Unique hunt: the game says ' + name + ' was killed' + (killer ? ' by ' + killer : '') + '; back to the normal patrol order.');
     }
+    const lost = a.lost && now() - a.lost.at < UNIQUE_LOST_NOTICE_MS && this.same(a.lost.name, name) ? a.lost : null;
+    if (lost) {
+      if (killer && World.charName && killer === World.charName) lost.t.hitAt = now();
+      return this.died(lost.e, 'a game notice after it left view', killer, lost.t);
+    }
     const g = a.goal;
     if (!g || !this.same(g.name, name)) return;
-    const e = World.ents.get(g.gid);
-    if (e && World.isAlive(e)) return;
-    if (!e) return this.lose('the game says it was killed' + (killer ? ' by ' + killer : ''));
-    const t = this.tracks.get(g.gid);
+    const e = World.ents.get(g.gid), t = this.tracks.get(g.gid);
     if (t && killer && World.charName && killer === World.charName) t.hitAt = now();
+    if (!e) {
+      if (t && this.weHit({ gid: g.gid }, World.simNow() ?? 0, t)) return this.died({ gid: g.gid, kind: 'monster', name: g.name, ...(t.pose || {}) }, 'a game notice', killer, t);
+      return this.lose('the game says it was killed' + (killer ? ' by ' + killer : ''));
+    }
     this.died(e, 'a game notice', killer);
   },
   hittingUs(pose, sim) {
@@ -359,6 +387,11 @@ const UniqueHunt = {
     const a = this.active, here = this.here(), chase = this.chase();
     if (!here) return null;
     const goal = a.goal && World.ents.get(a.goal.gid);
+    if (goal && !World.isAlive(goal)) {
+      this.died(goal, 'its death');
+      if (a.goal?.gid === goal.gid) this.lose();
+      return null;
+    }
     if (goal && isAttackableMob(goal) && dist2D(here, goal) <= chase * UNIQUE_REACH_FACTOR) {
       if (this.judge(goal)) return goal;
       this.lose();
@@ -400,8 +433,9 @@ const UniqueHunt = {
     const a = this.active, e = a.goal && World.ents.get(a.goal.gid);
     if (!e) return;
     const t = this.track(e);
-    t.lastHp = World.hpOf(e.gid) ?? t.lastHp;
-    if (t.lastHp === 0) return this.died(e, 'zero HP');
+    this.sight(e, t);
+    if (Hunt.targetGid === e.gid) t.targetAt = now();
+    if (!World.isAlive(e)) return this.died(e, t.lastHp === 0 ? 'zero HP' : 'its death');
     const out = this.outDamaged(e);
     if (!out) return;
     t.decision = 'gave up'; t.wanted = false;
@@ -414,25 +448,43 @@ const UniqueHunt = {
     const a = this.active, spots = this.spots();
     a.phase = 'patrol'; a.resumeSpot = false;
     if (!spots.length) { a.index = -1; a.anchor = a.origin; return this.go(a.origin, -1); }
+    const dead = [];
+    const open = j => (a.fails.get(this.key(spots[j])) || 0) < UNIQUE_SPOT_FAILS;
+    const alive = j => { const d = UniqueState.spotDead(spots[j]); if (d) dead.push(d); return !d; };
     let i = -1;
     if (a.priority) {
       const pose = World.pose();
       for (const [j, s] of spots.entries()) {
-        if (!this.matches(s, a.priority, a.priorityCodes) || a.priorityDone.has(this.key(s)) || (a.fails.get(this.key(s)) || 0) >= UNIQUE_SPOT_FAILS) continue;
+        if (!this.matches(s, a.priority, a.priorityCodes) || a.priorityDone.has(this.key(s)) || !open(j) || !alive(j)) continue;
         if (i < 0 || dist2D(pose, s) < dist2D(pose, spots[i])) i = j;
       }
       if (i >= 0) a.priorityDone.add(this.key(spots[i]));
       else { a.priority = ''; a.priorityCodes = []; }
     }
     if (i < 0) {
-      const usable = spots.map((_, j) => j).filter(j => (a.fails.get(this.key(spots[j])) || 0) < UNIQUE_SPOT_FAILS);
-      if (!usable.length) return this.stop('no patrol spot can be reached');
+      const reachable = spots.map((_, j) => j).filter(open);
+      if (!reachable.length) return this.stop('no patrol spot can be reached');
+      dead.length = 0;
+      const usable = reachable.filter(alive);
+      if (!usable.length) return this.wait(dead);
       i = usable.find(j => j > a.index) ?? usable[0];
       if (a.index >= 0 && i <= a.index) a.loops++;
     }
+    if (a.waiting) Log.info('Unique hunt: a chosen unique may be up again; patrolling.');
+    a.waiting = '';
     a.index = i;
     a.anchor = { regionId: spots[i].regionId, x: spots[i].x, y: spots[i].y, z: spots[i].z };
     this.go(a.anchor, i);
+  },
+  wait(dead) {
+    const a = this.active, text = UniqueState.deadText(dead);
+    if (!a.waiting) {
+      Log.info('Unique hunt: waiting here, every chosen unique is dead: ' + text + '.');
+      this.endWalk();
+      a.anchor = { ...World.pose() };
+    }
+    a.waiting = text; a.resumeSpot = false;
+    a.waitUntil = now() + UNIQUE_WAIT_CHECK_MS;
   },
   key(s) { return s.regionId + ':' + Math.round(s.x) + ':' + Math.round(s.z); },
   go(spot, i) {
@@ -460,9 +512,12 @@ const UniqueHunt = {
     const a = this.active;
     if (!a) return;
     a.phase = 'patrol'; a.walk = null;
-    if (i >= 0) a.fails.delete(this.key(this.spots()[i] || a.anchor));
-    a.waitUntil = now() + clamp(Number(this.cfg().waitS) || 0, 0, 3600) * 1000;
+    const spot = i >= 0 ? this.spots()[i] : null;
+    if (i >= 0) a.fails.delete(this.key(spot || a.anchor));
+    const own = !!spot && !spot.nest && !spot.learned, wait = own ? clamp(Number(this.cfg().waitS) || 0, 0, 3600) * 1000 : 0;
+    a.waitUntil = now() + Math.max(UNIQUE_SETTLE_MS, wait); a.settleCap = now() + Math.max(UNIQUE_SETTLE_MAX_MS, wait);
   },
+  settling() { const a = this.active; return now() - this.spawnAt < UNIQUE_SETTLE_QUIET_MS && now() < (a.settleCap ?? 0); },
   failed(i, reason) {
     const a = this.active;
     if (!a) return;
@@ -505,6 +560,7 @@ const UniqueHunt = {
     if (Travel.active && !a.walk) { Travel.tick(); return; }
     if (a.away || !Hunt.running) { this.resume(); a.resumeSpot = true; }
     if (UniqueNests.on() && !UniqueNests.loaded && !UniqueNests.pending) UniqueNests.load();
+    UniqueTracker.tick();
     this.huntCfg();
     if (a.phase === 'collect') return this.collect();
     if (a.goal) this.giveUpCheck();
@@ -531,13 +587,14 @@ const UniqueHunt = {
     }
     Hunt.tick();
     if (!this.active || a.goal || Hunt.targetGid || Loot.active || now() - Manual.lastAt < Hunt.cfg().manualPauseS * 1000) return;
+    if (a.resumeSpot && a.waiting) { a.resumeSpot = false; a.anchor = { ...World.pose() }; }
     if (a.resumeSpot) {
       const spots = this.spots(), spot = a.index >= 0 ? spots[a.index] : a.origin;
       a.resumeSpot = false;
       if (spot && dist2D(World.pose(), spot) > UNIQUE_SPOT_REACH) { a.anchor = a.index >= 0 ? { regionId: spot.regionId, x: spot.x, y: spot.y, z: spot.z } : a.origin; return this.go(spot, a.index); }
       a.waitUntil = Math.max(a.waitUntil, now() + 2000);
     }
-    if (!a.walk && now() >= a.waitUntil && (this.spots().length || a.index >= 0)) this.next();
+    if (!a.walk && now() >= a.waitUntil && (this.spots().length || a.index >= 0) && !this.settling()) this.next();
   },
   mode() { return 'unique hunt'; },
   status() {
@@ -551,6 +608,7 @@ const UniqueHunt = {
     if (goal) { const pct = this.pct(goal); return 'Going for ' + a.goal.name + (pct === null ? '' : ' (' + pct + '%)') + '.'; }
     const target = Hunt.targetGid && World.ents.get(Hunt.targetGid);
     if (target) return 'Fighting ' + (target.name || 'a monster') + ' (hitting you).';
+    if (a.waiting && !a.walk) return 'Waiting: ' + a.waiting + '.';
     const spots = this.spots();
     if (!spots.length) return 'Waiting at the start point: ' + this.noSpots() + '.';
     const i = Math.max(0, a.index), spot = spots[i], name = spot?.name ? ' (' + spot.name + ')' : '';
@@ -583,14 +641,18 @@ const UniqueHunt = {
     }) : [el('p', 'No patrol spots yet. Stand where a unique appears and press Add this spot.', 'muted')]));
     fill();
     const learnedNote = el('p', '', 'muted');
+    const waitField = UI.number('Wait at each spot (s)', () => U().waitS, v => { U().waitS = v; }, 0, 600, 5);
+    waitField.title = 'Only for your own spots, where a unique may appear later. At the game\'s nests and learned spots the bot looks around for about 2 seconds and goes on when no unique is in view.';
+    const trackerNote = el('p', 'Unique tracker: ' + UniqueTracker.status(), 'muted');
+    UI.refreshers.push(() => { trackerNote.textContent = 'Unique tracker: ' + UniqueTracker.status(); });
     const learned = () => { const s = this.seen(); learnedNote.textContent = s.length ? 'Learned: ' + s.slice(0, 12).map(x => x.name + ' ×' + (x.count || 1)).join(', ') + (s.length > 12 ? ' and ' + (s.length - 12) + ' more' : '') + '.' : 'Learned: none yet.'; };
     learned();
     host.append(UI.group('Unique hunt',
-      el('p', 'Started from the Unique hunt card on the Setup page. It patrols these spots in order, waits at each, and loops. Distances count from the spot it is at, or from where you started it with no spots; never from the hunting area.', 'muted'),
+      el('p', 'Started from the Unique hunt card on the Setup page. It patrols these spots in order, waits at each for Wait at each spot, and loops. At the game\'s nests and learned spots it only looks around for about 2 seconds and goes on when no unique is in view. Distances count from the spot it is at, or from where you started it with no spots; never from the hunting area.', 'muted'),
       list,
       UI.text('Spot name (optional)', () => name, v => { name = v; }, 'for example Tiger Girl'),
       UI.button('Add this spot', () => { if (this.addSpot(name)) fill(); }),
-      UI.number('Wait at each spot (s)', () => U().waitS, v => { U().waitS = v; }, 0, 600, 5),
+      waitField,
       UI.check('Also patrol learned spots', () => U().learned, v => { U().learned = v; }),
       el('p', 'Every unique the bot sees is remembered with its place, on this computer only. Learned spots come after yours.', 'muted'),
       learnedNote,
@@ -601,6 +663,10 @@ const UniqueHunt = {
       UI.number('Skip a unique others have brought below this % HP', () => U().skipBelow, v => { U().skipBelow = v; }, 0, 100, 5),
       el('p', 'The drop goes to whoever dealt the most damage. A unique others are fighting is skipped below this HP; during a fight the bot gives up when others clearly out-damage it. A unique that hits you is always fought back, and one nobody else fights is always taken.', 'muted'),
       UI.number('Stop after (min)', () => U().limitM, v => { U().limitM = v; }, 5, 1440, 5),
+      UI.number('Trust a unique\'s death for (min)', () => Settings.profile.uniqueState.deadTrustM, v => { Settings.profile.uniqueState.deadTrustM = v; }, 5, 240, 5),
+      UI.check('Use the game site\'s unique tracker', () => Settings.profile.uniqueState.tracker === true, v => { Settings.profile.uniqueState.tracker = v; }),
+      trackerNote,
+      el('p', 'The bot remembers which uniques are alive or dead from the game\'s announcements, what it sees, its own kills and, if you turn the tracker on (it is off by default), the game site\'s unique tracker (opensro.online/uniques). Nothing is requested until you turn it on; then the page is read only while the unique hunt runs or the Setup page is shown, at most every 2 minutes (a Refresh never within 30 s), without cookies and without any data about you. It patrols only for chosen uniques not known to be dead; when every chosen unique is dead it stands where it is and waits until one appears again. Without newer news a death is trusted this long, then the unique is patrolled again.', 'muted'),
       UI.check('Chime when a unique monster comes into view', () => Settings.profile.sounds.unique, v => { Settings.profile.sounds.unique = v; }),
       UI.button('Test in-view chime', () => Sound.test('unique')),
       UI.check('Chime when the hunted unique dies', () => U().chime, v => { U().chime = v; }),
@@ -651,6 +717,10 @@ const UniqueHunt = {
 bus.on('cast', cast => UniqueHunt.onCast(cast));
 bus.on('spawn', e => UniqueHunt.onSpawn(e));
 bus.on('despawn', e => UniqueHunt.onDespawn(e));
-bus.on('death', e => { if (e?.kind === 'monster' && UniqueHunt.tracks.has(e.gid)) UniqueHunt.died(e, 'its death'); });
+bus.on('death', e => {
+  if (e?.kind !== 'monster') return;
+  if (UniqueHunt.tracks.has(e.gid)) UniqueHunt.died(e, 'its death');
+  if (monsterClass(e) === 'unique') UniqueState.noteEntity(e, 'dead', 'seen');
+});
 bus.on('notice', n => UniqueHunt.notice(n));
-bus.on('reset', () => { UniqueHunt.tracks.clear(); UniqueHunt.hits.clear(); if (UniqueHunt.active) { UniqueHunt.active.goal = null; UniqueHunt.active.kill = null; } });
+bus.on('reset', () => { UniqueHunt.tracks.clear(); UniqueHunt.hits.clear(); if (UniqueHunt.active) { UniqueHunt.active.goal = null; UniqueHunt.active.kill = null; UniqueHunt.active.lost = null; } });

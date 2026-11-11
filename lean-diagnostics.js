@@ -59,7 +59,7 @@ const Diagnostics = {
     if (pet.rec.commandMode & 128) return 'Pet waiting for broad auto-grab to turn off.';
     if (World.gp?.inventoryPending) return 'Pet waiting for inventory transaction.';
     if (Loot.pressed()) return 'Pet waiting briefly for potion use.';
-    const first = Loot.playerFirst();
+    const first = Loot.playerFirst() || Loot.playerYield();
     if (first) return 'Pet waiting: ' + first + Loot.lockNote();
     if (Loot.active?.petGid) return (Loot.active.retryAt ? 'Pet pickup: retry pending.' : 'Pet pickup: waiting for collection confirmation.') + Loot.lockNote();
     if (pet.rec.inventory.length >= pet.rec.status) return 'Pet bag full; only compatible stacks can merge.';
@@ -67,7 +67,7 @@ const Diagnostics = {
   },
   // Why nothing is being collected, counted from the drops in view. Counts only, no item names.
   noLoot() {
-    const why = { failed: 0, far: 0, area: 0, owner: 0, filter: 0, pet: 0, petFar: 0, full: 0 }, unwanted = {};
+    const why = { failed: 0, far: 0, area: 0, owner: 0, filter: 0, pet: 0, petFar: 0, petIdle: 0, full: 0 }, unwanted = {};
     let seen = 0, ready = 0;
     if (!World.pose()) return '';
     for (const e of World.ents.values()) {
@@ -83,6 +83,7 @@ const Diagnostics = {
       [why.area, 'outside the hunting area'],
       [why.owner, 'it belongs to another player'],
       [why.petFar, 'too far from the pet'],
+      [why.petIdle, 'farther from the pet than it reaches while the bot is stopped'],
       [why.pet, 'the pet is not ready'],
       [why.full, 'no room in the bag'],
       [why.failed, 'recently failed'],

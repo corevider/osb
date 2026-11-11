@@ -38,9 +38,9 @@ const SpawnData = {
   },
   isMonster(info) { return info.kind === 'monster' || info.code.startsWith('MOB_'); },
   code(ref) { return this.codes.get(Number(ref))?.code || ''; },
-  points(code) {
+  points(code, refs = null) {
     const out = [];
-    for (const ref of this.refsByCode.get(code) || []) {
+    for (const ref of refs || this.refsByCode.get(code) || []) {
       const list = this.mobs.get(ref);
       if (!list) continue;
       for (let i = 0; i < list.length; i += 4) out.push({ regionId: list[i], x: list[i + 1], y: list[i + 2], z: list[i + 3] });

@@ -322,7 +322,7 @@ module.exports = function uniqueTests( { test, fixture } ) {
 		const f = setup(), D = f.DEFAULT_PROFILE.unique;
 		const old = f.botProfile( { hunt: { radius: 300 } } );
 		assert.deepEqual( plain( old.unique ), plain( D ) );
-		assert.deepEqual( plain( D ), { spots: [], waitS: 30, learned: false, chase: 800, titans: false, selfDefence: true, skipBelow: 75, limitM: 60, chime: true } );
+		assert.deepEqual( plain( D ), { spots: [], waitS: 0, learned: false, chase: 800, titans: false, selfDefence: true, skipBelow: 75, limitM: 60, chime: true } );
 		const saved = f.botProfile( { unique: { spots: [ spot( "Tiger Girl", 600 ), { name: "bad" }, { name: 5, regionId: 1, x: 1, z: 2 } ], waitS: 9999, learned: true, chase: 1200, titans: true, selfDefence: false, skipBelow: 60, limitM: 30, chime: false } } );
 		assert.deepEqual( plain( saved.unique ), { spots: [ spot( "Tiger Girl", 600 ), { name: "", regionId: 1, x: 1, y: 0, z: 2 } ], waitS: 600, learned: true, chase: 1200, titans: true, selfDefence: false, skipBelow: 60, limitM: 30, chime: false } );
 		f.Settings.profile = saved;

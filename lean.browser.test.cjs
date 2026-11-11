@@ -48,10 +48,17 @@ const jsonFixtures = {
   '/assets/data/missionPresentation.json': { itemsByRefObjId: {
     10:{codename:'ITEM_CH_SWORD_09_A',iconDdjPath:'icon/skill/test/skill0.ddj'},11:{codename:'ITEM_CH_SWORD_09_C_RARE_HONOR',iconDdjPath:'icon/skill/test/skill2.ddj'}
   } },
-  '/assets/npc/manifest.json': { models:{ 2001:{refObjId:2001,codename:'MOB_CH_TIGERWOMAN',kind:'monster'} } },
-  '/assets/data/npcpos.json': { rows:['2001\t1\t300\t0\t100','2001\t1\t1500\t0\t100'] },
+  '/assets/npc/manifest.json': { models:{ 2001:{refObjId:2001,codename:'MOB_CH_TIGERWOMAN',kind:'monster'},2003:{refObjId:2003,codename:'MOB_EU_KERBEROS',kind:'monster'},
+    2004:{refObjId:2004,codename:'MOB_OA_URUCHI',kind:'monster'},2005:{refObjId:2005,codename:'MOB_KK_ISYUTARU',kind:'monster'} } },
+  '/assets/data/npcpos.json': { rows:['2001\t1\t300\t0\t100','2001\t1\t1500\t0\t100','2003\t1\t800\t0\t300','2004\t1\t1200\t0\t900','2005\t-32767\t50\t0\t50'] },
 };
 jsonFixtures['/assets/text/textdataname.en.json'].entries.SN_MOB_CH_TIGERWOMAN='Tiger Girl';
+Object.assign(jsonFixtures['/assets/text/textdataname.en.json'].entries, { SN_MOB_EU_KERBEROS: 'Cerberus', SN_MOB_OA_URUCHI: 'Uruchi', SN_MOB_KK_ISYUTARU: 'Isyutaru' });
+const shotDir = process.env.OSB_SCREENSHOT_DIR || '';
+const shot = async (locator, name) => {
+  await locator.screenshot({ path: __dirname + '/' + name });
+  if (shotDir) { fs.mkdirSync(shotDir, { recursive: true }); fs.copyFileSync(__dirname + '/' + name, path.join(shotDir, name)); }
+};
 for (let n=0;n<55;n++) {
   const id=200+n,code='ITEM_MALL_AVATAR_M_PAID_'+n;
   jsonFixtures['/assets/char/roster.json'].dress.equipment[id]={code,avatarSlot:n%4,bodies:{CH_M:{}}};
@@ -74,7 +81,14 @@ const ntxStored = zlib.gzipSync(ntx), header2 = Buffer.alloc(12); header2.write(
 const pack2 = Buffer.concat([header2, Buffer.from('{}'), ntxStored]);
 manifest.assets.push({ path: '/assets/images/Media_extracted/minimap/1x0.texture', packPath: '/assets/test-icons/minimap.pack', offset: 0,
   length: ntx.length, sha256: sha(ntx), mime: 'application/octet-stream', stored: { length: ntxStored.length, encoding: 'gzip' } });
+const trackerRow = (ref, state, pill, name, level = 20) => `<li class="sro-window flex flex-col" data-state="${state}"><div class="relative flex"><span class="sro-stage"><img alt="${name}" src="/art/u.webp"/></span>` +
+  `<div class="relative min-w-0 flex-1"><h2 class="truncate"><a class="" href="/monsters/${ref}">${name}</a></h2><p><span class="truncate">Example Field</span><span>Lv <!-- -->${level}</span></p></div>` +
+  `<span class="sro-pill relative" data-state="${state}">${pill}</span></div><div><p><span class="truncate">Slain by <a class="font-bold" href="/p/samplehero">Sample Hero</a></span></p></div></li>`;
+const trackerPage = '<!DOCTYPE html><html><head><title>Unique tracker</title></head><body><ul class="grid">' +
+  trackerRow(2001, 'slain', 'Slain', 'Tiger Girl') + trackerRow(2003, 'alive', 'Alive', 'Cerberus', 24) + trackerRow(2004, 'unseen', 'Not up', 'Uruchi', 40) + trackerRow(2002, 'unseen', 'Not up', 'Example Beast') + '</ul></body></html>';
+const trackerAsks = [];
 const server = http.createServer((req, res) => {
+  if (req.url.startsWith('/uniques')) { trackerAsks.push({ url: req.url, method: req.method, cookie: req.headers.cookie || '' }); res.setHeader('Content-Type', 'text/html'); res.end(trackerPage); return; }
   if (req.url === '/assets/packs/manifest.json') { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(manifest)); return; }
   const image = [...images,...jsonAssets].find(i => i.transport === req.url);
   if (image) { res.setHeader('Content-Type', 'application/octet-stream'); res.end(image.compressed); return; }
@@ -240,17 +254,69 @@ async function tickProof(browser, localPort) {
     await page.getByRole('button', { name: 'Remove', exact: true }).click();
     assert.equal(await page.evaluate(() => SROLean.settings.profile.unique.spots.length), 0);
     await page.getByLabel("Patrol the game's unique nests", { exact: true }).check();
-    await page.getByLabel('Tiger Girl · 2 nests', { exact: true }).check();
+    await page.getByLabel(/^Tiger Girl · 2 nests( · .*)?$/).check();
     assert.deepEqual(await page.evaluate(() => SROLean.settings.profile.uniqueNests.picks), ['MOB_CH_TIGERWOMAN']);
     await page.getByText('None ticked: every unique in the list.').waitFor();
     await page.locator('fieldset', { hasText: 'Unique nests' }).screenshot({ path: __dirname + '/lean-unique-nests.png' });
-    await page.getByLabel('Tiger Girl · 2 nests', { exact: true }).uncheck();
+    await page.getByLabel(/^Tiger Girl · 2 nests( · .*)?$/).uncheck();
     await page.getByLabel("Patrol the game's unique nests", { exact: true }).uncheck();
     assert.deepEqual(await page.evaluate(() => SROLean.settings.profile.uniqueNests), { on: false, picks: [], maxM: 1000 });
     await page.getByRole('button', { name: 'Setup', exact: true }).click();
     await page.getByText('Patrols your unique spots').waitFor();
     await page.getByText('Not running.').waitFor();
     await page.locator('fieldset', { hasText: 'Patrols your unique spots' }).screenshot({ path: __dirname + '/lean-unique-card.png' });
+    await page.evaluate(() => { document.cookie = 'osbprobe=1; path=/'; });
+    const uniques = page.locator('fieldset', { hasText: 'Click a name for a small map' });
+    await uniques.getByText(/^The unique tracker is off: states come from the game's announcements/).waitFor();
+    assert.equal(await uniques.getByRole('button', { name: 'Refresh', exact: true }).isVisible(), false, 'Refresh is hidden while the tracker is off');
+    await uniques.getByText('Refresh needs the unique tracker switch above.').waitFor();
+    await page.waitForTimeout(1500);
+    assert.equal(trackerAsks.length, 0, 'off by default: nothing is requested while the Setup page is shown');
+    assert.equal(await page.evaluate(() => SROLean.settings.profile.uniqueState.tracker), false);
+    await uniques.getByText('Hunt', { exact: true }).waitFor();
+    assert.equal(await uniques.getByLabel('Hunt Tiger Girl', { exact: true }).getAttribute('title'), 'Look for this unique in the Unique hunt');
+    await uniques.getByText('The Hunt ticks choose which uniques the Unique hunt looks for; with none ticked it looks for all of them.').waitFor();
+    await uniques.getByLabel(/^Check the game site's unique tracker \(every 2 minutes/).check();
+    const tigerRow = /^Tiger Girl · Slain · Lv 20 · Example Field · slain on the unique tracker \(first seen (less than a minute|\d+ min) ago\) · 2 nests \(unique tracker\)$/;
+    await uniques.getByRole('button', { name: tigerRow }).waitFor();
+    await uniques.getByText(/^Updated \d+ s ago from the unique tracker/).waitFor();
+    const asksOnSetup = trackerAsks.length;
+    assert.ok(asksOnSetup >= 1, 'the Setup page reads the tracker once the user turned it on');
+    const listed = () => page.evaluate(() => [...document.getElementById('sro-bot-lean').shadowRoot.querySelectorAll('.unique-row')].map(r => [r.querySelector('.unique-title').textContent, r.querySelector('.unique-pill').textContent, r.querySelector('.unique-pill').className.replace('unique-pill ', '')]));
+    assert.deepEqual(await listed(), [['Tiger Girl', 'Slain', 'unique-dead'], ['Cerberus', 'Alive', 'unique-alive'], ['Uruchi', 'Not up', 'unique-notup'], ['Isyutaru', 'Unknown', 'unique-unknown']], 'by level, lowest first, unknown last');
+    const pillColours = await page.evaluate(() => [...document.getElementById('sro-bot-lean').shadowRoot.querySelectorAll('.unique-pill')].map(p => getComputedStyle(p).backgroundColor));
+    assert.equal(new Set(pillColours).size, 4, 'four different pill looks: ' + pillColours.join(' '));
+    await shot(uniques, 'lean-unique-list.png');
+    assert.equal(await page.evaluate(() => SROLean.settings.profile.uniqueNests.on), false);
+    await uniques.getByLabel('Hunt Tiger Girl', { exact: true }).check();
+    assert.deepEqual(await page.evaluate(() => SROLean.settings.profile.uniqueNests.picks), ['MOB_CH_TIGERWOMAN'], 'the row tick is the picker choice');
+    assert.equal(await page.evaluate(() => SROLean.settings.profile.uniqueNests.on), true, 'ticking turns on the nest patrol');
+    await page.getByText(/^Patrol the game's unique nests is now on, because you ticked a unique to hunt\.$/).waitFor();
+    await uniques.getByRole('button', { name: tigerRow }).click();
+    await uniques.getByLabel('Nests of Tiger Girl', { exact: true }).waitFor();
+    await uniques.getByText(/^2 nests on the map\. Nearest nest: \d+ m\.$/).waitFor();
+    await uniques.getByRole('button', { name: 'Refresh', exact: true }).click();
+    await uniques.getByText(/^(Asked moments ago; try again in \d+ s\.|Reading the unique tracker…)$/).waitFor();
+    await page.waitForTimeout(700);
+    await shot(uniques, 'lean-unique-list-map.png');
+    assert.ok(trackerAsks.length <= asksOnSetup + 1, 'a refresh asks at most once more');
+    await uniques.getByRole('button', { name: 'Close map', exact: true }).click();
+    await uniques.getByLabel('Hunt Tiger Girl', { exact: true }).uncheck();
+    assert.deepEqual(await page.evaluate(() => SROLean.settings.profile.uniqueNests.picks), []);
+    assert.equal(await page.evaluate(() => SROLean.settings.profile.uniqueNests.on), true, 'unticking leaves the patrol on');
+    await page.locator('fieldset', { hasText: 'Patrols your unique spots' }).getByRole('button', { name: 'Start', exact: true }).click();
+    await page.getByRole('button', { name: 'Combat', exact: true }).click();
+    await page.getByRole('button', { name: 'Unique hunt', exact: true }).click();
+    await page.getByText(/^Unique tracker: Last read (less than a minute|\d+ min) ago: 1 alive, 1 slain, 2 unknown\.$/).waitFor();
+    assert.ok(trackerAsks.length >= 1 && trackerAsks.every(a => a.url === '/uniques' && a.method === 'GET' && a.cookie === ''), 'plain GETs of /uniques without cookies: ' + JSON.stringify(trackerAsks));
+    await page.getByLabel("Patrol the game's unique nests", { exact: true }).check();
+    await page.getByLabel('Tiger Girl · 2 nests · slain on the unique tracker (first seen less than a minute ago)', { exact: true }).waitFor();
+    await page.locator('fieldset', { hasText: 'Unique nests' }).screenshot({ path: __dirname + '/lean-unique-tracker.png' });
+    await page.getByLabel("Patrol the game's unique nests", { exact: true }).uncheck();
+    await page.getByRole('button', { name: 'Setup', exact: true }).click();
+    await page.locator('fieldset', { hasText: 'Patrols your unique spots' }).getByRole('button', { name: 'Stop', exact: true }).click();
+    await page.getByText('Stopped by you.', { exact: true }).waitFor();
+    assert.equal((await page.evaluate(() => JSON.stringify(localStorage))).includes('Sample Hero'), false, 'the last killer is never stored');
     await page.getByRole('button', { name: 'Combat', exact: true }).click();
     await page.getByRole('button', { name: 'Skills', exact: true }).click();
     await page.getByRole('button', { name: 'Add Test attack', exact: true }).click();

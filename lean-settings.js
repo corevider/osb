@@ -49,8 +49,9 @@ function upgradeProfile(input) { return upgradeSoxSound(Rotations.upgrade(input)
 const DEFAULT_PROFILE = {
   items: { rules: {}, balance: false, petToBag: false, autoEquip: false, gear: { primaryWeapon: null, secondaryWeapon: null, shield: null } },
   sounds: { player: false, died: false, levelUp: false, unique: false },
-  unique: { spots: [], waitS: 30, learned: false, chase: 800, titans: false, selfDefence: true, skipBelow: 75, limitM: 60, chime: true },
+  unique: { spots: [], waitS: 0, learned: false, chase: 800, titans: false, selfDefence: true, skipBelow: 75, limitM: 60, chime: true },
   uniqueNests: { on: false, picks: [], maxM: 1000 },
+  uniqueState: { deadTrustM: 30, tracker: false },
   stall: { title: '', greeting: '', network: true, closeWhenEmpty: true, prices: {} },
   alchemy: { target: 3, limit: 20, elixir: 0, powder: false, use: { luck: false, steady: false, immortal: false, astral: false }, stones: { luck: 1, steady: 1, immortal: 1, astral: 1 }, stoneLimit: 0,
     // The plus from which each helper is used: a failure from +5 up can destroy the item (Steady and Immortal matter from there),
@@ -107,7 +108,7 @@ const DEFAULT_PROFILE = {
     levelMin: 0, levelMax: 0, include: '', exclude: '', priority: 'attackers', avoidKs: true, avoidKsScope: 'all', avoidKsBelow: 50,
     targetTimeoutS: 25,
     pickup: { enabled: true, soxOnly: false, skipStar: false, gold: true, potions: true, equipment: true, elixirs: true, powders: true, magicStones: true, attrStones: true, alchemy: true, others: true,
-      collector: 'character', by: {}, petFullSound: true, petWhileManual: true, soxSeals: { star: true, moon: true, sun: true }, include: '', exclude: '', radius: 300, afterKillOnly: true, retries: 2 },
+      collector: 'character', by: {}, petFullSound: true, petWhileManual: true, petWhileStopped: true, petInputHoldS: 3, petIdleRadius: 250, soxSeals: { star: true, moon: true, sun: true }, include: '', exclude: '', radius: 300, afterKillOnly: true, retries: 2 },
     sit: { enabled: true, hpBelow: 35, mpBelow: 20, resumeAt: 90 },
     antiStuck: { enabled: true, minutes: 3, maxRecoveries: 3, recall: false },
     detour: { enabled: true, stallMs: 2500 },
@@ -121,7 +122,7 @@ function botProfile(input) {
   const result = deepMerge(DEFAULT_PROFILE, {});
   if (!input || typeof input !== 'object') return result;
   input = upgradeProfile(input);
-  for (const key of ['macro', 'potion', 'hunt', 'lure', 'pet', 'scroll', 'mall', 'wardrobe', 'party', 'alchemy', 'mastery', 'statPoints', 'leveling', 'trace', 'items', 'trade', 'stall', 'quest', 'sounds', 'unique', 'uniqueNests']) {
+  for (const key of ['macro', 'potion', 'hunt', 'lure', 'pet', 'scroll', 'mall', 'wardrobe', 'party', 'alchemy', 'mastery', 'statPoints', 'leveling', 'trace', 'items', 'trade', 'stall', 'quest', 'sounds', 'unique', 'uniqueNests', 'uniqueState']) {
     if (!input[key] || typeof input[key] !== 'object') continue;
     for (const field of Object.keys(DEFAULT_PROFILE[key])) {
       if (field in input[key]) result[key][field] = deepMerge(DEFAULT_PROFILE[key][field], input[key][field]);
@@ -164,6 +165,13 @@ function botProfile(input) {
   nests.on = nests.on === true;
   nests.picks = [...new Set((Array.isArray(nests.picks) ? nests.picks : []).filter(c => typeof c === 'string' && /^[A-Za-z0-9_]{1,64}$/.test(c)))].slice(0, 100);
   nests.maxM = Number.isFinite(nests.maxM) ? clamp(Math.round(nests.maxM / 100) * 100, 100, 5000) : DEFAULT_PROFILE.uniqueNests.maxM;
+  const stateCfg = result.uniqueState;
+  stateCfg.tracker = stateCfg.tracker === true;
+  stateCfg.deadTrustM = Number.isFinite(stateCfg.deadTrustM) ? clamp(Math.round(stateCfg.deadTrustM), 5, 240) : DEFAULT_PROFILE.uniqueState.deadTrustM;
+  const P = result.hunt.pickup, pickupDefaults = DEFAULT_PROFILE.hunt.pickup;
+  if (typeof P.petWhileStopped !== 'boolean') P.petWhileStopped = pickupDefaults.petWhileStopped;
+  P.petInputHoldS = Number.isFinite(P.petInputHoldS) ? clamp(Math.round(P.petInputHoldS), 0, 30) : pickupDefaults.petInputHoldS;
+  P.petIdleRadius = Number.isFinite(P.petIdleRadius) ? clamp(Math.round(P.petIdleRadius / 10) * 10, 50, 500) : pickupDefaults.petIdleRadius;
   const protect = result.party.protect;
   for (const key of ['enabled', 'all', 'whileNoAttack']) protect[key] = protect[key] === true;
   protect.range = Number.isFinite(protect.range) ? clamp(Math.round(protect.range), 5, 100) : DEFAULT_PROFILE.party.protect.range;
