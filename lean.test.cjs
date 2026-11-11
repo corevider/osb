@@ -6585,8 +6585,8 @@ test('the lure walks to a pull point, taunts the nearest monster there and never
   step(); assert.equal(f.Lure.index, 0, 'starts with point A'); step(); assert.equal(f.Hunt.state, 'lure'); assert.equal(f.Lure.phase, 'out');
   assert.equal(f.commands.at(-1).kind, 'move', 'walks towards point A');
   assert.equal(casts(3002).length, 0, 'no area taunt with no monster near');
-  at(400); step(); assert.equal(casts(3002).length, 1, 'the area taunt goes out as soon as a monster is near');
-  step(); assert.equal(f.Lure.phase, 'taunt');
+  at(400); step(); assert.equal(f.Lure.phase, 'taunt'); assert.equal(casts(3002).length, 0, 'arriving casts nothing yet');
+  step(); assert.equal(casts(3002).length, 1, 'the area taunt goes out at the point');
   step(); assert.deepEqual(f.commands.filter(c => c.kind === 'select').map(c => c.gid), [40], 'the monster nearest the point');
   f.World.gp.target = 40; step();
   assert.equal(casts(3001).length, 1); assert.equal(casts(3001)[0].gid, 40);
@@ -6640,6 +6640,113 @@ test('a pull point with no monster sends the lure straight back with no hold', (
   step(); at(400); step(); assert.equal(f.Lure.phase, 'taunt');
   step(); assert.equal(f.Lure.phase, 'back'); assert.equal(f.Lure.pulled, false);
   at(100); step(); assert.equal(f.Lure.phase, 'out', 'nothing pulled, so no hold'); assert.equal(f.Lure.index, 1);
+});
+test('the lure casts no area taunt on the way out, on the way back, at the spot or while holding', () => {
+  const { f, mob, at, step, casts } = lure();
+  f.Settings.profile.lure.pauseEveryM = 0;
+  mob(40, 410); mob(41, 250);
+  step(); at(250); step(); step(); assert.equal(f.Lure.phase, 'out', 'a monster beside the road');
+  assert.equal(casts(3002).length, 0, 'nothing cast on the way to the point');
+  at(400); step(); step(); assert.equal(casts(3002).length, 1, 'cast at the point');
+  step(); f.World.gp.target = 40; step(); assert.equal(f.Lure.phase, 'back');
+  f.World.gp.skillCooldowns = [];
+  at(300); step(); at(150); step(); at(100); step();
+  assert.equal(f.Lure.phase, 'hold'); step(); step();
+  assert.equal(casts(3002).length, 1, 'nothing cast on the way back, at the spot or while holding');
+});
+test('at a pull point the lure casts the area taunt first, then the single-target taunt on the nearest monster', () => {
+  const { f, mob, at, step, casts } = lure();
+  mob(41, 520); mob(40, 410);
+  step(); at(400); step(); step();
+  assert.deepEqual(casts(3002).map(c => c.gid ?? 0), [0], 'the area taunt is cast on the character');
+  assert.equal(casts(3001).length, 0); assert.equal(f.Lure.phase, 'taunt');
+  step(); assert.deepEqual(f.commands.filter(c => c.kind === 'select').map(c => c.gid), [40]);
+  f.World.gp.target = 40; step();
+  assert.equal(casts(3001)[0].gid, 40); assert.equal(f.Lure.phase, 'back'); assert.equal(f.Lure.pulled, true);
+  assert.ok(f.commands.findIndex(c => c.kind === 'skill' && c.skillId === 3002) < f.commands.findIndex(c => c.kind === 'skill' && c.skillId === 3001));
+});
+test('with only an area taunt the lure casts it at the point and walks back', () => {
+  const { f, mob, at, step, casts } = lure();
+  f.Settings.profile.lure.taunt = { id: 0, group: 0 };
+  mob(40, 410);
+  step(); at(400); step(); assert.equal(f.Lure.phase, 'taunt');
+  step(); assert.equal(casts(3002).length, 1); assert.equal(f.Lure.phase, 'back'); assert.equal(f.Lure.pulled, true);
+  assert.equal(f.commands.some(c => c.kind === 'select'), false);
+});
+test('the lure waits at the point up to 10 s for the area taunt, then still casts the single-target taunt', () => {
+  const { f, mob, at, step, casts } = lure();
+  mob(40, 410); step(); step(); at(400);
+  f.World.gp.skillCooldowns.push({ skill: 3002, startedAtMs: f.World.simNow(), durationMs: 4000 });
+  step(); step(); step();
+  assert.equal(f.Lure.phase, 'taunt', 'waits at the point'); assert.equal(casts(3002).length, 0);
+  assert.equal(f.commands.some(c => c.kind === 'select'), false, 'the single-target taunt does not jump the queue');
+  step(); step(); assert.equal(casts(3002).length, 1, 'cast once ready'); assert.equal(f.Lure.phase, 'taunt');
+  step(); f.World.gp.target = 40; step(); assert.equal(casts(3001).length, 1); assert.equal(f.Lure.phase, 'back');
+  const g = lure(); g.mob(40, 410); g.step(); g.step(); g.at(400);
+  g.f.World.gp.skillCooldowns.push({ skill: 3002, startedAtMs: g.f.World.simNow(), durationMs: 60000 });
+  g.step();
+  for (let i = 0; i < 8; i++) g.step();
+  assert.equal(g.f.Lure.phase, 'taunt', 'still waiting inside 10 s'); assert.equal(g.casts(3002).length, 0);
+  g.step(); g.step(); g.step();
+  assert.equal(g.casts(3002).length, 0, 'the area taunt never got ready');
+  assert.deepEqual(g.f.commands.filter(c => c.kind === 'select').map(c => c.gid).slice(0, 1), [40], 'past 10 s the single-target taunt takes its turn');
+  g.f.World.gp.target = 40; g.step();
+  assert.equal(g.casts(3001).length, 1); assert.equal(g.f.Lure.phase, 'back'); assert.equal(g.f.Lure.pulled, true);
+  const h = lure(); h.f.Settings.profile.lure.taunt = { id: 0, group: 0 }; h.mob(40, 410); h.step(); h.step(); h.at(400);
+  h.f.World.gp.skillCooldowns.push({ skill: 3002, startedAtMs: h.f.World.simNow(), durationMs: 60000 });
+  for (let i = 0; i < 12; i++) h.step();
+  assert.equal(h.f.Lure.phase, 'back', 'with only the area taunt, past 10 s it walks back'); assert.equal(h.f.Lure.pulled, false, 'nothing was cast');
+});
+test('with no monster within the search radius of the point the lure casts nothing and goes back with no hold', () => {
+  const { f, mob, at, step, casts } = lure();
+  mob(40, 700);
+  step(); at(400); step(); step();
+  assert.equal(casts(3002).length, 0); assert.equal(casts(3001).length, 0);
+  assert.equal(f.Lure.phase, 'back'); assert.equal(f.Lure.pulled, false);
+  at(100); step(); assert.equal(f.Lure.phase, 'out', 'nothing pulled, so no hold');
+});
+function pulledAtPoint() {
+  const l = lure();
+  l.f.Settings.profile.lure.pauseEveryM = 0;
+  l.mob(40, 410); l.mob(41, 420);
+  l.step(); l.step(); l.at(400); l.step(); l.step(); l.step(); l.f.World.gp.target = 40; l.step();
+  assert.equal(l.f.Lure.phase, 'back'); assert.equal(l.casts(3001).length, 1);
+  l.f.World.gp.skillCooldowns = []; l.f.World.ents.get(40).x = 305;
+  return l;
+}
+test('on the way back the lure taunts a pulled monster that fell more than 10 m behind, with the single-target taunt only', () => {
+  const { f, mob, at, step, casts } = pulledAtPoint();
+  at(300); step(); assert.equal(f.commands.filter(c => c.kind === 'select').at(-1).gid, 41);
+  f.World.gp.target = 41; step();
+  assert.deepEqual(casts(3001).map(c => c.gid), [40, 41]);
+  assert.equal(casts(3002).length, 1, 'never the area taunt on the way');
+  assert.equal(f.Lure.phase, 'back');
+});
+test('on the way back the lure leaves a pulled monster at 5 m and a monster that was not pulled alone', () => {
+  const { f, mob, at, step, casts } = pulledAtPoint();
+  f.World.ents.get(41).x = 350; mob(42, 420);
+  at(300); step(); step(); f.World.gp.target = 42; step(); f.World.gp.target = 41; step();
+  assert.deepEqual(f.commands.filter(c => c.kind === 'select').map(c => c.gid), [40], 'only the pull at the point selected anything');
+  assert.equal(casts(3001).length, 1);
+});
+test('the lure does not taunt again on the way back while hurrying on low HP', () => {
+  const l = lure();
+  l.mob(40, 410); l.mob(41, 420);
+  l.step(); l.step(); l.at(400); l.step(); l.step();
+  assert.equal(l.casts(3002).length, 1);
+  l.f.World.me = () => ({ hpPct: 30, mpPct: 100 }); l.step();
+  assert.equal(l.f.Lure.phase, 'back'); assert.equal(l.f.Lure.hurry, true);
+  l.f.World.gp.skillCooldowns = []; l.at(300); l.step(); l.f.World.gp.target = 41; l.step(); l.step();
+  assert.equal(l.casts(3001).length, 0); assert.equal(l.f.commands.some(c => c.kind === 'select'), false);
+});
+test('the lure taunts the same monster on the way back at most once per 10 s', () => {
+  const { f, at, step, casts } = pulledAtPoint();
+  at(300); step(); f.World.gp.target = 41; step();
+  assert.equal(casts(3001).length, 2);
+  for (let i = 0; i < 6; i++) { f.World.gp.skillCooldowns = []; step(); }
+  assert.equal(casts(3001).length, 2, 'inside 10 s');
+  for (let i = 0; i < 4; i++) { f.World.gp.skillCooldowns = []; step(); }
+  assert.equal(casts(3001).length, 3, 'after 10 s it is taunted again');
 });
 test('the lure gives up a pull below the HP threshold and brings the character back', () => {
   const { f, mob, at, step } = lure();

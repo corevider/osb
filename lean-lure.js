@@ -1,17 +1,18 @@
 // Lure: a tank pulls monsters to the party instead of hunting. It walks to each saved pull point in turn, taunts the
 // nearest monster there, walks back to the hunting spot and holds a few seconds so the damage dealers take over,
-// then goes to the next point. On the way back with monsters it stops every few metres so they keep up. It never attacks. The area taunt is cast whenever it is ready and a monster is near,
-// except while holding at the spot. No stuck handling yet: a point without a walkable route stops hunting.
+// then goes to the next point. On the way back with monsters it stops every few metres so they keep up. It never attacks.
+// No stuck handling yet: a point without a walkable route stops hunting.
 const LURE_ARRIVAL = 30;      // 3 m
+const LURE_RETAUNT_MS = 10000;
 const LURE_TAUNT_MS = 10000;  // give up on a pull point's target after this long and walk back
 const Lure = {
-  phase: 'back', index: -1, holdUntil: 0, phaseAt: 0, target: 0, pulled: false, sentAt: -Infinity, travel: null, message: 'Lure off.',
+  phase: 'back', index: -1, holdUntil: 0, phaseAt: 0, target: 0, pulled: false, areaDone: false, pulledMobs: new Map(), sentAt: -Infinity, travel: null, message: 'Lure off.',
   legFrom: null, pauseUntil: 0, halted: false, hurry: false, pulls: 0,
   cfg() { return Settings.profile.lure; },
   on() { return !!this.cfg().enabled && this.cfg().points.length > 0; },
   // Every start begins at the hunting spot, with no hold since nothing was pulled yet; the next point is then A.
-  reset() { this.enter('back'); this.index = -1; this.pulled = false; this.pulls = 0; },
-  enter(phase) { this.phase = phase; this.phaseAt = now(); this.target = 0; this.travel = null; this.sentAt = -Infinity; this.legFrom = null; this.pauseUntil = 0; this.hurry = false; this.halted = false; },
+  reset() { this.enter('back'); this.index = -1; this.pulled = false; this.pulls = 0; this.pulledMobs.clear(); },
+  enter(phase) { this.phase = phase; this.phaseAt = now(); this.target = 0; this.areaDone = false; this.travel = null; this.sentAt = -Infinity; this.legFrom = null; this.pauseUntil = 0; this.hurry = false; this.halted = false; },
   addPoint() {
     const p = World.pose();
     if (!World.inWorld() || !p) return UI.toast('Enter the game first.', 'warn');
@@ -24,14 +25,16 @@ const Lure = {
   ready(id) { return !!id && !Combat.blocked(id) && Cmd.canCast(id) && Combat.mpOk(id, World.me()); },
   // The living monster closest to `from` within the search radius.
   nearest(from) {
-    const radius = (Number(this.cfg().radius) || 15) * 10;
     let best = null, bestD = Infinity;
-    for (const e of World.ents.values()) {
-      if (!isAttackableMob(e)) continue;
+    for (const e of this.mobsNear(from)) {
       const d = dist2D(from, e);
-      if (d <= radius && d < bestD) { best = e; bestD = d; }
+      if (d < bestD) { best = e; bestD = d; }
     }
     return best;
+  },
+  mobsNear(from) {
+    const radius = (Number(this.cfg().radius) || 15) * 10;
+    return [...World.ents.values()].filter(e => isAttackableMob(e) && dist2D(from, e) <= radius);
   },
   // Living monsters already inside the training area (the hunting spot's radius): the ones pulled earlier, still being fought.
   atSpot() {
@@ -49,13 +52,6 @@ const Lure = {
     if (move.waiting) { this.message = move.error || 'Waiting for the route.'; return false; }
     if (now() - this.sentAt >= 900 && Cmd.move(move.point)) this.sentAt = now();
     return false;
-  },
-  areaTaunt() {
-    const id = this.skill(this.cfg().area);
-    if (this.phase === 'hold' || !this.ready(id) || !this.nearest(World.pose())) return false;
-    if (!Combat.cast(id, 0)) return false;
-    if (this.phase !== 'back') this.pulled = true;
-    return true;
   },
   // Strangers within 30 m of the character; party members and the character itself never count.
   playersNear() {
@@ -87,7 +83,6 @@ const Lure = {
     }
     if (!point && (this.phase === 'out' || this.phase === 'taunt')) this.reset();
     if (World.isCasting() || now() - Combat.lastCastAt < (Settings.profile.macro.castGapMs ?? 250)) return;
-    if (this.areaTaunt()) return;
     if (this.phase !== 'back' && this.phase !== 'hold' && World.me().hpPct < c.returnHpPct) {
       this.enter('back'); this.hurry = true; this.message = 'Low HP: back to the party.'; Log.info('Lure: ' + this.message);
     }
@@ -105,6 +100,7 @@ const Lure = {
     if (this.phase === 'taunt') return this.taunt(point);
     if (this.phase === 'back') {
       this.message = this.hurry ? 'Low HP: back to the party.' : 'Bringing monsters back to the party.';
+      if (this.retaunt(home)) return;
       if (this.pause(home)) return;
       if (!this.walk(home)) return;
       if (!this.pulled) return this.next();
@@ -129,11 +125,14 @@ const Lure = {
     this.legFrom = { ...p }; this.pauseUntil = now() + Number(c.pauseS) * 1000; this.halted = false;
     return this.pause(home);
   },
-  next() { if (this.pulled) this.pulls++; this.index = (this.index + 1) % this.cfg().points.length; this.pulled = false; this.enter('out'); },
+  next() { if (this.pulled) this.pulls++; this.pulledMobs.clear(); this.index = (this.index + 1) % this.cfg().points.length; this.pulled = false; this.enter('out'); },
   // Pick the monster nearest the point, select it, get into range and cast the single-target taunt on it.
   taunt(point) {
-    const id = this.skill(this.cfg().taunt);
-    if (!id || now() - this.phaseAt > LURE_TAUNT_MS) { this.enter('back'); return; }
+    const area = this.skill(this.cfg().area), id = this.skill(this.cfg().taunt);
+    if (!area && !id) { this.enter('back'); return; }
+    if (area && !this.areaDone && id && now() - this.phaseAt > LURE_TAUNT_MS) { this.areaDone = true; this.phaseAt = now(); }
+    if (now() - this.phaseAt > LURE_TAUNT_MS) { this.enter('back'); return; }
+    if (area && !this.areaDone) return this.areaTaunt(point, area, id);
     let e = World.ents.get(this.target);
     if (!e || !isAttackableMob(e)) {
       e = this.nearest(point);
@@ -144,7 +143,29 @@ const Lure = {
     const range = Math.max(10, (World.skill(id)?.range || 150) - 5);
     if (dist2D(World.pose(), e) > range) { this.walk(e, range); return; }
     if (!Cmd.select(e.gid) || World.gp.target !== e.gid || World.gp.targetPending || !this.ready(id)) return;
-    if (Combat.cast(id, e.gid)) { this.pulled = true; this.enter('back'); }
+    if (Combat.cast(id, e.gid)) { this.pulled = true; this.pulledMobs.set(e.gid, now()); this.enter('back'); }
+  },
+  retaunt(home) {
+    const id = this.skill(this.cfg().taunt), pose = World.pose();
+    if (!id || !this.pulled || this.hurry || !pose || dist2D(pose, home) <= LURE_ARRIVAL || !this.ready(id)) return false;
+    const range = Math.max(10, (World.skill(id)?.range || 150) - 5);
+    let e = null, far = 0;
+    for (const [gid, at] of this.pulledMobs) {
+      const m = World.ents.get(gid), d = m && isAttackableMob(m) ? dist2D(pose, m) : 0;
+      if (d > 100 && d <= range && d > far && now() - at >= LURE_RETAUNT_MS) { e = m; far = d; }
+    }
+    if (!e || !Cmd.select(e.gid) || World.gp.target !== e.gid || World.gp.targetPending) return false;
+    if (!Combat.cast(id, e.gid)) return false;
+    this.pulledMobs.set(e.gid, now());
+    return true;
+  },
+  areaTaunt(point, area, id) {
+    if (!this.nearest(point)) { this.message = 'No monster at this pull point.'; this.enter('back'); return; }
+    if (!this.ready(area)) { this.message = 'Waiting for the area taunt.'; return; }
+    if (!Combat.cast(area, 0)) return;
+    this.pulled = true;
+    for (const e of this.mobsNear(point)) if (!this.pulledMobs.has(e.gid)) this.pulledMobs.set(e.gid, -Infinity);
+    if (id) { this.areaDone = true; this.phaseAt = now(); } else this.enter('back');
   },
   status() {
     const c = this.cfg();
@@ -159,7 +180,7 @@ const Lure = {
     const options = buff => () => [[0, 'None'], ...UI.learnedSkills(buff).map(s => [s.id, s.name || '#' + s.id])];
     const box = UI.group('Lure',
       UI.check('Lure instead of hunting', () => c().enabled, v => { c().enabled = v; this.reset(); }),
-      el('p', 'For a tank. Walks to each pull point in turn, taunts the nearest monster, brings it back to the hunting spot, pausing on the way so the monsters keep up (0 m = no pauses; none when coming back on low HP), and holds while the party takes over. Never attacks. The area taunt goes out whenever it is ready and a monster is near, except while holding.', 'muted'),
+      el('p', 'For a tank. Walks to each pull point in turn, casts the area taunt there and then the single-target taunt on the nearest monster, brings them back to the hunting spot, pausing on the way so the monsters keep up (0 m = no pauses; none when coming back on low HP), and holds while the party takes over. On the way back the single-target taunt is cast again on a pulled monster that falls more than 10 m behind. Never attacks. The area taunt is never cast on the way or at the spot.', 'muted'),
       UI.select('Single-target taunt', options(false), () => this.skill(c().taunt) || 0, pick('taunt')),
       UI.select('Area taunt', options(true), () => this.skill(c().area) || 0, pick('area')),
       UI.number('Hold at the spot (s)', () => c().holdS, v => c().holdS = v, 0, 30),
