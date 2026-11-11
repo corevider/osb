@@ -1507,6 +1507,26 @@ test('wardrobe retains honor skins and validates body and equipment slot', () =>
   assert.ok(f.Wardrobe.validEq(6,11)); assert.equal(f.Wardrobe.validEq(6,12), null); assert.equal(f.Wardrobe.validEq(7,11), null);
   f.LeanWardrobe.slot = 'e6'; assert.equal(f.LeanWardrobe.rows().length,2);
 });
+test('delta gameplay events merge onto the last state and keep the bot in the world', () => {
+  const f = fixture(), gid = f.World.gp.localGid;
+  assert.ok(gid && f.World.inWorld());
+  f.World.applyEvent({kind:'gameplay',state:{target:777},delta:true});
+  assert.equal(f.World.gp.localGid, gid); assert.equal(f.World.gp.target, 777); assert.ok(f.World.inWorld());
+  f.World.applyEvent({kind:'gameplay',state:{target:undefined,shop:undefined},delta:true});
+  assert.equal(f.World.gp.target, undefined); assert.equal(f.World.gp.shop, undefined); assert.ok(f.World.inWorld());
+  f.World.applyEvent({kind:'gameplay',state:{localGid:gid}});
+  assert.equal(f.World.gp.target, undefined, 'a full state still replaces the old one');
+});
+test('delta gameplay events keep the inventory and rebuild the skill catalog only when sent', () => {
+  const f = fixture(), inv = f.World.gp.inventory, calls = [];
+  const rebuild = f.World.rebuildCatalog.bind(f.World);
+  f.World.rebuildCatalog = list => { calls.push(list); return rebuild(list); };
+  f.World.applyEvent({kind:'gameplay',state:{target:5},delta:true});
+  assert.equal(f.World.gp.inventory, inv); assert.equal(calls.length, 0);
+  const catalog = f.World.gp.skillCatalog || [];
+  f.World.applyEvent({kind:'gameplay',state:{skillCatalog:catalog},delta:true});
+  assert.equal(calls.length, 1);
+});
 test('wardrobe appearance changes never alter real inventory or command metadata', () => {
   const f = fixture(), tf = (2 << 11) | (6 << 7) | 44;
   f.WdData.build({items:[[10,'ITEM_CH_SWORD_09_A',6,-1,'CH_M',0,0],[11,'ITEM_CH_SWORD_09_C_RARE_HONOR',6,-1,'CH_M',1,0]],models:[[123,'CHAR_CH_MAN_TEST',0]]},[],{});

@@ -28,6 +28,15 @@ hook = hook.replace("        if (name === 'sro-simulation') {\n", "        if (n
 # Wardrobe rewrites only renderer copies; the mirror retains real items.
 hook = hook.replace("          if (!(Hook.probe.passSelect && inner && inner.kind === 'select')) return undefined;", "          return undefined;")
 world = section('const TRANSIENT_PHASES =', '// ---------------------------------------------------------------------------\n// Probe:')
+gp_call_old = "          this.applyGameplay(ev.state);\n"
+assert world.count(gp_call_old) == 1
+world = world.replace(gp_call_old, "          this.applyGameplay(ev.state, !!ev.delta);\n")
+gp_old = "  applyGameplay(state) {\n    const prev = this.gp;\n"
+assert world.count(gp_old) == 1
+world = world.replace(gp_old, "  applyGameplay(state, delta = false) {\n    const prev = this.gp;\n    const sent = state;\n    if (delta && prev) state = { ...prev, ...state };\n")
+catalog_old = "    if (state.skillCatalog) this.rebuildCatalog(state.skillCatalog);\n"
+assert world.count(catalog_old) == 1
+world = world.replace(catalog_old, "    if (sent.skillCatalog) this.rebuildCatalog(sent.skillCatalog);\n")
 display = section('const Display =', '// ---------------------------------------------------------------------------\n// World mirror:')
 commands = section('const MIN_GAP =', '// ---------------------------------------------------------------------------\n// Assets.')
 # Remove chat, GM actions, and companion item targeting from the compact command layer.
@@ -256,7 +265,7 @@ skin += '\nconst LEAN_CSS = ' + __import__('json').dumps((base / 'lean-skin.css'
 header = '''// ==UserScript==
 // @name         OSB
 // @namespace    https://github.com/corevider/osb
-// @version      2.0.7
+// @version      2.0.8
 // @homepageURL  https://github.com/corevider/osb
 // @supportURL   https://github.com/corevider/osb/issues
 // @updateURL    https://raw.githubusercontent.com/corevider/osb/main/osb.meta.js
@@ -280,7 +289,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[OSB] Another SRO assistant is active. Disable it and reload to use OSB.');
   return;
 }
-const VERSION = '2.0.7';
+const VERSION = '2.0.8';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });
