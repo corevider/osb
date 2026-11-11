@@ -11,13 +11,13 @@ const ProfileShare = {
   // The fields that mean nothing on another character; an import keeps the importer's own.
   personal(p) {
     const r = p.potion.restock, t = r.town;
-    return this.clone({ center: p.hunt.center, vendor: r.vendor, route: r.route, offers: r.offers,
+    return this.clone({ center: p.hunt.center, polygon: p.hunt.polygon, vendor: r.vendor, route: r.route, offers: r.offers,
       town: { arrival: t.arrival, storage: t.storage, vendor: t.vendor, smith: t.smith, gate: t.gate }, buffSets: p.macro.buffSets, gear: p.items.gear, wardrobe: p.wardrobe, follow: p.trace.name, pullPoints: p.lure.points,
       leveled: { prepared: p.leveling.prepared, added: p.leveling.added, elements: p.leveling.elements, imbued: p.leveling.imbued, pet: p.leveling.pet, weapon: p.leveling.weapon } });
   },
   restore(p, own) {
     const r = p.potion.restock, t = r.town;
-    p.hunt.center = own.center; r.vendor = own.vendor; r.route = own.route; r.offers = own.offers;
+    p.hunt.center = own.center; p.hunt.polygon = huntPolygon(own.polygon); r.vendor = own.vendor; r.route = own.route; r.offers = own.offers;
     Object.assign(t, own.town); p.macro.buffSets = own.buffSets; p.items.gear = own.gear; p.wardrobe = own.wardrobe; p.trace.name = own.follow; p.lure.points = own.pullPoints;
     Object.assign(p.leveling, own.leveled);
     // A buff assigned to a weapon set means nothing without the sets; one assigned to the primary or secondary weapon or

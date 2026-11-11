@@ -33,7 +33,7 @@ const Party = {
   // The named party leader is in view and, with a saved hunting spot, within 30 m of the hunting area.
   leaderBack(name) {
     const H = Hunt.cfg();
-    return [...World.ents.values()].some(e => e.kind === 'player' && String(e.name || '').trim().toLowerCase() === name && (!H.center || dist2D(e, H.center) <= H.radius + 300));
+    return [...World.ents.values()].some(e => e.kind === 'player' && String(e.name || '').trim().toLowerCase() === name && (!H.center || HuntArea.within(H, e, 300)));
   },
   // Alt accounts: find the main account's party and join it. A party invitation from the main is accepted; otherwise the
   // party-matching board is paged for the main's listing and the bot applies to it (the main's Auto-recruit and

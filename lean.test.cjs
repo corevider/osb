@@ -3,7 +3,7 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const source = fs.readFileSync(__dirname + '/osb.user.js', 'utf8');
 const isolated = source.slice(0, source.lastIndexOf('installWorkerHook();')) +
-  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Assets, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Protect, Town, Travel, Quest, QuestData, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, SellStar, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, Equip, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, LevelSpot, ScrollBuff, boot, Ticker, Sound, LeanMap, Telemetry, Rotations, Leveling, UniqueHunt, UniqueNests, SpawnData, UniqueState, UniqueTracker, UniqueList};\n})();';
+  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Assets, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Protect, Town, Travel, Quest, QuestData, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, SellStar, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, Equip, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, LevelSpot, ScrollBuff, boot, Ticker, Sound, LeanMap, Telemetry, Rotations, Leveling, UniqueHunt, UniqueNests, SpawnData, UniqueState, UniqueTracker, UniqueList, Emergency, Safety, HuntArea};\n})();';
 function fixture(document, sharedStorage) {
   let time = 100000;
   const storage = sharedStorage || new Map(), commands = [], notices = [], intervals = [], timers = [];
@@ -611,6 +611,188 @@ test('self buffs can be kept up while walking back; hunting-only ones wait for h
   assert.equal(f.Combat.buffs(true), true);
   assert.deepEqual(f.commands.filter(c => c.kind === 'skill').map(c => c.skillId), [2005],
     'the hunting buff casts while hunting; the worn walk-back buff is not re-cast');
+});
+const POLY_A = (92 << 8) | 135, POLY_B = (92 << 8) | 136;
+const polyPlain = v => JSON.parse(JSON.stringify(v));
+function polyFixture(corners, on = true) {
+  const f = fixture(), H = f.Settings.profile.hunt;
+  H.center = { regionId: 1, x: 100, y: 0, z: 100 }; H.radius = 400; H.chase = 3000;
+  H.polygon = { on, corners: corners.map(([x, z, regionId = 1]) => ({ regionId, x, y: 0, z })) };
+  const mob = (gid, x, z, regionId = 1) => { const e = { gid, kind: 'monster', name: 'Mob ' + gid, rarity: 0, regionId, x, y: 0, z, attackFlags: 16, appearanceState: [0] }; f.World.ents.set(gid, e); return e; };
+  return { f, H, mob };
+}
+const L_SHAPE = [[0, 0], [600, 0], [600, 200], [200, 200], [200, 600], [0, 600]];
+test('polygon area: a concave L shape keeps the notch outside and both arms inside (even-odd)', () => {
+  const { f } = polyFixture(L_SHAPE), at = (x, z) => f.Hunt.inArea({ regionId: 1, x, z });
+  assert.equal(at(400, 400), false, 'the notch of the L is outside');
+  assert.equal(at(500, 100), true, 'the horizontal arm'); assert.equal(at(100, 500), true, 'the vertical arm');
+  assert.equal(at(100, 100), true, 'the corner square'); assert.equal(at(700, 100), false); assert.equal(at(100, 700), false);
+  assert.equal(at(-10, 100), false);
+  assert.equal(f.Hunt.inArea({ regionId: 0x8001, x: 100, z: 100 }), false, 'a dungeon point is never inside an outdoor polygon');
+  assert.equal(f.HuntArea.status().level, 'ok');
+});
+test('polygon area: corners in two regions compare in one plane, never by raw local x', () => {
+  const { f } = polyFixture([[1700, 100, POLY_A], [300, 100, POLY_B], [300, 500, POLY_B], [1700, 500, POLY_A]]);
+  const at = (regionId, x, z = 300) => f.Hunt.inArea({ regionId, x, z });
+  assert.equal(at(POLY_B, 290), true, 'just inside, across the border');
+  assert.equal(at(POLY_B, 310), false, 'just outside, across the border');
+  assert.equal(at(POLY_A, 1710), true); assert.equal(at(POLY_A, 1690), false);
+  assert.equal(at(POLY_A, 300), false, 'local x 300 of the first region is far outside');
+  assert.equal(at(POLY_B, 100), true, 'region B x 100 is inside although raw 100 < 1700');
+  assert.equal(at(POLY_B, 100, 600), false);
+});
+test('polygon area: off, too few corners, crossing edges or dungeon mixes fall back to the hunt radius', () => {
+  const square = [[1000, 1000], [1200, 1000], [1200, 1200], [1000, 1200]];
+  const { f, H, mob } = polyFixture(square, false), near = mob(40, 450, 100), far = mob(41, 1100, 1100);
+  assert.equal(f.Hunt.inArea(near), true, 'off: the radius, as before'); assert.equal(f.Hunt.inArea(far), false);
+  H.polygon.on = true;
+  assert.equal(f.Hunt.inArea(near), false); assert.equal(f.Hunt.inArea(far), true, 'on and valid: the polygon');
+  for (const [corners, reason] of [
+    [[[1000, 1000], [1200, 1000]], /at least 3/],
+    [[[1000, 1000], [1200, 1200], [1200, 1000], [1000, 1200]], /cross/],
+    [[[1000, 1000], [1100, 1000], [1200, 1000]], /cross|line/],
+    [[[1000, 1000], [1000, 1000], [1200, 1200], [1000, 1200]], /cross/],
+  ]) {
+    H.polygon = { on: true, corners: corners.map(([x, z]) => ({ regionId: 1, x, y: 0, z })) };
+    assert.equal(f.Hunt.inArea(near), true, 'falls back to the radius: ' + reason); assert.equal(f.Hunt.inArea(far), false);
+    assert.equal(f.HuntArea.status().level, 'warn'); assert.match(f.HuntArea.status().text, reason);
+  }
+  H.polygon = { on: true, corners: [{ regionId: 0x8001, x: 0, y: 0, z: 0 }, { regionId: 0x8002, x: 50, y: 0, z: 0 }, { regionId: 0x8001, x: 0, y: 0, z: 50 }] };
+  assert.equal(f.Hunt.inArea(near), true); assert.match(f.HuntArea.status().text, /dungeon/);
+  H.polygon = { on: true, corners: square.map(([x, z]) => ({ regionId: 1, x, y: 0, z })) };
+  H.levelSpots = { on: true, list: [{ level: 1, center: { regionId: 1, x: 100, y: 0, z: 100 } }] };
+  assert.equal(f.Hunt.inArea(near), true, 'spots by level keep the circle'); assert.match(f.HuntArea.status().text, /circle is used/);
+  H.levelSpots = { on: false, list: [] };
+  assert.equal(f.Hunt.inArea(near), false);
+  f.Settings.profile.leveling.on = true; f.Settings.profile.leveling.spots = true;
+  assert.equal(f.Hunt.inArea(near), true, 'zero-setup leveling spots keep the circle');
+});
+test('polygon area: the plane is cached until the corner list changes', () => {
+  const { f, H } = polyFixture(L_SHAPE), first = f.HuntArea.shape(H.polygon.corners);
+  f.Hunt.inArea({ regionId: 1, x: 100, z: 100 });
+  assert.equal(f.HuntArea.shape(H.polygon.corners), first, 'no rebuild per call');
+  assert.equal(f.HuntArea.add({ regionId: 1, x: 0, y: 0, z: 300 }), '');
+  assert.notEqual(f.HuntArea.shape(H.polygon.corners), first, 'a new corner rebuilds it');
+});
+test('polygon area: target choice skips a monster outside the polygon but inside the old radius', () => {
+  const { f, H, mob } = polyFixture([[300, 0], [700, 0], [700, 400], [300, 400]]);
+  f.World.gp.pose = { regionId: 1, x: 100, y: 0, z: 100 };
+  mob(50, 150, 100); mob(51, 500, 200);
+  assert.equal(f.Hunt.chooseTarget()?.gid, 51, 'the closer monster is inside the radius but outside the polygon');
+  H.polygon.on = false;
+  assert.equal(f.Hunt.chooseTarget()?.gid, 50, 'off: the radius decides again');
+  H.polygon.on = true; H.chase = 300;
+  assert.equal(f.Hunt.chooseTarget(), null, 'chase distance still limits how far the character follows');
+});
+test('polygon area: diagnostics, Protect, lure and loot follow the polygon', () => {
+  const { f, H, mob } = polyFixture([[300, 0], [700, 0], [700, 400], [300, 400]]);
+  f.World.gp.pose = { regionId: 1, x: 500, y: 0, z: 200 };
+  const outside = mob(60, 150, 100); mob(61, 500, 250);
+  assert.equal(f.Lure.atSpot(), 1, 'the lure counts only monsters inside the polygon');
+  assert.match(f.Diagnostics.noTarget(), /1: too far \(outside the hunting area/);
+  f.Hunt.running = true; H.pickup.radius = 300;
+  const inside = f.drop(70); Object.assign(inside, { x: 600, z: 200 });
+  const edge = f.drop(71); Object.assign(edge, { x: 750, z: 200 });
+  const away = f.drop(72); Object.assign(away, { x: 250, z: 100 });
+  assert.notEqual(f.Loot.whyNot(inside), 'area'); assert.notEqual(f.Loot.whyNot(edge), 'area', 'a drop within the pickup radius of an edge');
+  H.pickup.radius = 40;
+  f.World.gp.pose = { regionId: 1, x: 240, y: 0, z: 100 };
+  assert.equal(f.Loot.whyNot(away), 'area', 'a drop near the spot but outside the polygon and its pickup margin');
+  const sim = f.World.simNow();
+  assert.equal(f.Protect.valid(outside, { at: sim, name: 'x' }, sim, f.World.gp.pose), false);
+});
+test('polygon area: return when idle walks back when outside the polygon and stays put inside it', () => {
+  const { f, H } = polyFixture([[0, 0], [2000, 0], [2000, 400], [0, 400]]);
+  H.radius = 100; H.returnToCenter = true; H.pickup.enabled = false;
+  f.World.gp.pose = { regionId: 1, x: 1500, y: 0, z: 200 };
+  f.Hunt.running = true; f.advance(5000); f.Hunt.tick();
+  assert.equal(f.commands.some(c => c.kind === 'move'), false, 'inside the polygon, far beyond half the radius: no leash');
+  f.World.gp.pose = { regionId: 1, x: 1500, y: 0, z: 900 }; f.advance(5000); f.Hunt.tick();
+  assert.ok(f.commands.some(c => c.kind === 'move'), 'outside the polygon: back to the spot'); assert.equal(f.Hunt.state, 'return');
+  H.polygon.on = false; f.commands.length = 0;
+  f.World.gp.pose = { regionId: 1, x: 1500, y: 0, z: 200 }; f.advance(5000); f.Hunt.tick();
+  assert.ok(f.commands.some(c => c.kind === 'move'), 'off: half the radius leashes as before');
+});
+test('polygon area: a spot outside the polygon warns, and the walk-back still uses the spot', () => {
+  const { f, H } = polyFixture([[1000, 1000], [1200, 1000], [1200, 1200], [1000, 1200]]);
+  assert.equal(f.HuntArea.spotOutside(), true);
+  assert.match(f.HuntArea.status().text, /outside it: walking back still goes to the spot/);
+  f.HuntArea.warnSpot(); f.HuntArea.warnSpot();
+  assert.equal(f.Log.lines.filter(l => /outside the polygon hunting area/.test(l.text)).length, 1, 'logged once');
+  assert.deepEqual(polyPlain(f.Hunt.cfg().center), { regionId: 1, x: 100, y: 0, z: 100 });
+  H.center = { regionId: 1, x: 1100, y: 0, z: 1100 };
+  assert.equal(f.HuntArea.spotOutside(), false);
+});
+test('polygon area: hunting around a followed member and the unique hunt keep the circle', () => {
+  const { f, mob } = polyFixture([[1000, 1000], [1200, 1000], [1200, 1200], [1000, 1200]]), near = mob(80, 450, 100);
+  assert.equal(f.Hunt.inArea(near), false);
+  f.HuntArea.aroundMember++;
+  try { assert.equal(f.Hunt.inArea(near), true, 'around a member: the circle'); } finally { f.HuntArea.aroundMember--; }
+  f.UniqueHunt.active = { anchor: { regionId: 1, x: 100, y: 0, z: 100 }, cfg: null };
+  assert.equal(f.Hunt.cfg().polygon.on, false, 'the unique hunt has no polygon');
+  f.UniqueHunt.active = null;
+});
+test('polygon area: old profiles, backups and share codes load with it off; corners are kept with the positions', async () => {
+  const f = fixture();
+  assert.deepEqual(polyPlain(f.Settings.profile.hunt.polygon), { on: false, corners: [] });
+  assert.deepEqual(polyPlain(f.botProfile({ hunt: { radius: 500 } }).hunt.polygon), { on: false, corners: [] }, 'an old profile');
+  assert.deepEqual(polyPlain(f.botProfile(null).hunt.polygon), { on: false, corners: [] });
+  const many = Array.from({ length: 40 }, (_, i) => ({ regionId: 1, x: i * 10.4, y: 'x', z: 5 }));
+  const loaded = f.botProfile({ hunt: { polygon: { on: 'yes', corners: [null, { regionId: 1.5, x: 1, z: 1 }, { regionId: 1, x: NaN, z: 1 }, ...many] } } }).hunt.polygon;
+  assert.equal(loaded.on, false, 'only true turns it on'); assert.equal(loaded.corners.length, 32, 'at most 32 corners');
+  assert.deepEqual(polyPlain(loaded.corners[1]), { regionId: 1, x: 10, y: 0, z: 5 });
+  const u = fixture(); u.storage.set('sroBotLean:v1:backup:profile:default', JSON.stringify({ at: 1, profile: { hunt: { radius: 300 } } }));
+  assert.equal(u.ProfileShare.undo(), true); assert.deepEqual(polyPlain(u.Settings.profile.hunt.polygon), { on: false, corners: [] }, 'an old backup');
+  const p = f.Settings.profile, corners = L_SHAPE.map(([x, z]) => ({ regionId: 1, x, y: 0, z }));
+  p.hunt.polygon = { on: true, corners }; p.hunt.radius = 250;
+  const full = JSON.parse(f.ProfileShare.text(false)).profile;
+  assert.deepEqual(polyPlain(full.hunt.polygon), { on: true, corners: polyPlain(corners) }, 'the full settings file carries the corners');
+  assert.deepEqual(polyPlain(f.botProfile(full).hunt.polygon.corners), polyPlain(corners), 'and loads them back');
+  assert.equal(JSON.parse(f.ProfileShare.text(true)).profile.hunt?.polygon, undefined, 'a share code leaves them out, like the hunting spot');
+  const code = await f.ProfileShare.encode(f.ProfileShare.text(true));
+  p.hunt.polygon = { on: false, corners: [{ regionId: 1, x: 5, y: 0, z: 5 }] }; p.hunt.radius = 400;
+  const preview = await f.ProfileShare.preview(code);
+  assert.equal(preview.rows.some(r => /polygon/.test(r.path)), false);
+  assert.ok(preview.rows.some(r => r.path === 'hunt.radius'), 'the shared settings still arrive');
+  assert.deepEqual(polyPlain(preview.next.hunt.polygon), { on: false, corners: [{ regionId: 1, x: 5, y: 0, z: 5 }] }, 'an import keeps your own corners');
+  const old = await f.ProfileShare.preview(JSON.stringify({ app: 'nixxane-bot', version: '1.2.212', profile: { hunt: { radius: 321 } } }));
+  assert.deepEqual(polyPlain(old.next.hunt.polygon), polyPlain(p.hunt.polygon), 'an old share file changes nothing about the polygon');
+});
+test('Map page: Add corner here, a map click, Remove last corner and Clear corners', () => {
+  const nodes = [];
+  const document = { createElement(tag) {
+    const events = {}, node = { tag, children: [], className: '', value: '', dataset: {},
+      classList: { add() {} }, setAttribute() {}, append(...children) { this.children.push(...children); },
+      addEventListener(name, fn) { events[name] = fn; }, click() { events.click?.(); }, querySelectorAll() { return []; } };
+    nodes.push(node); return node;
+  } };
+  const f = fixture(document), map = f.LeanMap, P = () => f.Settings.profile.hunt.polygon, bind = map.bind, render = map.render;
+  map.bind = () => {}; map.render = () => {};
+  f.World.gp.pose = { regionId: POLY_A, x: 125, y: 37, z: 459 };
+  map.draw(document.createElement('div'));
+  const button = text => nodes.find(n => n.tag === 'button' && n.textContent === text);
+  button('Add corner here').click();
+  assert.deepEqual(polyPlain(P().corners), [{ regionId: POLY_A, x: 125, y: 37, z: 459 }]);
+  assert.ok(nodes.some(n => n.title && /polygon/.test(n.title)), 'tooltips explain the polygon');
+  map.bind = bind; map.render = render;
+  const events = {};
+  map.canvas = { addEventListener(name, fn) { events[name] = fn; }, setPointerCapture() {}, getBoundingClientRect: () => ({ left: 0, top: 0, width: 200, height: 200 }) };
+  map.bind(); map.follow = false; map.view = { X: 135 * 1920 + 1000, Z: 92 * 1920 + 1000 };
+  const click = (x, y) => { events.pointerdown({ button: 0, clientX: x, clientY: y, pointerId: 1 }); events.pointerup({ type: 'pointerup', clientX: x, clientY: y }); };
+  click(120, 100);
+  assert.equal(P().corners.length, 1, 'a click marks a point when corner clicks are off'); assert.ok(map.picked);
+  button('Add as corner').click();
+  assert.deepEqual(polyPlain(P().corners[1]), { regionId: POLY_A, x: 1100, y: 37, z: 1000 }); assert.equal(map.picked, null);
+  map.cornerClicks = true;
+  click(100, 80); click(140, 140);
+  assert.deepEqual(polyPlain(P().corners.slice(2)), [{ regionId: POLY_A, x: 1000, y: 37, z: 1100 }, { regionId: POLY_A, x: 1200, y: 37, z: 800 }]);
+  assert.equal(P().corners.length, 4); assert.equal(map.picked, null);
+  button('Remove last corner').click(); assert.equal(P().corners.length, 3);
+  button('Clear corners').click(); assert.deepEqual(polyPlain(P().corners), []);
+  button('Remove last corner').click(); assert.match(f.notices.at(-1), /no corners/);
+  for (let i = 0; i < 33; i++) f.HuntArea.add({ regionId: 1, x: i, y: 0, z: i * i });
+  assert.equal(P().corners.length, 32); assert.match(f.HuntArea.add({ regionId: 1, x: 1, y: 0, z: 1 }), /At most 32/);
+  assert.equal(f.commands.length, 0, 'drawing sends nothing to the game');
 });
 function mapFixture() {
   const f = fixture(), map = f.LeanMap;
@@ -10039,6 +10221,140 @@ test('session XP keeps unresolved level transitions bounded and marked partial',
   f.Stats.reset();assert.equal(f.Stats.pendingXP.length,0);
 });
 
+function preferredFixture(rows, extra = {}) {
+  const f = fixture(); f.Hunt.start();
+  f.Settings.profile.hunt.preferred = rows;
+  Object.assign(f.Settings.profile.hunt, extra);
+  const mob = (gid, name, x, more = {}) => { const e = { gid, kind: 'monster', name, rarity: 0, level: 5, regionId: 1, x, y: 0, z: 100, attackFlags: 16, appearanceState: [0], ...more }; f.World.ents.set(gid, e); return e; };
+  const selected = () => f.commands.filter(c => c.kind === 'select').map(c => c.gid);
+  const fight = gid => { f.Hunt.targetGid = gid; f.Hunt.targetSince = f.World.simNow(); f.World.gp.target = gid; };
+  return { f, mob, selected, fight };
+}
+test('preferred monsters: a listed monster is chosen before a nearer one that is not listed', () => {
+  const { f, mob } = preferredFixture(['wolf']);
+  mob(31, 'Boar', 130); mob(32, 'Gray Wolf', 300);
+  assert.equal(f.Hunt.chooseTarget()?.gid, 32);
+  f.Settings.profile.hunt.preferred = [];
+  assert.equal(f.Hunt.chooseTarget()?.gid, 31, 'an empty list keeps the nearest first order');
+});
+test('preferred monsters: a higher row beats a lower one, and the usual order decides inside a row', () => {
+  const { f, mob } = preferredFixture(['boar', 'wolf']);
+  mob(31, 'Wolf', 120); mob(32, 'Boar', 400); mob(33, 'Boar', 250);
+  assert.equal(f.Hunt.chooseTarget()?.gid, 33, 'the first row wins and the nearer of its two is taken');
+  f.Settings.profile.hunt.preferred = ['WOLF', 'Boar'];
+  assert.equal(f.Hunt.chooseTarget()?.gid, 31, 'names match without case');
+  f.Settings.profile.hunt.preferred = ['o'];
+  assert.equal(f.Hunt.chooseTarget()?.gid, 31, 'a name matches a part of the monster name');
+});
+test('preferred monsters: with the Attackers order the monster hitting you still comes first', () => {
+  const { f, mob } = preferredFixture(['wolf']);
+  mob(31, 'Wolf', 150); mob(32, 'Boar', 300); f.World.attackers.set(32, f.World.simNow());
+  assert.equal(f.Hunt.chooseTarget()?.gid, 32);
+  mob(33, 'Wolf', 120); f.World.attackers.set(33, f.World.simNow());
+  assert.equal(f.Hunt.chooseTarget()?.gid, 33, 'a listed monster that hits you beats one that does not');
+  f.Settings.profile.hunt.priority = 'nearest';
+  f.World.ents.delete(33); f.World.attackers.clear(); f.World.attackers.set(32, f.World.simNow());
+  assert.equal(f.Hunt.chooseTarget()?.gid, 31, 'without the Attackers order the list goes first');
+});
+test('preferred monsters: a listed monster that a filter excludes is never chosen', () => {
+  const { f, mob } = preferredFixture(['wolf']);
+  mob(31, 'Boar', 130); const wolf = mob(32, 'Wolf', 200, { rarity: 1 });
+  f.Settings.profile.hunt.classes.champion = false;
+  assert.equal(f.Hunt.chooseTarget()?.gid, 31, 'class off');
+  f.Settings.profile.hunt.classes.champion = true;
+  assert.equal(f.Hunt.chooseTarget()?.gid, 32);
+  f.Settings.profile.hunt.exclude = 'wolf';
+  assert.equal(f.Hunt.chooseTarget()?.gid, 31, 'skip name');
+  f.Settings.profile.hunt.exclude = '';
+  f.Settings.profile.hunt.levelMax = 7; wolf.level = 9;
+  assert.equal(f.Hunt.chooseTarget()?.gid, 31, 'level range');
+  f.Settings.profile.hunt.levelMax = 0; wolf.level = 5;
+  wolf.x = 900;
+  assert.equal(f.Hunt.chooseTarget()?.gid, 31, 'outside the hunting area');
+  wolf.x = 200; f.World.hitByOthers.set(32, f.World.simNow());
+  assert.equal(f.Hunt.chooseTarget()?.gid, 31, 'another player is fighting it');
+  f.World.hitByOthers.delete(32); f.Hunt.ban.set(32, 100000 + 60000);
+  assert.equal(f.Hunt.chooseTarget()?.gid, 31, 'banned');
+  f.Hunt.ban.clear(); f.Settings.profile.hunt.include = 'boar';
+  assert.equal(f.Hunt.chooseTarget()?.gid, 31, 'Only these mobs still filters');
+});
+test('preferred monsters: a preferred monster two rows higher takes over a fight once, and never more than every 5 seconds', () => {
+  const { f, mob, selected, fight } = preferredFixture(['a-mob', 'b-mob', 'c-mob', 'd-mob', 'e-mob']);
+  mob(40, 'E-mob', 130); fight(40);
+  f.Hunt.tick(); assert.deepEqual(selected(), [], 'it keeps fighting while nothing better is in view');
+  mob(41, 'C-mob', 200);
+  f.Hunt.tick(); assert.deepEqual(selected(), [41], 'switched to the monster two rows higher');
+  assert.equal(f.Hunt.targetGid, 41);
+  assert.match(f.Diagnostics.main(), /switched to C-mob \(preferred\)/);
+  f.World.gp.target = 41; f.advance(500);
+  f.Hunt.tick(); assert.deepEqual(selected(), [41], 'it does not switch again to the same target');
+  mob(42, 'A-mob', 220);
+  f.advance(1000); f.Hunt.tick(); assert.deepEqual(selected(), [41], 'a second switch inside 5 seconds does not happen');
+  f.advance(4500); f.Hunt.tick(); assert.deepEqual(selected(), [41, 42], 'after 5 seconds it can switch again');
+});
+test('preferred monsters: no switch for one row, for a target that hits you, or for a monster the filters exclude', () => {
+  const { f, mob, selected, fight } = preferredFixture(['a-mob', 'b-mob', 'c-mob']);
+  mob(40, 'C-mob', 130); fight(40);
+  mob(41, 'B-mob', 200);
+  f.Hunt.tick(); assert.deepEqual(selected(), [], 'one row higher is not enough');
+  mob(42, 'A-mob', 210, { rarity: 1 }); f.Settings.profile.hunt.classes.champion = false;
+  f.Hunt.tick(); assert.deepEqual(selected(), [], 'a filtered monster never pulls the bot');
+  f.Settings.profile.hunt.classes.champion = true; f.World.attackers.set(40, f.World.simNow());
+  f.Hunt.tick(); assert.deepEqual(selected(), [], 'a target that hits you is kept');
+  f.World.attackers.clear(); f.World.ents.get(42).x = 2000;
+  f.Hunt.tick(); assert.deepEqual(selected(), [], 'outside the area and the chase distance');
+  f.World.ents.get(42).x = 210;
+  f.Hunt.tick(); assert.deepEqual(selected(), [42], 'in range it switches');
+});
+test('preferred monsters: an unlisted target gives way to any listed monster, through the usual select', () => {
+  const { f, mob, selected, fight } = preferredFixture(['wolf']);
+  mob(40, 'Boar', 130); fight(40); mob(41, 'Wolf', 300);
+  f.Hunt.tick(); assert.deepEqual(selected(), [41]);
+  assert.equal(f.Hunt.state, 'select');
+});
+test('preferred monsters: old settings, profiles and share codes load with an empty list, and a share code carries the list', async () => {
+  const f = fixture();
+  assert.deepEqual(plain(f.botProfile({}).hunt.preferred), []);
+  assert.deepEqual(plain(f.botProfile({ hunt: { radius: 300 } }).hunt.preferred), []);
+  const names = Array.from({ length: 14 }, (_, i) => 'Mob' + i);
+  assert.deepEqual(plain(f.botProfile({ hunt: { preferred: ['  Wolf ', 'wolf', '', 5, null, 'x'.repeat(90), ...names] } }).hunt.preferred),
+    ['Wolf', 'x'.repeat(60), ...names.slice(0, 8)], 'trimmed, deduplicated, text only, at most 10 rows');
+  assert.deepEqual(plain(f.botProfile({ hunt: { preferred: 'Wolf' } }).hunt.preferred), [], 'a damaged value becomes an empty list');
+  f.Settings.profile.hunt.preferred = ['Wolf', 'Boar'];
+  const g = fixture(); g.ProfileShare.pending = await g.ProfileShare.preview(await f.ProfileShare.encode(f.ProfileShare.text(true)));
+  assert.equal(g.ProfileShare.apply(), true);
+  assert.deepEqual(plain(g.Settings.profile.hunt.preferred), ['Wolf', 'Boar'], 'share round trip');
+  assert.deepEqual(plain(JSON.parse(f.ProfileShare.text(false)).profile.hunt.preferred), ['Wolf', 'Boar'], 'the full backup holds it');
+  const oldShare = JSON.stringify({ app: 'nixxane-bot', format: 1, profile: { hunt: { radius: 300 } } });
+  assert.deepEqual(plain((await fixture().ProfileShare.preview(oldShare)).next.hunt.preferred), [], 'an old share has an empty list');
+});
+test('preferred monsters: the Combat page lists the rows, moves them and offers the monsters in view and seen', () => {
+  const document = { createElement(tag) {
+    const events = {};
+    return { tag, children: [], className: '', value: '', dataset: {}, style: {}, attributes: {},
+      setAttribute(k, v) { this.attributes[k] = v; }, append(...children) { this.children.push(...children); }, replaceChildren(...children) { this.children = children; },
+      addEventListener(name, fn) { events[name] = fn; }, fire(name, arg) { events[name]?.(arg); }, querySelectorAll() { return []; } };
+  } };
+  const f = fixture(document); let drawn = 0; f.UI.draw = () => { drawn++; }; f.UI.refreshers = [];
+  f.Settings.profile.hunt.preferred = ['Wolf', 'Boar', 'Bear'];
+  f.World.ents.set(60, { gid: 60, kind: 'monster', name: 'Fox', regionId: 1, x: 100, z: 100 });
+  f.bus.emit('spawn', { gid: 61, kind: 'monster', name: 'Hare' });
+  assert.deepEqual(plain(f.Hunt.knownMonsterNames()), ['Fox', 'Hare'], 'in view and seen, without the listed ones');
+  const host = document.createElement('div'); f.UI.section_combatPreferred(host);
+  const box = host.children[0], list = box.children.find(n => n.className === 'preferred-list');
+  assert.equal(list.children.length, 3);
+  list.children[1].children[1].fire('click');
+  assert.deepEqual(plain(f.Settings.profile.hunt.preferred), ['Boar', 'Wolf', 'Bear'], 'the up button moves a row up');
+  list.children[0].children[2].fire('click');
+  assert.deepEqual(plain(f.Settings.profile.hunt.preferred), ['Wolf', 'Boar', 'Bear'], 'the down button moves it back');
+  list.children[2].children[3].fire('click');
+  assert.deepEqual(plain(f.Settings.profile.hunt.preferred), ['Wolf', 'Boar'], 'the remove button deletes a row');
+  assert.equal(f.Hunt.addPreferred(' wolf '), false, 'a name already listed is not added twice');
+  assert.equal(f.Hunt.addPreferred('Fox'), true);
+  f.Settings.profile.hunt.preferred = Array.from({ length: 10 }, (_, i) => 'Mob' + i);
+  assert.equal(f.Hunt.addPreferred('Extra'), false, 'ten rows at most');
+  assert.ok(drawn >= 3);
+});
 async function updateTests() {
   async function check(name, fn) { await fn(); passed++; console.log('PASS ' + name); }
   const sha = 'a'.repeat(40), base = 'https://raw.githubusercontent.com/corevider/osb/' + sha + '/osb.';
@@ -10178,6 +10494,8 @@ require('./lean.unique.test.cjs')({ test, fixture, townFixture });
 require('./lean.unique-nests.test.cjs')({ test, fixture });
 require('./lean.unique-state.test.cjs')({ test, fixture });
 require('./lean.unique-list.test.cjs')({ test, fixture });
+require('./lean.emergency.test.cjs')({ test, fixture });
+require('./lean.safety.test.cjs')({ test, fixture, townFixture });
 require('./lean.telemetry.test.cjs')({ test, source: isolated });
 updateTests().catch(error => { console.error(error); process.exitCode = 1; });
 

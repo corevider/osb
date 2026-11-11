@@ -42,11 +42,84 @@ Hunt.threat = function (current) {
   return best;
 };
 Hunt.chooseLoot = () => Loot.choose();
+Hunt.eligible = function (e, pose, sim, inc, exc) {
+  const H = this.cfg();
+  if (!this.classAllowed(e) || !this.inArea(e) || dist2D(pose, e) > H.chase) return false;
+  if (H.levelMin && (e.level ?? 0) < H.levelMin || H.levelMax && (e.level ?? 0) > H.levelMax) return false;
+  const name = (e.name || '').toLowerCase();
+  if (inc.length && !inc.some(s => name.includes(s)) || exc.some(s => name.includes(s))) return false;
+  return !this.ksAvoids(e, sim);
+};
+const PREFERRED_TIER = 1e6, PREFERRED_SWITCH_GAP_MS = 5000, PREFERRED_ROWS_APART = 2, PREFERRED_ATTACK_MS = 6000;
+Hunt.preferredNow = [];
+Hunt.preferredCache = { key: '', rows: [] };
+Hunt.preferredRows = function () {
+  const list = this.cfg().preferred;
+  if (!Array.isArray(list) || !list.length) return this.preferredNow = [];
+  const key = list.join('\n');
+  if (this.preferredCache.key !== key) this.preferredCache = { key, rows: list.map(name => String(name).trim().toLowerCase()).filter(Boolean) };
+  return this.preferredNow = this.preferredCache.rows;
+};
+Hunt.preferredRow = function (e, rows = this.preferredNow) {
+  const name = (e.name || '').toLowerCase();
+  for (let i = 0; i < rows.length; i++) if (name.includes(rows[i])) return i;
+  return -1;
+};
+Hunt.preferredOffset = function (e, attacking) {
+  const rows = this.preferredNow;
+  if (!rows.length || attacking && this.cfg().priority === 'attackers') return 0;
+  const row = this.preferredRow(e, rows);
+  return (row < 0 ? PREFERRED_MAX + 1 : row + 1) * PREFERRED_TIER;
+};
+Hunt.preferredSwitch = function (current) {
+  const rows = this.preferredRows();
+  if (!current || !rows.length || World.isCasting() || now() - this.preferredSwitchAt < PREFERRED_SWITCH_GAP_MS) return null;
+  const sim = World.simNow() ?? 0, pose = World.pose();
+  if (!pose || sim - (World.attackers.get(current.gid) ?? -Infinity) < PREFERRED_ATTACK_MS) return null;
+  const currentRow = this.preferredRow(current, rows), limit = currentRow < 0 ? rows.length - 1 : currentRow - PREFERRED_ROWS_APART;
+  if (limit < 0) return null;
+  const H = this.cfg(), inc = splitList(H.include), exc = splitList(H.exclude);
+  let best = null, bestRow = Infinity;
+  for (const e of World.ents.values()) {
+    if (e === current || !isAttackableMob(e) || this.banned(this.ban, e.gid)) continue;
+    const row = this.preferredRow(e, rows);
+    if (row < 0 || row > limit || row > bestRow || !this.eligible(e, pose, sim, inc, exc)) continue;
+    if (row < bestRow || dist2D(pose, e) < dist2D(pose, best)) { best = e; bestRow = row; }
+  }
+  if (!best) return null;
+  this.preferredSwitchAt = now();
+  const from = current.name || monsterClass(current), to = best.name || monsterClass(best);
+  this.threatNote = { gid: best.gid, text: `Combat: switched to ${to} (preferred).` };
+  Log.info(`Switched from ${from} to ${to}, which is on the preferred list.`);
+  return best;
+};
+Hunt.preferredSwitchAt = -Infinity;
+Hunt.seenNames = new Map();
+bus.on('spawn', e => {
+  if (e?.kind !== 'monster' || !e.name) return;
+  const key = String(e.name).toLowerCase();
+  if (Hunt.seenNames.has(key)) return;
+  if (Hunt.seenNames.size >= 200) Hunt.seenNames.delete(Hunt.seenNames.keys().next().value);
+  Hunt.seenNames.set(key, String(e.name).slice(0, PREFERRED_NAME_MAX));
+});
+Hunt.knownMonsterNames = function () {
+  const names = new Map(this.seenNames);
+  for (const e of World.ents.values()) if (e.kind === 'monster' && e.name) names.set(String(e.name).toLowerCase(), String(e.name).slice(0, PREFERRED_NAME_MAX));
+  for (const name of this.cfg().preferred || []) names.delete(String(name).toLowerCase());
+  return [...names.values()].sort((a, b) => a.localeCompare(b));
+};
+Hunt.addPreferred = function (text) {
+  const list = this.cfg().preferred, name = String(text || '').trim().slice(0, PREFERRED_NAME_MAX);
+  if (!name || list.length >= PREFERRED_MAX || list.some(entry => entry.toLowerCase() === name.toLowerCase())) return false;
+  list.push(name);
+  return true;
+};
 // Quest monsters first: while a quest's kills are still counting, its learned monster types are
 // taken before distance, as long as they pass the hunt's own filters - class, area, level range,
 // name lists and anti-KS. Something already hitting the player is never displaced by a preference.
 const huntChooseTarget = Hunt.chooseTarget;
 Hunt.chooseTarget = function (...args) {
+  this.preferredRows();
   const target = huntChooseTarget.apply(this, args);
   const preferred = Quest.preferred();
   if (!preferred.size) return target;
@@ -57,12 +130,7 @@ Hunt.chooseTarget = function (...args) {
   const inc = splitList(H.include), exc = splitList(H.exclude);
   let best = null;
   for (const e of World.ents.values()) {
-    if (!preferred.has(e.refObjId) || !isAttackableMob(e) || this.banned(this.ban, e.gid)) continue;
-    if (!this.classAllowed(e) || !this.inArea(e) || dist2D(pose, e) > H.chase) continue;
-    if (H.levelMin && (e.level ?? 0) < H.levelMin || H.levelMax && (e.level ?? 0) > H.levelMax) continue;
-    const name = (e.name || '').toLowerCase();
-    if (inc.length && !inc.some(s => name.includes(s)) || exc.some(s => name.includes(s))) continue;
-    if (this.ksAvoids(e, sim)) continue;
+    if (!preferred.has(e.refObjId) || !isAttackableMob(e) || this.banned(this.ban, e.gid) || !this.eligible(e, pose, sim, inc, exc)) continue;
     if (!best || dist2D(pose, e) < dist2D(pose, best)) best = e;
   }
   return best || target;
@@ -86,7 +154,7 @@ Hunt.tick = function () {
   }
   if (this.deathAt) {
     this.deathAt = 0; this.revived = false; this.targetGid = 0; Lure.reset();
-    if (H.center && dist2D(World.pose(), H.center) > H.radius) { Controller.returnAfterRevive(); return; }
+    if (H.center && !this.inArea(World.pose())) { Controller.returnAfterRevive(); return; }
   }
   if (Restock.activeShop() || gp.storage || now() - Manual.lastAt < H.manualPauseS * 1000) {
     if (Restock.activeShop() || gp.storage || !Loot.petWhileManual()) Loot.suspend(); else Loot.petTick();
@@ -130,10 +198,10 @@ Hunt.tick = function () {
   // its own buffs and party support, at its hunting spot or beside the member it follows.
   const attack = H.attack !== false;
   if (attack && Lure.on()) return Lure.tick();
-  const target = guard || (attack ? this.threat(current) || current || this.chooseTarget() : null);
+  const target = guard || (attack ? this.threat(current) || this.preferredSwitch(current) || current || this.chooseTarget() : null);
   if (target) { this.engage(target); return; }
   this.targetGid = 0; this.state = !attack ? 'support only' : Loot.active?.petGid ? 'loot' : 'search';
-  if (H.returnToCenter && H.center && dist2D(World.pose(), H.center) > Math.max(40, H.radius * 0.5) && now() - this.lastMoveAt > 2500) {
+  if (H.returnToCenter && H.center && HuntArea.strayed(H, World.pose()) && now() - this.lastMoveAt > 2500) {
     // Hunting from town (dead at login and woken in town): the town cycle's own trip (services, then reverse or walk).
     if (!(dist2D(World.pose(), H.center) <= Math.max(H.radius * 1.5, 600)) && Controller.townReturn()) return;
     if (!Number.isFinite(dist2D(World.pose(), H.center))) return this.stop('hunt area is in another region');
@@ -219,14 +287,17 @@ Combat.corneredBerserk = function () {
   const need = Number(Settings.profile.macro.berserkCornered) || 0;
   if (need <= 0 || !Hunt.running || World.isDead() || World.berserkGauge < 5) return false;
   if (World.local()?.appearanceState?.[2] === 1) return false;
+  return this.attackerCount() >= need ? Cmd.berserk() : false;
+};
+Combat.attackerCount = function () {
   const sim = World.simNow();
   let count = 0;
   for (const [gid, at] of World.attackers) {
     if (sim == null || sim - at > 5000) continue;
     const e = World.ents.get(gid);
-    if (e && World.isAlive(e) && ++count >= need) return Cmd.berserk();
+    if (e && World.isAlive(e)) count++;
   }
-  return false;
+  return count;
 };
 const Controller = {
   mode: 'idle', lastErrorAt: -Infinity, resumeAfterRevive: false, guardAt: {},
@@ -275,6 +346,7 @@ const Controller = {
   },
   tick() {
     try {
+      this.guard('Safety', () => Safety.tick());
       Loot.watchLock();
       this.guard('Reconnect', () => Reconnect.tick());
       this.guard('Auto-start', () => AutoStart.tick());
@@ -299,7 +371,7 @@ const Controller = {
       }
       if (World.inWorld() && !World.isDead() && (this.resumeAfterRevive || Hunt.running && Hunt.deathAt)) {
         if (World.gp?.inventoryPending || !World.local()) { this.mode = 'waiting'; return; }
-        if (!this.resumeAfterRevive && Hunt.cfg().center && dist2D(World.pose(), Hunt.cfg().center) <= Hunt.cfg().radius) {
+        if (!this.resumeAfterRevive && Hunt.cfg().center && Hunt.inArea(World.pose())) {
           Hunt.deathAt = 0; Hunt.revived = false; Hunt.targetGid = 0;
         } else this.returnAfterRevive();
       }
@@ -322,6 +394,7 @@ const Controller = {
       if (!ItemRules.dropTick()) ItemRules.balanceTick();
       Loot.checkPetFull();
       if (Town.tick()) { this.mode = 'town service'; return; }
+      if (this.guard('Emergency skills', () => Emergency.tick())) { this.mode = 'emergency'; return; }
       if (Trap.tick()) { this.mode = 'escape'; return; }
       if (Chase.tick()) { this.mode = 'obstacle pursuit'; return; }
       if (BuffGear.tick()) { this.mode = 'buff gear'; return; }

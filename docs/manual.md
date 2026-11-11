@@ -67,6 +67,27 @@ Settings from earlier versions keep their Normal, Champion, Giant, Party, Elite 
 
 Under **Combat → Berserk when the gauge is full, on**, tick the monster kinds berserk is spent on (only Giants by default; it fires once the gauge is full, so the gauge waits for a ticked kind). **Also berserk when this many monsters attack at once** (0 = off) fires a full gauge whatever the monsters' kind once that many living monsters attack at the same time — the defensive panic button of a luring tank or an over-pulled spot; it also works while luring, where no target kind is ever consulted.
 
+## Emergency skills
+
+**Combat → Skills → Emergency skills** is a list of up to 6 entries, empty and off by default. Each entry has a learned skill (the highest learned rank of it is used), one trigger and an on/off tick. **Add emergency skill** adds an entry; **Remove** deletes it.
+
+The triggers are:
+
+- **HP below (%)** and **MP below (%)**: the entry holds while your level is below the number. At exactly the number it does not.
+- **Attacked by at least (monsters)**: the entry holds while at least that many living monsters have hit you in the last 5 seconds. This is the same count as **Also berserk when this many monsters attack at once**, so the two always agree.
+
+**When it casts**
+
+- Only while the bot runs and the character is alive and in the world: in the hunt, while luring, in the unique hunt and while walking back.
+- Not during the town part of a town trip and not while the character sits.
+- An entry whose trigger holds and whose skill is ready goes before the attack rotation and the normal buffs. When several entries hold, the list order decides. Potions stay independent and keep their own rules.
+- The usual cast rules apply: the **Skill gap**, a skill the server keeps refusing, and the MP check.
+- A skill that needs a monster is cast on your current target; with no monster targeted it waits. A self skill is cast on the character.
+- An entry is not tried again within 3 seconds of a cast, so a refused cast does not repeat in a loop.
+- The log gets one line per cast, for example **Emergency: Heal (HP 23% < 30%)**, and at most one per entry every 10 seconds.
+
+Settings, profiles, share codes and backups carry the list. Older ones load with an empty list.
+
 ## Wearing better gear
 
 **Loot → Bag and pet space → Wear better gear**: with **On town trips, wear carried gear with better stats; store the replaced piece** on (off by default), the town trip — while the warehouse is open — wears a carried equipment piece whose real stats beat the worn one in the same slot, and deposits the piece it replaces in the warehouse (it is never sold, even if bag selling is on).
@@ -290,13 +311,32 @@ Every stop writes its reason to the log, for example **Hunting stopped: world ch
 
 **When it does not**
 
-- **Stops you chose:** out of HP potions, bag full, **On death: Stop**, the anti-stuck and trapped limits, a trip interrupted by manual control, no saved hunting spot. These are final.
+- **Stops you chose:** out of HP potions, bag full, **On death: Stop**, the anti-stuck and trapped limits, a trip interrupted by manual control, no saved hunting spot, a safety trigger (see **Safety triggers**). These are final.
 - **A stop right after your own action in the game:** for example a scroll you read or a portal you took by hand. You moved on, so it is final.
 - **You stopped it:** **F8**, **Start / stop**, **Stop all**, **Stop training**, a stop from OSB Manager, or loading other settings. The bot stays stopped.
 - **The character leaves the game or you change character:** a waiting retry is dropped. A reconnect or auto-start handles the next entry.
 - **The same reason twice within 30 minutes:** it stays stopped, writes a warning to the log and shows it on screen. Check the character.
 - **A fourth stop within an hour:** the same.
 - **A reconnect or an auto-start is already bringing it back:** it leaves that to them.
+
+## Safety triggers
+
+**Settings → Safety** has four triggers that stop the bot, or send it to town and then stop it, when something risky happens. All are off by default and saved per character, in profiles, share codes and backups.
+
+| Trigger | Setting | What it does |
+| --- | --- | --- |
+| Deaths | **Stop after this many deaths (0 = off)** | Stops at that death. The count starts with each start of the bot and counts a death once. |
+| Party too small | **When the party has fewer than this many members** | Only while you are in a party, or were when the bot started. It waits 10 seconds first, so a member who logs back in does not trigger it. |
+| Player attack | **When a player attacks the character** | A hit from another player, seen in the game's cast results as damage on your character. Party members, your own pets and monsters never count. |
+| Unique nearby | **When a unique appears nearby** and **Unique distance (m)** | A living unique within that many metres. Never while the Unique hunt runs, and never when **Unique** is ticked in the monster classes, because then you hunt uniques. |
+
+Party too small, Player attack and Unique nearby each have an action: **Stop**, or **Go to town and stop**. Deaths always stops.
+
+**Go to town and stop** starts the normal town trip with the reason "safety: ..." and does the town services. When they are done, the bot stops in town instead of walking back. It needs the town cycle with its services saved, and a return scroll when you are not already in town (it uses one only when a town trip would). Without them the bot just stops.
+
+A player hit is recognised only when the game reports damage on your character. A debuff or a skill that does no damage cannot be told from a buff, so it is not counted.
+
+Every trigger writes one warning with the reason to the log, shows a notice, and the stop appears as **Hunting stopped: safety: ...** in the Activity log, the Session window log and the recent stops of a bug report. A safety stop is your own choice: it is not started again by **Start again when the bot stops by itself**, by auto-start on entering the game, or by a reconnect. Press **Start / stop** to hunt again.
 
 ## The Start / stop light
 
@@ -430,6 +470,8 @@ When no monster is being attacked, the status line says why, counted from the mo
 
 **Small monsters first** (always on): while fighting a stronger monster, the bot switches to a weaker one that is hitting you, kills it and goes back. It only counts monsters that hit you in the last few seconds within chase distance, only switches to a weaker class (normal, champion, elite, party, giant, titan, unique, weakest first), finishes a target that is below 25% HP, and never switches during a cast. The status line says "switched to … (hitting you); back to … after".
 
+**Preferred monsters** (Combat > Hunt area, empty by default) is an ordered list of up to 10 monsters, best first, for quest monsters and drop farming. Add one from the monsters in view or seen this session, or type part of a name (any letter case, like **Only these mobs**). The arrows move a row and × removes it. A listed monster is fought before any monster not on the list, and a higher row before a lower one; among monsters of the same row, or not listed, the usual order applies (attackers, nearest, low HP). With the order **Attackers** a monster that is hitting you still comes first, so a preferred monster walking in never makes you ignore one that attacks. The list never adds a monster your filters exclude: monster classes, level range, **Skip these mobs**, the hunting area, other players' targets and recently given up monsters all still apply, and **Only these mobs** still filters. While you fight, a preferred monster at least 2 rows higher than your target (any listed monster, when the target is not listed) pulls the bot over to it, once every 5 seconds at most. The bot never leaves a target that is hitting you, never switches during a cast, and only takes a monster inside the hunting area and the chase distance. The switch is an ordinary target change, and the status line says "switched to … (preferred)". Quest monsters learned by Auto quest are still taken before this list. Share codes and backups carry the list; old ones load with it empty.
+
 **Avoid other players' targets** (on by default) skips a monster another player has just hit. Hits by your party members, and by their pets, do not count, so the bot joins the monsters your party is fighting. **Avoided monsters** chooses **All monsters** (the default) or **Normal & champion only**: with the second choice, giant, party, elite and other strong monsters that another player is fighting are still attacked. **Spare engaged giant/party below % HP** (50 by default, 0 = off, 50 at most) applies only to **Normal & champion only**: a giant or party monster another player is fighting is skipped once its health is at or below that percentage. A monster whose health is unknown is never skipped for this reason.
 
 **Weapon imbue** is renewed as soon as it runs out, also in the middle of another skill's cast and before a normal attack. A skill takes the imbue when its cast ends, not when it starts, and the game accepts an imbue during a cast, so the skill being cast still gets it. An imbue's cooldown is as long as the imbue itself, so it cannot be renewed earlier; the 1.2.74 setting **Renew imbue when seconds left** was removed in 1.2.75 because of that.
@@ -450,7 +492,7 @@ A character that should be walking (chasing, returning or picking up) but has no
 
 ## Why did it go to town?
 
-Every town trip writes its reason to the **Activity** log, for example "Town trip started: potions running low", and the town status line repeats it during the trip. The Activity log is in the Wide window (press **Wide** in the title bar). The reasons are: character bag nearly full (always on), pickup pet nearly full, potions or ammunition low, weapon broken, gear worn down, no XP for a while, every set number of minutes, returning after a death, or started by you. The bug report includes the reason of the current or last trip.
+Every town trip writes its reason to the **Activity** log, for example "Town trip started: potions running low", and the town status line repeats it during the trip. The Activity log is in the Wide window (press **Wide** in the title bar). The reasons are: character bag nearly full (always on), pickup pet nearly full, potions or ammunition low, weapon broken, gear worn down, no XP for a while, every set number of minutes, returning after a death, a safety trigger ("safety: ..."; the bot stops in town, see **Safety triggers**), or started by you. The bug report includes the reason of the current or last trip.
 
 ## Picking up one item without its whole kind
 
@@ -515,7 +557,24 @@ Open **Settings → Session stats** for hunting time, XP/hour, net gold, confirm
 
 ## Map
 
-The **Map** page draws the game's minimap around you with your hunt radius (yellow circle) and chase distance (dashed ring), and shows you, monsters, party members (also ones out of sight, at the edge), other players, NPCs and pets. Click the map to mark a point and press **Make this the hunting spot** to hunt there; the point uses your current height, as the game's own map does. Under the map, **Hunting area** also takes outdoor **X** / **Y** coordinates in whole metres: **Set spot** saves them as the hunting spot, **Set actual position** saves where you stand, and **Get position** and **Copy** show and copy your current coordinates without changing the spot. Drag to look around, use **+** and **−** or the mouse wheel to zoom, and **Follow me** to centre on yourself again. Hunt radius and chase distance can be changed under the map. Dungeons have no map yet.
+The **Map** page draws the game's minimap around you with your hunt radius (yellow circle, or the polygon below) and chase distance (dashed ring), and shows you, monsters, party members (also ones out of sight, at the edge), other players, NPCs and pets. Click the map to mark a point and press **Make this the hunting spot** to hunt there; the point uses your current height, as the game's own map does. Under the map, **Hunting area** also takes outdoor **X** / **Y** coordinates in whole metres: **Set spot** saves them as the hunting spot, **Set actual position** saves where you stand, and **Get position** and **Copy** show and copy your current coordinates without changing the spot. Drag to look around, use **+** and **−** or the mouse wheel to zoom, and **Follow me** to centre on yourself again. Hunt radius and chase distance can be changed under the map. Dungeons have no map yet.
+
+### Polygon hunting area
+
+A circle around the hunting spot can take in a cliff, a river or a neighbouring spawn. Draw the area as a polygon instead, under the map in **Polygon hunting area**:
+
+- **Add corner here** adds the position of your character as the next corner.
+- Click the map to mark a point, then press **Add as corner**. With **Map clicks add corners** ticked, every click adds a corner straight away (this switch is not saved).
+- **Remove last corner** takes back the last corner; **Clear corners** removes them all.
+- Tick **Use a polygon area** (off by default; the same switch is under **Combat → Hunting area**). The map fills the polygon in yellow and numbers its corners; the hunt radius circle is no longer drawn.
+
+A polygon needs 3 to 32 corners, its edges must not cross, and in a dungeon all corners must be in the same area. Otherwise the map draws it with a red dashed outline, the line under the buttons says what is wrong, and the hunt radius circle is used. Corners may lie in different map regions.
+
+With the polygon in use, everything that means "inside the hunting area" uses it: which monsters are attacked, Protect party members, the "too far" count in the status and bug report, the lure's "monsters at the spot", loot (a drop is picked up inside the polygon or within the pickup radius of its edge), **Return when idle** (the character walks back to the hunting spot only when it is outside the polygon, not when it is merely away from the spot), whether a death or a revive happened inside the area, and whether the party leader is back near the area. **Chase distance** keeps its meaning: how far the character may follow a monster from where it stands.
+
+The hunting spot stays the place the bot walks back to. If the spot is outside the polygon, the line under the buttons and the log warn you, and walking back still goes to the spot. Some things keep the circle because they move the hunting spot away from the corners or are fixed distances: **Spot by level** and zero-setup leveling spots (the circle is used while either is on), hunting around a followed party member, the unique hunt, the town trip's arrival check, and the "near enough to just start hunting" checks after a revive or reconnect.
+
+The corners are saved with the hunting spot per character and are kept in the full settings file (**Export full backup**). Like the hunting spot, they are personal: a share code leaves them out, and an import keeps your own corners. Old settings, share codes and backups load with the polygon off and no corners.
 
 ## Wide window
 

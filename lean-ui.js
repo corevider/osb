@@ -574,8 +574,8 @@ const UI = {
         tab.setAttribute('aria-selected', String(name === this.combatTab)); subtabs.append(tab);
       }
       this.pane.append(subtabs);
-      if (this.combatTab === 'Hunt area') this.sections('combatHuntArea', 'combatMonsters', 'combatLure', 'combatPet');
-      if (this.combatTab === 'Skills') this.sections('combatRotation', 'combatOptions', 'combatBerserk');
+      if (this.combatTab === 'Hunt area') this.sections('combatHuntArea', 'combatPreferred', 'combatMonsters', 'combatLure', 'combatPet');
+      if (this.combatTab === 'Skills') this.sections('combatRotation', 'combatOptions', 'combatBerserk', 'combatEmergency');
       if (this.combatTab === 'Buffs & imbue') this.sections('combatGear', 'combatBuffs', 'combatImbue');
       if (this.combatTab === 'Unique hunt') this.sections('combatUnique');
     } else if (this.current === 'Loot') {
@@ -604,7 +604,7 @@ const UI = {
     } else if (this.current === 'Wardrobe') {
       LeanWardrobe.draw(this.pane);
     } else {
-      this.sections('settingsStats', 'settingsBehaviour', 'settingsObstacles', 'settingsAntiStuck', 'settingsMastery', 'settingsStatPoints', 'settingsProfiles', 'settingsShare', 'settingsReports', 'settingsPrivacy', 'settingsActivity');
+      this.sections('settingsStats', 'settingsBehaviour', 'settingsSafety', 'settingsObstacles', 'settingsAntiStuck', 'settingsMastery', 'settingsStatPoints', 'settingsProfiles', 'settingsShare', 'settingsReports', 'settingsPrivacy', 'settingsActivity');
     }
     this.balance();
     this.update();
@@ -618,12 +618,12 @@ const UI = {
       { name: 'Settings', icon: 'action\\icon_cha_helper', pages: ['Supplies', 'Loot', 'Town', 'Combat', 'Settings'], sections: [
         ['suppliesPotions', 'Autopotion settings'], ['suppliesRestock', 'Buy settings'], ['suppliesMall', 'Item mall settings'], ['townWhen', 'Back town settings'],
         ['lootCollection', 'Pick settings'], ['lootWho', 'Who picks up what'], ['lootBalance'], ['combatMonsters', 'Attack preferences'],
-        ['combatBerserk', 'Berserk settings'], ['settingsBehaviour', 'Attack behaviour / Protection'], ['settingsObstacles'], ['settingsAntiStuck']] },
+        ['combatBerserk', 'Berserk settings'], ['combatEmergency'], ['settingsBehaviour', 'Attack behaviour / Protection'], ['settingsSafety'], ['settingsObstacles'], ['settingsAntiStuck']] },
       { name: 'Skills', icon: 'action\\icon_cha_auto_attack', pages: ['Combat'], sections: [
         ['combatRotation'], ['combatOptions'], ['combatGear'], ['combatBuffs'], ['combatImbue']] },
       { name: 'Items/Storage', icon: 'action\\cos_cmd_inventory', pages: ['Items', 'Town'], draw() {
         this.drawItems(); this.sections('townTrip', 'townCycle', 'townAmmo'); } },
-      { name: 'Training place', icon: 'action\\icon_cha_camp', pages: ['Combat', 'Party'], sections: [['combatHuntArea', 'Training place'], ['partyTrace'], ['combatLure'], ['combatPet'], ['combatUnique']] },
+      { name: 'Training place', icon: 'action\\icon_cha_camp', pages: ['Combat', 'Party'], sections: [['combatHuntArea', 'Training place'], ['combatPreferred'], ['partyTrace'], ['combatLure'], ['combatPet'], ['combatUnique']] },
       { name: 'Party/Autores', icon: 'action\\icon_cha_party', pages: ['Party'], sections: [
         ['partyMembers', 'Current party'], ['partyParty', 'Party settings'], ['partyHeal'], ['partyProtect']] },
       { name: 'Player buffing', icon: 'action\\icon_cha_party', pages: ['Party'], sections: [['partyBuffs', 'Player buffing']] },
@@ -749,6 +749,7 @@ const UI = {
         el('p', 'Turn off for a support character: it never starts a fight, not even with monsters that hit it, and keeps picking up loot, its own buffs and Party support (heals and party buffs) at the hunting spot or beside the member it follows.', 'muted'),
         this.button('Set hunting spot here', () => { if (World.inWorld() && Hunt.setCenter()) this.toast('Hunting spot saved.'); }),
         this.number('Hunt radius (m)', () => H().radius / 10, v => H().radius = v * 10, 5, 200),
+        this.tipped(this.check('Use a polygon area', () => HuntArea.cfg().on, v => HuntArea.cfg().on = v), 'Off by default. Hunts only inside the corners drawn on the Map page instead of the hunt radius. Needs 3 to 32 corners and edges that do not cross; otherwise the hunt radius is used.'),
         this.number('Chase distance (m)', () => H().chase / 10, v => H().chase = v * 10, 10, 300),
         this.check('Return when idle', () => H().returnToCenter, v => H().returnToCenter = v),
         this.check('Walking back may use teleports and ferries (beta; pays their fee)', () => H().travel !== false, v => H().travel = v),
@@ -761,6 +762,30 @@ const UI = {
         this.text('Only these mobs', () => H().include, v => H().include = v),
         this.text('Skip these mobs', () => H().exclude, v => H().exclude = v)
       ));
+  },
+  section_combatPreferred(host) {
+    const list = () => Settings.profile.hunt.preferred;
+    const rows = el('div', null, 'preferred-list'), draw = () => this.draw();
+    const move = (i, by) => { const to = i + by, l = list(); if (to < 0 || to >= l.length) return; [l[to], l[i]] = [l[i], l[to]]; Settings.saveProfile(); draw(); };
+    list().forEach((name, i) => {
+      const row = el('div', null, 'skill-row'), info = el('div', null, 'skill-info');
+      info.append(el('span', `${i + 1}. ${name}`, 'skill-name'));
+      const up = this.button('↑', () => move(i, -1)), down = this.button('↓', () => move(i, 1)), remove = this.button('×', () => { list().splice(i, 1); Settings.saveProfile(); draw(); });
+      up.className = down.className = remove.className = 'mini';
+      up.setAttribute('aria-label', 'Move up ' + name); down.setAttribute('aria-label', 'Move down ' + name); remove.setAttribute('aria-label', 'Remove ' + name);
+      row.append(info, up, down, remove); rows.append(row);
+    });
+    if (!list().length) rows.append(el('div', 'No preferred monsters. The usual order applies.', 'empty'));
+    const full = list().length >= PREFERRED_MAX;
+    const add = text => { if (Hunt.addPreferred(text)) { Settings.saveProfile(); draw(); } };
+    const pick = this.select('Add a monster seen', () => [['', full ? 'List is full' : 'Choose a monster…'], ...Hunt.knownMonsterNames().map(name => [name, name])], () => '', value => { if (value) add(value); });
+    const typed = el('input'); typed.type = 'text'; typed.placeholder = 'part of a name'; typed.setAttribute('aria-label', 'Type a monster name');
+    typed.addEventListener('keydown', event => { if (event.key === 'Enter') add(typed.value); });
+    const typedAdd = this.button('Add', () => add(typed.value));
+    host.append(this.group('Preferred monsters',
+      this.tipped(el('p', 'Up to 10 monsters, best first. A listed monster is fought before any monster not on the list, and a higher row before a lower one. Monsters hitting you still come first when the order is Attackers, and your filters (classes, levels, Skip these mobs, hunting area, other players’ targets) still apply. A name matches part of the monster’s name, like Only these mobs.', 'muted'),
+        'Empty by default. While fighting, a preferred monster at least 2 rows higher than your target pulls you off it, never more than once every 5 seconds, never from a target that is hitting you and only inside the hunting area and chase distance.'),
+      rows, pick, this.tipped(this.field('Type a name', typed), 'Matches part of the name, any letter case. Press Enter or Add.'), typedAdd));
   },
   section_combatMonsters(host) {
     const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();
@@ -797,6 +822,45 @@ const UI = {
         ...[['giant', 'Giants'], ['giantParty', 'Giant party'], ['titan', 'Titans'], ['unique', 'Uniques'], ['elite', 'Elites'], ['party', 'Party monsters'], ['champion', 'Champions'], ['normal', 'Normal monsters']]
           .map(([key, label]) => this.check(label, () => M().berserkClasses[key], v => M().berserkClasses[key] = v)),
         this.number('Also berserk when this many monsters attack at once (0 = off)', () => M().berserkCornered, v => M().berserkCornered = v, 0, 8)));
+  },
+  emergencySkills() {
+    const best = new Map();
+    for (const s of Learned.rows()) {
+      if (s.missing || s.active === false || s.groundTarget) continue;
+      const group = s.group ?? s.id, previous = best.get(group);
+      if (!previous || (s.level ?? 0) > (previous.level ?? 0)) best.set(group, s);
+    }
+    return [...best.values()];
+  },
+  section_combatEmergency(host) {
+    const list = () => Settings.profile.macro.emergency, box = this.group('Emergency skills');
+    box.append(el('p', 'Up to ' + EMERGENCY_MAX + ' skills that go before the attack rotation and the normal buffs when HP or MP falls below a level, or when enough monsters attack at once. They work while the bot runs: hunting, luring, the unique hunt and walking back, but not during a town trip and not while resting. A skill that needs a monster is cast on your current target; a self skill on you. When several hold, the list order decides. Potions stay independent.', 'muted'));
+    const skills = this.emergencySkills(), labels = { hp: 'HP below (%)', mp: 'MP below (%)', attackers: 'Attacked by at least (monsters)' };
+    list().forEach((entry, i) => {
+      const own = World.bestOfGroup(entry.group, entry.id) || entry.id, options = skills.some(s => s.id === own) ? skills : [World.skill(own) || { id: own, name: 'Skill #' + own }, ...skills];
+      const rows = [[0, 'Choose a learned skill'], ...options.map(s => [s.id, s.name || '#' + s.id])];
+      const pick = this.select('Skill', rows, () => World.bestOfGroup(entry.group, entry.id) || entry.id, v => { const s = World.skill(Number(v)); entry.id = Number(v); entry.group = s?.group ?? Number(v); });
+      pick.title = 'The skill to cast. The highest learned rank of it is used.';
+      const trigger = this.select('When', EMERGENCY_TRIGGERS.map(key => [key, labels[key]]), () => entry.trigger, v => { entry.trigger = v; entry.value = clamp(entry.value, ...EMERGENCY_LIMITS[v]); this.draw(); });
+      trigger.title = 'HP or MP: the skill casts while your level is below the number. Attacked: it casts while at least that many living monsters have hit you in the last 5 seconds (the count Berserk uses). An entry is not tried again within 3 seconds of a cast.';
+      const [min, max] = EMERGENCY_LIMITS[entry.trigger];
+      const level = this.number('Level', () => entry.value, v => entry.value = v, min, max);
+      level.title = entry.trigger === 'attackers' ? 'Number of monsters attacking you.' : 'Percent of your maximum.';
+      const on = this.check('On', () => entry.enabled, v => entry.enabled = v);
+      on.title = 'Off keeps the entry in the list without using it.';
+      const remove = this.button('Remove', () => { list().splice(i, 1); Settings.saveProfile(); this.draw(); });
+      remove.title = 'Delete this emergency skill.';
+      box.append(this.group('Emergency ' + (i + 1), pick, trigger, level, on, remove));
+    });
+    if (!list().length) box.append(el('div', 'No emergency skills.', 'empty'));
+    const add = this.button('Add emergency skill', () => {
+      if (list().length >= EMERGENCY_MAX) return;
+      const skill = skills[0];
+      if (!skill) return this.toast('No learned skills yet. Enter the game or reload if attached late.', 'warn');
+      list().push(Emergency.newEntry(skill)); Settings.saveProfile(); this.draw();
+    });
+    add.disabled = list().length >= EMERGENCY_MAX; add.title = 'Add an entry, then choose its skill and trigger.';
+    box.append(add); host.append(box);
   },
   section_combatGear(host) {
     const pick = (title, slot) => this.select(title, () => ItemRules.gearOptions(slot), () => ItemRules.cfg().gear?.[slot] || '', v => ItemRules.setGear(slot, v));
@@ -1321,6 +1385,20 @@ const UI = {
         this.check('Stop when HP potions run out', () => H().stopNoHpPotion, v => H().stopNoHpPotion = v),
         this.check('Stop when bag is full', () => H().stopInvFull, v => H().stopInvFull = v),
         this.number('Manual control pause (s)', () => H().manualPauseS, v => H().manualPauseS = v, 1, 30)));
+  },
+  section_settingsSafety(host) {
+    const S = () => Settings.profile.hunt.safety, actions = [['stop', 'Stop'], ['town', 'Go to town and stop']];
+    const tip = (node, text) => this.tipped(node, text);
+    host.append(this.group('Safety',
+      el('p', 'Each trigger is off by default. A safety stop is your own choice: the bot logs why, shows a notice, writes "Hunting stopped: safety: ..." to the log and is not started again by "Start again when the bot stops by itself", auto-start or a reconnect. "Go to town and stop" does the normal town trip (it needs the town cycle and a return scroll when you are not already in town; otherwise the bot just stops) and stops in town instead of walking back.', 'muted'),
+      tip(this.number('Stop after this many deaths (0 = off)', () => S().deaths, v => S().deaths = v, 0, 99), 'Counts the deaths since the bot was started. At the last one the bot stops.'),
+      tip(this.number('When the party has fewer than this many members (0 = off)', () => S().party.min, v => S().party.min = v, 0, 8), 'Only while you are in a party, or were when the bot started. It waits 10 seconds first, so a member who logs back in does not trigger it.'),
+      tip(this.select('Party too small: action', actions, () => S().party.action, v => S().party.action = v), 'What to do when the party gets too small.'),
+      tip(this.check('When a player attacks the character', () => S().player.on, v => S().player.on = v), 'A hit or a damaging skill from another player. Party members, your own pets and monsters never count.'),
+      tip(this.select('Player attack: action', actions, () => S().player.action, v => S().player.action = v), 'What to do when a player attacks you.'),
+      tip(this.check('When a unique appears nearby', () => S().unique.on, v => S().unique.on = v), 'Never while the Unique hunt runs, and never when Unique is ticked in the monster classes, because then you hunt uniques.'),
+      tip(this.number('Unique distance (m)', () => S().unique.meters, v => S().unique.meters = v, 5, 200), 'How close a living unique must be.'),
+      tip(this.select('Unique nearby: action', actions, () => S().unique.action, v => S().unique.action = v), 'What to do when a unique is close.')));
   },
   section_settingsObstacles(host) {
     const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();

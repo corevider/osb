@@ -204,6 +204,9 @@ hunt = hunt.replace(ks_method_old, """  ksAvoids(e, sim = World.simNow() ?? 0) {
   },
 
   chooseTarget() {""")
+score_old = "      if (score < bestScore) {\n"
+assert hunt.count(score_old) == 1
+hunt = hunt.replace(score_old, "      score += this.preferredOffset(e, attacking);\n      if (score < bestScore) {\n")
 restock = (base / 'restock.js').read_text(encoding='utf-8').split('  build() {')[0] + '};'
 restock = restock.replace("    if (distance < t.best - 3) { t.best = distance; t.progressAt = now(); }", "    if (!t.lastPose || dist2D(t.lastPose, World.pose()) > 3) { t.lastPose = { ...World.pose() }; t.progressAt = now(); }")
 restock = restock.replace("    if (World.isSitting()) {", "    const move = Navigation.next(t, dest, true);\n    if (move.error && !move.waiting) return this.fail(move.error);\n    if (move.waiting) return false;\n    if (World.isSitting()) {")
@@ -265,7 +268,7 @@ skin += '\nconst LEAN_CSS = ' + __import__('json').dumps((base / 'lean-skin.css'
 header = '''// ==UserScript==
 // @name         OSB
 // @namespace    https://github.com/corevider/osb
-// @version      2.0.11
+// @version      2.0.12
 // @homepageURL  https://github.com/corevider/osb
 // @supportURL   https://github.com/corevider/osb/issues
 // @updateURL    https://raw.githubusercontent.com/corevider/osb/main/osb.meta.js
@@ -289,7 +292,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[OSB] Another SRO assistant is active. Disable it and reload to use OSB.');
   return;
 }
-const VERSION = '2.0.11';
+const VERSION = '2.0.12';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });
@@ -314,6 +317,7 @@ def release_notes():
     return 'const RELEASE_NOTES = ' + json.dumps(releases[:8], ensure_ascii=False) + ';'
 parts = [header, utils, (base / 'lean-settings.js').read_text(encoding='utf-8'), geometry,
          hook, display, world, commands, ticker, potion, attackable, combat, restock, hunt,
+         (base / 'lean-area.js').read_text(encoding='utf-8'),
          (base / 'lean-clipper.js').read_text(encoding='utf-8'),
          (base / 'lean-clip-route.js').read_text(encoding='utf-8'),
          (base / 'lean-navigation.js').read_text(encoding='utf-8'),
@@ -362,6 +366,8 @@ parts = [header, utils, (base / 'lean-settings.js').read_text(encoding='utf-8'),
          (base / 'lean-unique-state.js').read_text(encoding='utf-8'),
          (base / 'lean-unique-tracker.js').read_text(encoding='utf-8'),
          (base / 'lean-unique-list.js').read_text(encoding='utf-8'),
+         (base / 'lean-emergency.js').read_text(encoding='utf-8'),
+         (base / 'lean-safety.js').read_text(encoding='utf-8'),
          (base / 'lean-share.js').read_text(encoding='utf-8'),
          (base / 'lean-setup.js').read_text(encoding='utf-8'),
          (base / 'lean-pet-potion.js').read_text(encoding='utf-8'),

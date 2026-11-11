@@ -8,7 +8,7 @@ const MAP_ART = '/assets/images/Media_extracted/';
 const MAP_CLASS_COLOR = { normal: '#e0e0e0', champion: '#7fb8ff', giant: '#ffd65a', party: '#ff9b4a', elite: '#c78bff', unique: '#ff5a5a', titan: '#ff3dd0' };
 const LeanMap = {
   upp: 5, // world units per screen pixel (10 units = 1 m)
-  view: null, follow: true, picked: null, canvas: null, info: null, timer: 0,
+  view: null, follow: true, picked: null, canvas: null, info: null, timer: 0, cornerClicks: false,
   tiles: new Map(), signs: new Map(),
   space(p) {
     const rid = Number(p?.regionId ?? p?.region);
@@ -105,7 +105,9 @@ const LeanMap = {
     this.coords = el('div', '', 'map-coords');
     stage.append(this.canvas, tools, this.coords);
     this.info = el('p', '', 'muted');
-    this.pickRow = UI.row(UI.button('Make this the hunting spot', () => this.setCentre()), UI.button('Clear mark', () => { this.picked = null; this.dirty = true; this.render(); }));
+    this.pickRow = UI.row(UI.button('Make this the hunting spot', () => this.setCentre()),
+      UI.tipped(UI.button('Add as corner', () => this.addCorner(this.picked)), 'Adds the marked point as the next corner of the polygon hunting area.'),
+      UI.button('Clear mark', () => { this.picked = null; this.dirty = true; this.render(); }));
     box.append(stage, this.info, this.pickRow);
     const H = () => Settings.profile.hunt;
     const saved = H().center && this.space(H().center) ? displayCoords(H().center) : null;
@@ -146,17 +148,39 @@ const LeanMap = {
     const area = UI.group('Hunting area',
       coordinates,
       UI.number('Hunt radius (m)', () => H().radius / 10, v => { H().radius = v * 10; this.dirty = true; }, 5, 200),
-      UI.number('Chase distance (m)', () => H().chase / 10, v => { H().chase = v * 10; this.dirty = true; }, 10, 300));
+      UI.tipped(UI.number('Chase distance (m)', () => H().chase / 10, v => { H().chase = v * 10; this.dirty = true; }, 10, 300), 'How far the character may follow a monster from where it stands, with the circle or the polygon.'),
+      this.drawPolygon());
     const legend = UI.group('Legend');
     for (const [name, label] of [['character', 'You'], ['party', 'Party member'], ['otherplayer', 'Other player'], ['monster', 'Monster'], ['unique', 'Unique'], ['npc', 'NPC'], ['animal', 'Pet']]) {
       const row = el('div', null, 'map-legend'), mark = el('i'); mark.dataset.sign = name;
       row.append(mark, el('span', label)); legend.append(row);
     }
-    legend.append(el('p', 'Yellow circle: hunt radius. Dashed ring: chase distance. Click the map to mark a point, drag to move it, use + and − to zoom.', 'muted'));
+    legend.append(el('p', 'Yellow circle: hunt radius. Yellow polygon with numbered corners: polygon hunting area in use (red outline: invalid, the circle is used). Dashed ring: chase distance. Click the map to mark a point, drag to move it, use + and − to zoom.', 'muted'));
     parent.append(box, area, levelSpots, legend);
     for (const mark of legend.querySelectorAll('i[data-sign]')) this.paintSign(mark, mark.dataset.sign);
     this.bind(); this.dirty = true; this.render();
     clearInterval(this.timer); this.timer = setInterval(() => this.tick(), 200);
+  },
+  drawPolygon() {
+    const P = () => HuntArea.cfg();
+    this.areaNote = el('p', '', 'muted');
+    const run = (fn, done) => { const error = fn(); if (error) UI.toast(error, 'warn'); else if (done) UI.toast(done); this.dirty = true; this.render(); };
+    return UI.group('Polygon hunting area',
+      UI.tipped(UI.check('Use a polygon area', () => P().on, v => { P().on = v; this.dirty = true; }), 'Off by default. Hunts only inside the corners you draw instead of the circle, to keep the bot off cliffs, rivers or a neighbouring spawn. Needs 3 to 32 corners and edges that do not cross; otherwise the circle is used. Spot by level and leveling spots keep the circle.'),
+      UI.row(
+        UI.tipped(UI.button('Add corner here', () => run(() => HuntArea.addHere(), 'Corner added.')), 'Adds the position of your character as the next corner.'),
+        UI.tipped(UI.button('Remove last corner', () => run(() => HuntArea.removeLast() ? '' : 'There are no corners.')), 'Removes the corner added last.'),
+        UI.tipped(UI.button('Clear corners', () => run(() => HuntArea.clear() ? '' : 'There are no corners.', 'Corners cleared.')), 'Removes every corner. The circle is used until you draw a new polygon.')),
+      UI.tipped(UI.check('Map clicks add corners', () => this.cornerClicks, v => { this.cornerClicks = v; this.picked = null; this.dirty = true; }), 'While on, every click on the map adds a corner there instead of marking a point. Not saved.'),
+      this.areaNote);
+  },
+  addCorner(point) {
+    const pose = World.pose();
+    if (!point) return;
+    const error = HuntArea.add({ regionId: point.regionId, x: point.x, y: Number(pose?.y) || 0, z: point.z });
+    if (error) UI.toast(error, 'warn');
+    if (point === this.picked) this.picked = null;
+    this.dirty = true; this.render();
   },
   paintSign(node, name) {
     Icons.url(MAP_ART + 'interface/minimap/mm_sign_' + name + '.png').then(url => { if (url && node.isConnected) node.style.backgroundImage = `url("${url}")`; });
@@ -182,7 +206,8 @@ const LeanMap = {
       const d = this.drag; this.drag = null;
       if (!d || d.moved || e.type === 'pointercancel') return;
       const at = this.toWorld(e), local = at && this.local(at.X, at.Z);
-      if (local) { this.picked = local; this.dirty = true; this.render(); }
+      if (local && this.cornerClicks) this.addCorner(local);
+      else if (local) { this.picked = local; this.dirty = true; this.render(); }
     };
     c.addEventListener('pointerup', up); c.addEventListener('pointercancel', up);
     c.addEventListener('wheel', e => { e.preventDefault(); this.zoom(e.deltaY > 0 ? 1.25 : 0.8); }, { passive: false });
@@ -268,14 +293,16 @@ const LeanMap = {
         ctx.drawImage(img, l, t, Math.ceil(sx((rx + 1) * SECTOR)) - l, Math.ceil(sy(rz * SECTOR)) - t);
       }
     // Hunting area: radius (filled) and chase distance (dashed).
-    const H = Settings.profile.hunt, centre = this.space(H.center);
+    const H = Settings.profile.hunt, centre = this.space(H.center), shape = HuntArea.polygon(H);
+    if (this.areaNote) { const note = HuntArea.status(H); this.areaNote.textContent = note.text; this.areaNote.dataset.level = note.level; }
+    this.drawCorners(ctx, sx, sy, H, shape);
     if (centre) {
       const cx = sx(centre.X), cy = sy(centre.Z);
       ctx.save();
       ctx.setLineDash([5, 4]); ctx.strokeStyle = 'rgba(255,214,90,.55)'; ctx.lineWidth = 1;
       ctx.beginPath(); ctx.arc(cx, cy, (Number(H.chase) || 0) / upp, 0, Math.PI * 2); ctx.stroke();
       ctx.setLineDash([]); ctx.fillStyle = 'rgba(255,214,90,.12)'; ctx.strokeStyle = 'rgba(255,214,90,.95)'; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(cx, cy, (Number(H.radius) || 0) / upp, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      if (!shape) { ctx.beginPath(); ctx.arc(cx, cy, (Number(H.radius) || 0) / upp, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); }
       ctx.fillStyle = '#ffd65a'; ctx.fillRect(cx - 2.5, cy - 2.5, 5, 5);
       ctx.restore();
     }
@@ -341,6 +368,24 @@ const LeanMap = {
     const pick = this.picked && displayCoords(this.picked);
     this.info.textContent = `You: X ${shown.x} · Y ${shown.y}. Hunting spot: ${Number.isFinite(distance) ? Math.round(distance / 10) + ' m away' : H.center ? 'another region' : 'not saved'}. In view: ${monsters} monsters, ${players} players.`
       + (pick ? ` Marked point: X ${pick.x} · Y ${pick.y}.` : '');
+  },
+  drawCorners(ctx, sx, sy, H, shape) {
+    const P = HuntArea.cfg(H), points = P.corners.map(c => this.space(c)).filter(Boolean);
+    if (!points.length) return;
+    const bad = P.on && !HuntArea.shape(P.corners).valid;
+    ctx.save();
+    ctx.beginPath();
+    points.forEach((s, i) => i ? ctx.lineTo(sx(s.X), sy(s.Z)) : ctx.moveTo(sx(s.X), sy(s.Z)));
+    if (points.length > 2) ctx.closePath();
+    if (shape) { ctx.fillStyle = 'rgba(255,214,90,.12)'; ctx.fill(); ctx.strokeStyle = 'rgba(255,214,90,.95)'; ctx.lineWidth = 2; }
+    else { ctx.setLineDash([6, 4]); ctx.strokeStyle = bad ? 'rgba(255,90,90,.9)' : 'rgba(200,200,200,.6)'; ctx.lineWidth = 1.5; }
+    ctx.stroke(); ctx.setLineDash([]);
+    points.forEach((s, i) => {
+      const x = sx(s.X), y = sy(s.Z);
+      ctx.fillStyle = shape ? '#ffd65a' : bad ? '#ff5a5a' : '#c8c8c8'; ctx.beginPath(); ctx.arc(x, y, 3.5, 0, Math.PI * 2); ctx.fill();
+      this.label(ctx, String(i + 1), x + 5, y - 5, '#fff');
+    });
+    ctx.restore();
   },
   label(ctx, text, x, y, color) {
     ctx.font = '11px Arial'; ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,.85)'; ctx.strokeText(text, x, y); ctx.fillStyle = color; ctx.fillText(text, x, y);

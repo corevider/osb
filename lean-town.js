@@ -483,7 +483,7 @@ const Town = {
     if (error) return this.fail(error);
     // The death spot is used only when it lies inside the hunting area: hunting starts again only from there. A death
     // further away (or an unknown hunting area) reverses to the last return-scroll point instead.
-    const H = Hunt.cfg(), deathInArea = !!(this.deathPoint && H.center && dist2D(this.deathPoint, H.center) <= H.radius);
+    const H = Hunt.cfg(), deathInArea = !!(this.deathPoint && H.center && HuntArea.within(H, this.deathPoint));
     const reverseChoice = revival && this.cfg().deathReturn === 'death' && deathInArea ? TOWN_REVERSE.death : TOWN_REVERSE.recall;
     if (revival && this.cfg().deathReturn === 'death' && !deathInArea) Log.info('Died outside the hunting area: reversing to the last return-scroll point so hunting can start again.');
     // Started in town: the pose is the town, not the hunt. The reverse scroll goes back to the last scroll point.

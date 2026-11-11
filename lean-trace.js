@@ -49,7 +49,8 @@ const Trace = {
       this.travel = null;
       const H = Hunt.cfg(), real = H.center;
       H.center = { regionId: pos.regionId, x: pos.x, y: pos.y, z: pos.z };
-      try { Hunt.tick(); } finally { H.center = real; }
+      HuntArea.aroundMember++;
+      try { Hunt.tick(); } finally { H.center = real; HuntArea.aroundMember--; }
       this.message = `Hunting around ${member.name} (${Math.round(distance / 10)} m away).`; this.code = 'hunting-around';
       return true;
     }

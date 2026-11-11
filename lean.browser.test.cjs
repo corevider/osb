@@ -724,7 +724,7 @@ async function tickProof(browser, localPort) {
     }
     // Headings use SBot's wording, and the pane scrolls on its own while the frame stays.
     await page.locator('nav').getByRole('button', { name: 'Settings', exact: true }).click();
-    for (const heading of ['Autopotion settings', 'Buy settings', 'Back town settings', 'Pick settings', 'Attack preferences', 'Berserk settings']) {
+    for (const heading of ['Autopotion settings', 'Buy settings', 'Back town settings', 'Pick settings', 'Attack preferences', 'Berserk settings', 'Emergency skills', 'Safety']) {
       assert.equal(await page.locator('legend', { hasText: heading }).count() > 0, true, heading);
     }
     assert.ok(await page.evaluate(() => { const p = document.getElementById('sro-bot-lean').shadowRoot.querySelector('.pane'); p.scrollTop = 400; return p.scrollTop > 0 && p.scrollHeight > p.clientHeight; }), 'the pane scrolls');
@@ -826,6 +826,20 @@ async function tickProof(browser, localPort) {
     assert.equal(await page.getByRole('button', { name: 'Make this the hunting spot', exact: true }).isVisible(), false, 'a drag does not mark a point');
     await page.getByRole('button', { name: 'Follow me', exact: true }).click();
     assert.equal(await page.evaluate(() => SROLean.map.follow), true);
+    await page.evaluate(() => { SROLean.map.cornerClicks = true; });
+    await page.waitForFunction(() => SROLean.map.view);
+    const drawBox = await page.getByLabel('Map of the hunting area', { exact: true }).boundingBox();
+    for (const [dx, dy] of [[-60, -10], [60, -10], [0, -90]]) await page.mouse.click(drawBox.x + drawBox.width / 2 + dx, drawBox.y + drawBox.height / 2 + dy);
+    await page.evaluate(() => { SROLean.map.cornerClicks = false; });
+    await page.getByLabel('Use a polygon area', { exact: true }).check();
+    assert.equal(await page.evaluate(() => SROLean.settings.profile.hunt.polygon.corners.length), 3);
+    await page.getByText(/^Polygon in use \(3 corners\)/).waitFor();
+    await page.locator('.map-box').screenshot({ path: __dirname + '/lean-map-polygon.png' });
+    await page.getByRole('button', { name: 'Remove last corner', exact: true }).click();
+    await page.getByText(/^Polygon invalid: Needs at least 3 corners\. The circle is used\.$/).waitFor();
+    await page.getByRole('button', { name: 'Clear corners', exact: true }).click();
+    await page.getByLabel('Use a polygon area', { exact: true }).uncheck();
+    assert.deepEqual(await page.evaluate(() => SROLean.settings.profile.hunt.polygon), { on: false, corners: [] });
     await page.locator('.map-box').screenshot({ path: __dirname + '/lean-map-compact.png' });
     await page.getByRole('button', { name: 'Wide', exact: true }).click();
     await page.waitForTimeout(300);

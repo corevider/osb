@@ -85,7 +85,7 @@ bus.on('phase', (phase, previous, left) => { if (left) { AutoStart.armed = true;
 // portal taken by hand) are final. The same reason twice within 30 minutes, or a fourth try within an hour, stops for
 // good. Leaving the world or changing character forgets it all: reconnect and auto-start own a new entry.
 const RETRY_DELAY_MS = 120000, RETRY_SAME_MS = 30 * 60000, RETRY_MAX_PER_HOUR = 3, RETRY_PLAYER_MS = 30000;
-const RETRY_FINAL = /^(out of HP potions|inventory full|character died|stuck: no progress|character cannot move|hunt area is in another region|stopped by you|stopped from outside|settings changed|character changed)|Recovery town services completed|No saved hunting (spot|point)|save a hunting spot first|manual control/i;
+const RETRY_FINAL = /^(out of HP potions|inventory full|character died|stuck: no progress|character cannot move|hunt area is in another region|safety:|stopped by you|stopped from outside|settings changed|character changed)|Recovery town services completed|No saved hunting (spot|point)|save a hunting spot first|manual control/i;
 const RETRY_PLAYER_KINDS = new Set(['ground-move', 'move', 'select', 'attack', 'skill', 'pickup', 'cos-attack', 'item-use', 'travel-gate', 'npc-talk']);
 const Retry = {
   active: false, reason: '', reasonAt: -Infinity, stop: null, history: [], message: '', playerAt: -Infinity, character: null,

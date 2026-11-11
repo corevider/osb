@@ -25,7 +25,7 @@ const UniqueHunt = {
       center: anchor ? { regionId: anchor.regionId, x: anchor.x, y: anchor.y, z: anchor.z } : null, radius: chase, chase,
       classes: { normal: false, champion: false, giant: false, party: false, elite: false, unique: true, titan: U.titans === true },
       levelMin: 0, levelMax: 0, include: '', exclude: '', avoidKs: false, priority: 'attackers', returnToCenter: false, attack: true,
-      levelSpots: { on: false, list: [] }, playerAlert: { ...base.playerAlert, pause: false }, onDeath: 'stop',
+      levelSpots: { on: false, list: [] }, polygon: { on: false, corners: [] }, playerAlert: { ...base.playerAlert, pause: false }, onDeath: 'stop',
     });
     a.cfg = cfg; a.cfgBase = base; a.cfgAnchor = anchor; a.cfgKey = U.chase + ':' + U.titans;
     return cfg;

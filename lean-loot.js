@@ -255,7 +255,7 @@ const Loot = {
     const H = Hunt.cfg(), P = H.pickup, skip = this.skips.get(e.gid);
     if (skip && (skip.bag !== null ? skip.bag === this.bagSignature(e) : skip.until > now())) return 'failed';
     if (!(dist2D(World.pose(), e) <= P.radius)) return 'far';
-    if (Hunt.running && H.center && dist2D(H.center, e) > H.radius + P.radius) return 'area';
+    if (Hunt.running && H.center && !HuntArea.within(H, e, P.radius)) return 'area';
     if (!this.owned(e)) return 'owner';
     const tf = e.groundItem.typeFlags ?? e.tidWord ?? 0, name = (e.name || '').toLowerCase(), rule = ItemRules.get(e.refObjId);
     if (rule && (rule.pick === 'no' || rule.act === 'drop')) return 'rule';
@@ -307,7 +307,7 @@ const Loot = {
         this.skips.delete(e.gid);
       }
       const d = dist2D(pose, e);
-      if (!Number.isFinite(d) || d > P.radius || Hunt.running && H.center && dist2D(H.center, e) > H.radius + P.radius || !this.allowed(e)) continue;
+      if (!Number.isFinite(d) || d > P.radius || Hunt.running && H.center && !HuntArea.within(H, e, P.radius) || !this.allowed(e)) continue;
       const who = this.collector(e);
       if (by && who !== by) continue;
       const travel = dist2D(who === 'pet' ? this.pet()?.ent : pose, e);

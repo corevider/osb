@@ -45,6 +45,16 @@ function upgradeSoxSound(input) {
   if (!('soxSeals' in rest)) rest.soxSeals = Object.fromEntries(SOX_SEALS.map(seal => [seal, soxSound !== false]));
   return { ...input, hunt: { ...input.hunt, pickup: rest } };
 }
+const HUNT_POLYGON_MAX = 32;
+function huntCorner(c) {
+  if (!c || !Number.isInteger(c.regionId) || ![c.x, c.z].every(Number.isFinite)) return null;
+  return { regionId: c.regionId, x: Math.round(c.x), y: Number.isFinite(c.y) ? c.y : 0, z: Math.round(c.z) };
+}
+function huntPolygon(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  const corners = (Array.isArray(source.corners) ? source.corners : []).map(huntCorner).filter(Boolean).slice(0, HUNT_POLYGON_MAX);
+  return { on: source.on === true, corners };
+}
 function upgradeProfile(input) { return upgradeSoxSound(Rotations.upgrade(input)); }
 const DEFAULT_PROFILE = {
   items: { rules: {}, balance: false, petToBag: false, autoEquip: false, gear: { primaryWeapon: null, secondaryWeapon: null, shield: null } },
@@ -80,7 +90,7 @@ const DEFAULT_PROFILE = {
     rotations: { normal: [], champion: [], party: [], giant: [], partyChampion: [], partyGiant: [], elite: [], unique: [] },
     fallbackToNormal: true, normalAttack: true, buffs: [], imbue: null, buffSwap: false, buffAuto: true, buffSets: [],
     imbueBeforeAttack: true, berserkClasses: { normal: false, champion: false, giant: true, giantParty: false, party: false, elite: false, unique: false, titan: false }, berserkCornered: 0,
-    minMpPct: 0, castGapMs: 350,
+    minMpPct: 0, castGapMs: 350, emergency: [],
   },
   potion: {
     enabled: true, speedScroll: false, repairHammer: { on: false, pct: 50 }, hp: { on: true, pct: 60 }, mp: { on: true, pct: 40 },
@@ -104,8 +114,9 @@ const DEFAULT_PROFILE = {
   hunt: {
     levelSpots: { on: false, list: [] },
     center: null, radius: 400, chase: 700, returnToCenter: true, travel: true, attack: true,
+    polygon: { on: false, corners: [] },
     classes: { normal: true, champion: true, giant: true, party: false, elite: false, unique: false, titan: false },
-    levelMin: 0, levelMax: 0, include: '', exclude: '', priority: 'attackers', avoidKs: true, avoidKsScope: 'all', avoidKsBelow: 50,
+    levelMin: 0, levelMax: 0, include: '', exclude: '', preferred: [], priority: 'attackers', avoidKs: true, avoidKsScope: 'all', avoidKsBelow: 50,
     targetTimeoutS: 25,
     pickup: { enabled: true, soxOnly: false, skipStar: false, gold: true, potions: true, equipment: true, elixirs: true, powders: true, magicStones: true, attrStones: true, alchemy: true, others: true,
       collector: 'character', by: {}, petFullSound: true, petWhileManual: true, petWhileStopped: true, petInputHoldS: 3, petIdleRadius: 250, soxSeals: { star: true, moon: true, sun: true }, include: '', exclude: '', radius: 300, afterKillOnly: true, retries: 2 },
@@ -115,8 +126,23 @@ const DEFAULT_PROFILE = {
     trap: { enabled: true, seconds: 20, recall: false, diagnostics: false },
     onDeath: 'stop', stopNoHpPotion: false, stopInvFull: false, autoStart: false, retry: false,
     playerAlert: { enabled: false, radius: 250, pause: false }, manualPauseS: 6,
+    safety: { deaths: 0, party: { min: 0, action: 'stop' }, player: { on: false, action: 'stop' }, unique: { on: false, meters: 50, action: 'stop' } },
   },
 };
+const EMERGENCY_MAX = 6, EMERGENCY_TRIGGERS = ['hp', 'mp', 'attackers'], EMERGENCY_DEFAULT = { hp: 30, mp: 20, attackers: 3 };
+const EMERGENCY_LIMITS = { hp: [1, 99], mp: [1, 99], attackers: [1, 20] }, SAFETY_ACTIONS = ['stop', 'town'];
+const PREFERRED_MAX = 10, PREFERRED_NAME_MAX = 60;
+function cleanPreferred(list) {
+  if (!Array.isArray(list)) return [];
+  const seen = new Set(), out = [];
+  for (const entry of list) {
+    const name = typeof entry === 'string' ? entry.trim().slice(0, PREFERRED_NAME_MAX) : '', key = name.toLowerCase();
+    if (!name || seen.has(key)) continue;
+    seen.add(key); out.push(name);
+    if (out.length >= PREFERRED_MAX) break;
+  }
+  return out;
+}
 // Preserve only bot settings. The original assistant's settings are never changed.
 function botProfile(input) {
   const result = deepMerge(DEFAULT_PROFILE, {});
@@ -131,6 +157,7 @@ function botProfile(input) {
   for (const key of CLASS_KEYS) if (!Array.isArray(result.macro.rotations[key])) result.macro.rotations[key] = [];
   result.hunt.pickup.soxSeals = Object.fromEntries(SOX_SEALS.map(seal => [seal, result.hunt.pickup.soxSeals?.[seal] === true]));
   delete result.hunt.pickup.soxSound;
+  result.hunt.preferred = cleanPreferred(result.hunt.preferred);
   // Migrate the old separate town stack targets once. Preserve the active
   // return mode's target; walking-only profiles retain their refill quantities.
   const restock = input.potion?.restock;
@@ -151,9 +178,19 @@ function botProfile(input) {
   }
   // The anti-KS scope only has the two meanings; anything else is the old full behavior.
   if (result.hunt.avoidKsScope !== 'minor') result.hunt.avoidKsScope = 'all';
+  result.hunt.polygon = huntPolygon(result.hunt.polygon);
   // The finish-steal cutoff stops at 50: above it the kill can still be won, so avoiding is pointless.
   if (!Number.isFinite(result.hunt.avoidKsBelow) || result.hunt.avoidKsBelow < 0) result.hunt.avoidKsBelow = 0;
   if (result.hunt.avoidKsBelow > 50) result.hunt.avoidKsBelow = 50;
+  result.macro.emergency = (Array.isArray(result.macro.emergency) ? result.macro.emergency : []).filter(e => e && typeof e === 'object' && Number.isInteger(e.id) && e.id > 0 && EMERGENCY_TRIGGERS.includes(e.trigger)).slice(0, EMERGENCY_MAX)
+    .map(e => ({ id: e.id, group: Number.isInteger(e.group) && e.group > 0 ? e.group : e.id, trigger: e.trigger,
+      value: Number.isFinite(e.value) ? clamp(Math.round(e.value), ...EMERGENCY_LIMITS[e.trigger]) : EMERGENCY_DEFAULT[e.trigger], enabled: e.enabled !== false }));
+  const safety = result.hunt.safety, safetyDefaults = DEFAULT_PROFILE.hunt.safety;
+  safety.deaths = Number.isFinite(safety.deaths) ? clamp(Math.round(safety.deaths), 0, 99) : safetyDefaults.deaths;
+  safety.party.min = Number.isFinite(safety.party.min) ? clamp(Math.round(safety.party.min), 0, 8) : safetyDefaults.party.min;
+  safety.unique.meters = Number.isFinite(safety.unique.meters) ? clamp(Math.round(safety.unique.meters), 5, 200) : safetyDefaults.unique.meters;
+  for (const key of ['party', 'player', 'unique']) if (!SAFETY_ACTIONS.includes(safety[key].action)) safety[key].action = 'stop';
+  safety.player.on = safety.player.on === true; safety.unique.on = safety.unique.on === true;
   const unique = result.unique, uniqueDefaults = DEFAULT_PROFILE.unique;
   unique.spots = (Array.isArray(unique.spots) ? unique.spots : []).filter(s => s && Number.isInteger(s.regionId) && [s.x, s.y ?? 0, s.z].every(Number.isFinite))
     .slice(0, 30).map(s => ({ name: typeof s.name === 'string' ? s.name.trim().slice(0, 32) : '', regionId: s.regionId, x: s.x, y: s.y ?? 0, z: s.z }));

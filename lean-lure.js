@@ -38,10 +38,10 @@ const Lure = {
   },
   // Living monsters already inside the training area (the hunting spot's radius): the ones pulled earlier, still being fought.
   atSpot() {
-    const home = Settings.profile.hunt.center, radius = Settings.profile.hunt.radius;
-    if (!home) return 0;
+    const H = Settings.profile.hunt;
+    if (!H.center) return 0;
     let n = 0;
-    for (const e of World.ents.values()) if (isAttackableMob(e) && dist2D(home, e) <= radius) n++;
+    for (const e of World.ents.values()) if (isAttackableMob(e) && HuntArea.within(H, e)) n++;
     return n;
   },
   // One step towards `destination`; true once there.

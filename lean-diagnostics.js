@@ -133,7 +133,7 @@ const Diagnostics = {
       [why.kind, 'monster type is switched off (Combat > Hunt area > Monster classes)'],
       [why.level, 'level is outside your minimum or maximum level'],
       [why.name, 'name is not in "Only these mobs" or is in "Skip these mobs"'],
-      [why.far, 'too far (Hunt radius or Chase distance)'],
+      [why.far, 'too far (outside the hunting area or beyond Chase distance)'],
       [why.others, 'another player is fighting it'],
       [why.banned, 'recently given up (blocked or cannot be selected)'],
     ].filter(([n]) => n).map(([n, text]) => `${n}: ${text}`);

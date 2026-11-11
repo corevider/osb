@@ -298,3 +298,4 @@ fieldset>input[type=search]{width:100%;margin:2px 0 6px}
 :host(.classic) .activity-history{background:#000;border:1px solid #6d6d78}
 :host(.classic) .item-row{grid-template-columns:26px minmax(0,1fr) 34px 44px repeat(5,44px)}
 }
+.muted[data-level="warn"]{color:#ffc67a}
