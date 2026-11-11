@@ -9,6 +9,7 @@ const TOWN_SETTLE_MS = 60000;
 // The time of the last one is kept in localStorage under TOWN_STALL_KEY, across the reload.
 const TOWN_STALL_RELOAD_GAP_MS = 30 * 60000, TOWN_STALL_KEY = 'sro-lean-town-stall-reload';
 const TOWN_OPEN_WAIT_MS = 60000, TOWN_OPEN_TRIES = 3;
+const TOWN_STOCK_PREFIX = 'town:stock:', TOWN_STOCK_MAX = 20, TOWN_STOCK_UNSOLD_MAX = 20;
 // The service each transaction phase belongs to, to start it over after a stalled transaction.
 const TOWN_SERVICE_OF = { store: 'storage', buy: 'vendor', sell: 'smith', ammo: 'smith' };
 const MASTERY_IDS = [257, 258, 259, 273, 274, 275, 276, 513, 514, 515, 516, 517, 518];
@@ -90,7 +91,49 @@ const Town = {
   // Low-level towns do not sell X-Large potions: the tier found there is remembered per kind, so the low-stock
   // check and the refill count the same potion.
   tier: {},
-  supplies() { return Restock.supplies().map(s => ({ ...s, refObjId: this.tier[s.kind] || (s.kind === 'hp' ? 8 : s.kind === 'mp' ? 15 : s.refObjId) })); },
+  stockCache: null,
+  stockKey() { return World.charName ? TOWN_STOCK_PREFIX + World.charName : ''; },
+  merchantId() { return Number(this.cfg().vendor?.refObjId) || 0; },
+  stockRows() {
+    const key = this.stockKey();
+    if (this.stockCache?.key === key) return this.stockCache.rows;
+    const saved = key ? Store.get(key, null) : null, rows = {};
+    if (saved && typeof saved === 'object' && !Array.isArray(saved)) {
+      for (const [id, row] of Object.entries(saved).slice(0, TOWN_STOCK_MAX)) {
+        if (!/^\d{1,10}$/.test(id) || !row || typeof row !== 'object') continue;
+        const ref = v => Number.isInteger(v) && v > 0 ? v : 0;
+        rows[id] = { hp: ref(row.hp), mp: ref(row.mp), unsold: (Array.isArray(row.unsold) ? row.unsold : []).filter(v => ref(v)).slice(0, TOWN_STOCK_UNSOLD_MAX) };
+      }
+    }
+    this.stockCache = { key, rows };
+    return rows;
+  },
+  stock() { return this.stockRows()[this.merchantId()] || { hp: 0, mp: 0, unsold: [] }; },
+  saveStock(rows) {
+    const key = this.stockKey();
+    if (key) Store.set(key, rows);
+  },
+  remember(change) {
+    const id = this.merchantId();
+    if (!id) return;
+    const rows = this.stockRows(), row = { ...this.stock(), unsold: [...this.stock().unsold] };
+    for (const kind of ['hp', 'mp']) if (change[kind]) row[kind] = change[kind];
+    if (change.unsold && !row.unsold.includes(change.unsold)) row.unsold.push(change.unsold);
+    rows[id] = row;
+    this.saveStock(rows);
+  },
+  forget() {
+    const rows = this.stockRows();
+    this.tier = {};
+    if (!rows[this.merchantId()]) return;
+    delete rows[this.merchantId()];
+    this.saveStock(rows);
+  },
+  supplies() {
+    const stock = this.stock();
+    return Restock.supplies().filter(s => !stock.unsold.includes(s.refObjId))
+      .map(s => ({ ...s, refObjId: this.tier[s.kind] || stock[s.kind] || (s.kind === 'hp' ? 8 : s.kind === 'mp' ? 15 : s.refObjId) }));
+  },
   status() {
     if (this.trip) return this.message + (this.trip.why ? ` (reason: ${this.trip.why})` : '');
     if (this.message.startsWith('Town cycle stopped:')) return this.message;
@@ -127,6 +170,7 @@ const Town = {
       // Save the reachable place the user stands, rather than the NPC/model centre.
       c[role] = { ...p, refObjId: npc.refObjId, name: npc.name,
         npc: { regionId: npc.regionId, x: npc.x, y: npc.y, z: npc.z } };
+      if (role === 'vendor') this.forget();
     }
     this.message = 'Town setup updated.';
     Settings.saveProfile(); UI.toast('Saved town ' + role + '.'); UI.draw();
@@ -202,6 +246,7 @@ const Town = {
       if (!stand.verified) unverified++;
       c[role] = { ...stand.point, refObjId: s.refObjId, name: town.name + ' ' + label,
         npc: { regionId: s.regionId, x: s.x, y: s.y, z: s.z } };
+      if (role === 'vendor') this.forget();
       saved.push(label);
     }
     return { saved, unverified };
@@ -951,12 +996,12 @@ const Town = {
       // No X-Large here: buy the largest potion of this kind the merchant sells instead of stopping the town cycle.
       const price = o => toBigInt(o.price);
       const best = shop.offers.filter(o => Restock.offerKind(o) === s.kind && o.maxStack > 0).sort((x, y) => price(y) > price(x) ? 1 : price(y) < price(x) ? -1 : 0)[0];
-      if (best) { this.tier[s.kind] = s.refObjId = best.refObjId; return; }
+      if (best) { this.tier[s.kind] = s.refObjId = best.refObjId; this.remember({ [s.kind]: best.refObjId }); return; }
     }
     if (!offer || !(offer.maxStack > 0)) {
       // Pet supplies are a convenience here: a merchant without them must not stop the town trip, and must
       // not re-trigger one either: the supply is remembered as unbuyable until the merchant is re-recorded.
-      if (s.kind === 'hgp' || s.kind === 'kit' || s.kind === 'reverse') { t.buySkipped.push(s.refObjId); Restock.unbuyable.add(s.refObjId); this.message = 'This merchant does not sell ' + (s.kind === 'hgp' ? 'HGP recovery potions' : s.kind === 'kit' ? 'pet recovery kits' : 'Reverse Return Scrolls') + '; skipped them for this session.'; UI.toast(this.message, 'warn', 6000); return; }
+      if (s.kind === 'hgp' || s.kind === 'kit' || s.kind === 'reverse') { t.buySkipped.push(s.refObjId); Restock.unbuyable.add(s.refObjId); if (s.kind !== 'reverse') this.remember({ unsold: s.refObjId }); this.message = 'This merchant does not sell ' + (s.kind === 'hgp' ? 'HGP recovery potions' : s.kind === 'kit' ? 'pet recovery kits' : 'Reverse Return Scrolls') + '; skipped them for this session.'; UI.toast(this.message, 'warn', 6000); return; }
       return this.fail(s.kind === 'scroll' ? 'Selected scroll is unavailable here.' : s.kind === 'cure' ? 'Special Universal Pill (small) is unavailable here.' : s.kind === 'vigor' ? 'The selected vigor potion size is unavailable here; choose another size in Supplies.' : 'X-Large ' + s.kind.toUpperCase() + ' potion is unavailable here.');
     }
     const before = Restock.count(s.refObjId), room = World.items().filter(i => i.refObjId === s.refObjId).reduce((n, i) => n + Math.max(0, offer.maxStack - (i.quantity ?? 1)), 0);

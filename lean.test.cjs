@@ -5587,8 +5587,8 @@ test('pet waits for inventory and potion priority without holding up combat', ()
   f.World.gp.inventoryPending = false; f.Potion.lastUse = 100000;
   f.Hunt.tick(); assert.equal(fights, 2); assert.equal(f.Loot.active, null);
 });
-function townFixture() {
-  const f = fixture(), c = f.Town.cfg(), r = f.Restock.cfg(), gp = f.World.gp;
+function townFixture(sharedStorage) {
+  const f = fixture(undefined, sharedStorage), c = f.Town.cfg(), r = f.Restock.cfg(), gp = f.World.gp;
   c.enabled = true; c.arrival = { regionId: 1, x: 100, y: 0, z: 100 }; c.keep = 'favorite';
   for (const [index, role] of ['storage', 'vendor', 'smith', 'gate'].entries()) {
     const npc = { gid: 60 + index, refObjId: 600 + index, kind: role === 'gate' ? 'teleport' : 'npc', name: role, regionId: 1, x: 130 + index * 40, y: 0, z: 100 };
@@ -7995,6 +7995,116 @@ test('a town trip walks only to the services that have something to do', () => {
   gp.inventory.find(i => i.slot === 13).quantity = 1;
   f.Town.begin(); f.Town.arrived();
   assert.deepEqual([...f.Town.trip.order], ['vendor', 'gate'], 'a return scroll to buy is work for the potion merchant');
+});
+function stockFixture(storage, patch = () => {}) {
+  const f = townFixture(storage), gp = f.World.gp;
+  f.World.charName = 'Tester'; f.pet.inventory = [];
+  gp.inventory.find(i => i.slot === 6).durability = 10;
+  gp.inventory = gp.inventory.filter(i => i.slot !== 15);
+  gp.inventory.push({ slot: 15, refObjId: 102, typeFlags: 4332, quantity: 50 });
+  patch(f);
+  return f;
+}
+const smallMerchant = (...extra) => ({ npc: 61, offers: [{ refObjId: 102, tab: 0, slot: 0, maxStack: 100, price: '10', previews: [{ refObjId: 102, typeFlags: 4332 }] }, ...extra] });
+function visitMerchant(f, shop) {
+  const gp = f.World.gp;
+  f.Town.begin(); f.Town.arrived(); assert.ok(f.Town.trip.order.includes('vendor'), 'the merchant is visited: ' + f.Town.trip.order);
+  f.Town.enter('buy'); gp.target = 61; gp.targetCapabilities = 1; gp.shop = shop;
+  for (let i = 0; i < 4 && f.Town.trip?.phase === 'buy'; i++) { f.advance(1000); f.Town.buy(); }
+  f.Town.trip = null; gp.shop = null;
+}
+const skipLines = f => f.Log.lines.filter(l => /Town: nothing to do at the .*potion merchant.*; skipped\./.test(l.text));
+test('town: the potion merchant is visited once to learn the potion size it sells, then skipped after a reload', () => {
+  const storage = new Map();
+  const first = stockFixture(storage);
+  visitMerchant(first, smallMerchant());
+  assert.equal(first.Town.tier.mp, 102);
+  assert.equal(skipLines(first).length, 0);
+  const second = stockFixture(storage);
+  second.Town.begin(); second.Town.arrived();
+  assert.deepEqual([...second.Town.trip.order], ['gate'], 'full supplies of the remembered size: straight to the way back');
+  assert.equal(second.Town.needs('vendor'), false);
+  assert.equal(skipLines(second).length, 1, 'the skip line names the potion merchant');
+  assert.equal(second.Town.reason(), '');
+});
+test('town: low potions of the remembered size still send the trip to the potion merchant', () => {
+  const storage = new Map();
+  visitMerchant(stockFixture(storage), smallMerchant());
+  const low = stockFixture(storage, f => { f.World.gp.inventory.find(i => i.refObjId === 102).quantity = 4; });
+  low.Town.begin(); low.Town.arrived();
+  assert.deepEqual([...low.Town.trip.order], ['vendor', 'gate']);
+  assert.equal(low.Town.reason(), 'potions running low');
+  assert.equal(skipLines(low).length, 0);
+});
+test('town: fewer than two return scrolls still send the trip to the remembered merchant', () => {
+  const storage = new Map();
+  visitMerchant(stockFixture(storage), smallMerchant());
+  const scrolls = stockFixture(storage, f => { f.World.gp.inventory.find(i => i.slot === 13).quantity = 1; });
+  scrolls.Town.begin(); scrolls.Town.arrived();
+  assert.deepEqual([...scrolls.Town.trip.order], ['vendor', 'gate']);
+});
+test('town: a supply the merchant does not sell is found on the first trip and left out after a reload', () => {
+  const storage = new Map();
+  const setup = f => { const r = f.Restock.cfg(); r.mp.refObjId = 102; r.hgp.on = true; r.hgp.refObjId = 3001; r.hgp.low = 5; r.hgp.target = 40; };
+  const first = stockFixture(storage, setup);
+  first.Town.begin(); first.Town.arrived();
+  assert.ok(first.Town.trip.order.includes('vendor'), 'nothing is remembered yet: the merchant is visited');
+  first.Town.enter('buy'); first.World.gp.target = 61; first.World.gp.targetCapabilities = 1; first.World.gp.shop = smallMerchant();
+  for (let i = 0; i < 3; i++) { first.advance(1000); first.Town.buy(); }
+  assert.ok(first.Restock.unbuyable.has(3001), 'the first visit finds out that the merchant does not sell the pet food');
+  const second = stockFixture(storage, setup);
+  assert.equal(second.Town.supplies().some(s => s.kind === 'hgp'), false, 'the unsold supply leaves the supplies');
+  assert.equal(second.Town.reason(), '', 'and does not trigger a trip');
+  second.Town.begin(); second.Town.arrived();
+  assert.deepEqual([...second.Town.trip.order], ['gate']);
+  assert.equal(skipLines(second).length, 1);
+  assert.equal(second.Restock.unbuyable.has(3001), false, 'the restock memory of the other route is left alone');
+});
+test('town: another potion merchant starts with nothing remembered', () => {
+  const storage = new Map();
+  visitMerchant(stockFixture(storage), smallMerchant());
+  const other = stockFixture(storage, f => { f.Town.cfg().vendor.refObjId = 777; });
+  other.Town.begin(); other.Town.arrived();
+  assert.ok(other.Town.trip.order.includes('vendor'));
+  assert.equal(other.Town.tier.mp, undefined);
+  const back = stockFixture(storage);
+  back.Town.begin(); back.Town.arrived();
+  assert.deepEqual([...back.Town.trip.order], ['gate'], 'the first merchant is still remembered');
+});
+test('town: saving the potion merchant again forgets what it sold', () => {
+  const storage = new Map();
+  visitMerchant(stockFixture(storage), smallMerchant());
+  const f = stockFixture(storage); f.Hunt.stop(); f.UI.draw = () => {};
+  const npc = f.World.ents.get(61); f.World.gp.pose = { regionId: 1, x: npc.x, y: 0, z: npc.z - 30 };
+  f.World.gp.target = 61; f.World.gp.targetCapabilities = 1; f.World.gp.shop = smallMerchant();
+  f.Town.save('vendor');
+  f.Town.begin(); f.Town.arrived();
+  assert.ok(f.Town.trip.order.includes('vendor'), f.Town.message);
+});
+test('town: a remembered size the merchant stops selling is learned again', () => {
+  const storage = new Map();
+  visitMerchant(stockFixture(storage), smallMerchant());
+  const f = stockFixture(storage, g => { g.World.gp.inventory.find(i => i.refObjId === 102).quantity = 10; });
+  const bigger = { refObjId: 103, tab: 0, slot: 0, maxStack: 100, price: '20', previews: [{ refObjId: 103, typeFlags: 4332 }] };
+  visitMerchant(f, { npc: 61, offers: [bigger] });
+  assert.equal(f.Town.tier.mp, 103);
+  const g = stockFixture(storage, h => { h.World.gp.inventory = h.World.gp.inventory.filter(i => i.refObjId !== 102).concat([{ slot: 15, refObjId: 103, typeFlags: 4332, quantity: 50 }]); });
+  g.Town.begin(); g.Town.arrived();
+  assert.deepEqual([...g.Town.trip.order], ['gate']);
+});
+test('town: what the merchant sells never reaches a share code or a backup', async () => {
+  const storage = new Map();
+  const f = stockFixture(storage, g => { g.World.gp.inventory.find(i => i.refObjId === 102).refObjId = 7731; });
+  const shop = { npc: 61, offers: [{ refObjId: 7731, tab: 0, slot: 0, maxStack: 100, price: '10', previews: [{ refObjId: 7731, typeFlags: 4332 }] }] };
+  visitMerchant(f, shop);
+  const key = [...storage.keys()].find(k => /town:stock:Tester$/.test(k));
+  assert.ok(key && storage.get(key).includes('7731'), 'the merchant memory is in the per-character browser storage');
+  assert.ok(!f.ProfileShare.text(true).includes('7731') && !f.ProfileShare.text(false).includes('7731'));
+  assert.ok(!JSON.stringify(f.Settings.profile).includes('7731'));
+  const code = await f.ProfileShare.encode(f.ProfileShare.text(true)), g = fixture(undefined, storage);
+  g.ProfileShare.pending = await g.ProfileShare.preview(code); g.ProfileShare.apply();
+  const backup = [...storage.entries()].filter(([k]) => /backup:/.test(k));
+  assert.ok(backup.length && backup.every(([, v]) => !v.includes('7731')));
 });
 test('town recall accepts landing variation around the saved arrival area', () => {
   const f = townFixture(); f.Town.tick(); f.Town.phase('entering-world');
