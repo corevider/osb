@@ -207,6 +207,17 @@ A member who died while out of view is often drawn standing when you get back to
 
 The game keeps no party list entry for an outsider, so the bot reads their death from the body alone: a corpse, or a server HP of 0 (sent when the player came into view). A standing outsider without known HP counts as alive, so one who died out of view is resurrected once the game draws the corpse or sends their HP. If the game refuses Rebirth on a listed player (a cast refusal right after the cast), the Activity log says so once and the bot skips that player for 10 minutes. An unanswered offer is repeated after its 30-second answer window, as for party members.
 
+### How often Rebirth is offered again
+
+Two numbers next to the resurrection options set how often the bot tries. They apply to party members and to listed players outside the party alike.
+
+- **Wait between resurrection attempts (s)** is the time from one Rebirth offer to the next offer to the same player, while that player stays dead. The default is 31 s: the game's 30-second answer window plus one tick. It cannot be set lower, because what the game does with a second offer inside the answer window is not known (see below). The highest value is 300 s.
+- **Max resurrection attempts per player (0 = no limit)** stops offering Rebirth to a player after that many offers. The default is 0, no limit, as before. When the last offer has run out unanswered, the Activity log and the status line say "Resurrection attempts used up for <name>" once. The count starts again when that player is alive again, leaves the party or the list, or when you press Start.
+
+The skip of 10 minutes after the game refuses Rebirth on a listed player is not changed by these numbers. Saved settings, profiles, share codes and backups carry both numbers; older files load with 31 s and no limit.
+
+Why 31 s at the least: the bot cannot see the dead player's answer, a refusal or a timeout. A new offer sent while the old one is still open would cost MP and a Rebirth cooldown, and the game might refuse it, replace the open question or ignore it. This has not been checked in a live game, so the bot never offers inside the answer window.
+
 ## Accepting resurrection
 
 Tick **Accept resurrection from party members** on the **Party** page. When you are dead and a party member casts Rebirth on you, the bot answers Yes, whether or not hunting is running. Offers from players outside your party, and mutation offers, are left to you. The switch is off by default and saved per character.
@@ -391,6 +402,23 @@ On the **Items** page, **Pick always** takes one exact item whatever the Loot sw
 ## Pick up drops
 
 **Loot → Collection → Pick up drops** is the master switch for picking up. With it off, drops stay on the ground whatever the kinds below say. It is the first control of the group and is the same setting as the **Turn on** button of the "What to pick up" row on the Setup page.
+
+### The pet while you play by hand
+
+**Loot → Collection → Pet keeps collecting while I play by hand** is on by default. When you walk, attack or use skills yourself, the bot pauses for **Manual control pause (s)** (6 s by default). With this switch on, that pause no longer stops the pickup pet: only the pet moves, never your character, so it keeps collecting while you play, with the bot running or stopped. The character's own pickups and hunting still pause as before. Turn it off to have the pet wait for the pause too, as in 2.0.4. Saved settings, profiles, share codes and backups carry the switch; older files load with it on.
+
+The game allows one inventory action at a time. While a pet pickup holds it, the game greys out its inventory buttons, the Item Mall buttons included, and quietly ignores an item use, a move or a purchase. So your own use of the inventory always goes first, with the switch on or off:
+
+- After you use or move an item, drop an item, pick something up yourself, or use a shop, the storage, a trade, a stall or alchemy, the pet sends no new pickup for 2.5 s. Walking, attacking and skills do not hold the pet.
+- After you open or use the Item Mall, the pet sends no new pickup for 60 s, counted again from each mall action. The bot cannot see whether the mall window is still open, so it waits this long instead.
+- While a trade, a stall or the alchemy window is open, and while a shop or the storage is open, the pet waits.
+- After each pet pickup the bot waits 0.8 s before the next one, so a click of yours can get in between.
+- A drop the pet cannot reach is given up until it disappears once the pet has failed on it 6 times, or once its pickups have held the inventory for 15 s in total. A drop the pet can reach is collected as before.
+- The bot never repeats or blocks a command of yours. An Item Mall purchase is never sent again.
+
+The bot's own item moves and drops (item rules, pet-to-bag balance) and its Item Mall buying wait the same way. Potions are never held back.
+
+The pet status line under Loot → Collection shows how much of the last minute pet pickups held the inventory, for example "Inventory held by pet pickups: 12% of the last minute." To see each pickup, turn on **detailed capture (10 minutes)** in the Activity log: every pet pickup then writes "Pet pickup held the inventory for N ms." These numbers stay on your computer; nothing is sent.
 
 ## Who picks up what
 

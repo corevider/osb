@@ -2760,6 +2760,175 @@ function petFight(f) {
   return pet;
 }
 function idleFor(f, ms) { for (let t = 0; t < ms; t += 100) { f.advance(100); f.Controller.tick(); } }
+function play(f, kind, extra = {}) { for (const fn of f.Hook.observers) fn({ kind: 'gameplay', command: { kind, ...extra } }); }
+const petSends = f => f.commands.filter(c => c.kind === 'cos-pickup').length;
+const PLAYER_KINDS = ['ground-move', 'move', 'select', 'attack', 'skill', 'pickup', 'cos-attack', 'item-use', 'item-drop', 'inventory-move', 'avatar-move',
+  'storage-move', 'cos-transfer', 'shop-buy', 'shop-sell', 'mall-open', 'mall-buy', 'stall-add', 'exchange-request', 'alchemy-start'];
+test('with "Pet keeps collecting while I play by hand" on, the pet collects through manual attack, skill and walking, stopped and hunting', () => {
+  for (const hunting of [false, true]) {
+    const f = fixture(), pet = pickupPet(f, 0x147); f.drop(20, 3436);
+    assert.equal(f.Settings.profile.hunt.pickup.petWhileManual, true, 'on by default');
+    if (hunting) f.Hunt.start();
+    const kinds = ['attack', 'skill', 'ground-move'];
+    for (let i = 0; i < 9; i++) { play(f, kinds[i % 3], { gid: 30 }); f.advance(1000); f.Controller.tick(); }
+    assert.equal(f.Manual.lastAt > 100000, true);
+    assert.equal(petSends(f), 1, (hunting ? 'hunting' : 'stopped') + ': the pet pickup starts while the player clicks');
+    assert.equal(f.Loot.active?.petGid, 50, 'and is not dropped by the next manual command');
+    if (hunting) { assert.equal(f.Controller.mode, 'manual', 'hunting itself still pauses'); assert.equal(f.commands.some(c => ['attack', 'skill', 'move', 'select'].includes(c.kind)), false); }
+    pet.inventory.push({ slot: 0, refObjId: 101, quantity: 1 });
+    play(f, 'attack', { gid: 30 }); f.advance(100); f.Controller.tick();
+    assert.equal(f.Loot.active, null, 'the pickup completes during manual play'); assert.equal(f.Loot.skips.get(20)?.bag, null);
+  }
+});
+test('with the pet switch on, the character\'s own pickups and hunting still pause after a manual command', () => {
+  const f = fixture(); pickupPet(f, 0x147); const P = f.Settings.profile.hunt.pickup;
+  P.by = { elixirs: 'pet', potions: 'character' }; P.potions = true; P.afterKillOnly = false;
+  f.drop(21, 2284); f.Hunt.start();
+  play(f, 'ground-move'); f.advance(100); f.Controller.tick();
+  assert.equal(f.commands.some(c => c.kind === 'pickup'), false, 'no character pickup during the manual pause');
+  assert.equal(f.Controller.mode, 'manual');
+  f.drop(20, 3436); f.advance(100); f.Controller.tick();
+  assert.equal(petSends(f), 1, 'the pet drop is taken meanwhile');
+  f.World.ents.delete(20); f.Loot.suspend(); f.advance(6100); f.Controller.tick();
+  assert.equal(f.commands.at(-1).kind, 'pickup', 'the character picks up once the pause is over');
+});
+test('with the pet switch off, manual play pauses and drops pet pickups exactly as before', () => {
+  for (const hunting of [false, true]) {
+    const f = fixture(); pickupPet(f, 0x147); f.drop(20, 3436); f.Settings.profile.hunt.pickup.petWhileManual = false;
+    if (hunting) f.Hunt.start();
+    f.advance(100); f.Controller.tick(); assert.equal(petSends(f), 1); assert.equal(f.Loot.active?.petGid, 50);
+    play(f, 'attack', { gid: 30 }); f.advance(100); f.Controller.tick();
+    assert.equal(f.Loot.active, null, 'a manual command drops the pet pickup');
+    for (let i = 0; i < 5; i++) { f.advance(1000); f.Controller.tick(); }
+    assert.equal(petSends(f), 1, 'and nothing is sent during the pause');
+    f.advance(1100); f.Controller.tick(); assert.equal(petSends(f), 2, 'then the pet starts again');
+  }
+});
+test('the player\'s inventory commands and windows hold new pet pickups; walking and fighting do not; nothing is resent or swallowed', () => {
+  const holds = { 'item-use': 2500, 'item-drop': 2500, 'inventory-move': 2500, 'avatar-move': 2500, 'storage-move': 2500, 'cos-transfer': 2500, 'shop-buy': 2500,
+    'shop-sell': 2500, 'stall-add': 2500, 'exchange-request': 2500, 'alchemy-start': 2500, pickup: 2500, 'mall-buy': 60000, 'mall-open': 60000 };
+  for (const kind of PLAYER_KINDS) {
+    const f = fixture(); pickupPet(f, 0x147); f.drop(20, 3436);
+    play(f, kind, { gid: 30, slot: 14 }); f.Controller.tick();
+    const hold = holds[kind];
+    if (!hold) { assert.equal(petSends(f), 1, kind + ' does not hold the pet'); continue; }
+    assert.equal(petSends(f), 0, kind + ' holds the pet');
+    assert.match(f.Loot.petStatus(), /Pet waiting: you are using the (inventory|Item Mall)\./);
+    f.advance(hold - 100); f.Controller.tick(); assert.equal(petSends(f), 0, kind + ' still held');
+    f.advance(100); f.Controller.tick(); assert.equal(petSends(f), 1, kind + ' released after ' + hold + ' ms');
+    assert.deepEqual(f.commands.map(c => c.kind), ['cos-pickup'], 'only the bot\'s own pet pickup is sent, never a player command');
+  }
+  for (const [label, change] of [['trade', gp => { gp.exchange = { open: true }; }], ['trade request', gp => { gp.exchange = { requesting: true }; }],
+    ['stall', gp => { gp.stall = { phase: 'open' }; }], ['alchemy', gp => { gp.alchemy = { visible: true }; }]]) {
+    const f = fixture(); pickupPet(f, 0x147); f.drop(20, 3436); change(f.World.gp);
+    f.Controller.tick(); assert.equal(petSends(f), 0, label + ' window holds the pet');
+    f.World.gp.exchange = f.World.gp.stall = f.World.gp.alchemy = undefined; f.Controller.tick(); assert.equal(petSends(f), 1, label + ' closed');
+  }
+  const f = fixture(); assert.equal(f.Hook.guards.length, 0, 'OSB never swallows a game command');
+});
+test('the pet waits a short gap after its own pickup releases the inventory, measures the lock and reports its share', () => {
+  const f = fixture(), pet = pickupPet(f, 0x147); f.drop(20, 3436); const second = f.drop(21, 3436); second.x = 250; f.Activity.capture(true);
+  f.Controller.tick(); assert.equal(petSends(f), 1);
+  f.World.gp.inventoryPending = true; f.advance(100); f.Controller.tick();
+  f.advance(1400); f.World.gp.inventoryPending = false; pet.inventory.push({ slot: 0, refObjId: 101, quantity: 1 }); f.Controller.tick();
+  assert.equal(f.Loot.active, null);
+  const held = f.Activity.commands.filter(e => e.code === 'pet-lock-held');
+  assert.equal(held.length, 1); assert.equal(held[0].details.durationMs, 1400); assert.equal(held[0].text, 'Pet pickup held the inventory for 1400 ms.');
+  assert.ok(Math.abs(f.Loot.lockShare() - 1400 / 60000) < 1e-9);
+  assert.match(f.Loot.petStatus(), /Inventory held by pet pickups: 2% of the last minute\./);
+  assert.match(f.Diagnostics.pet(), /Inventory held by pet pickups: 2%/);
+  f.World.ents.delete(20); f.advance(700); f.Controller.tick(); assert.equal(petSends(f), 1, 'inside the gap');
+  f.advance(100); f.Controller.tick(); assert.equal(petSends(f), 2, 'the gap is 800 ms');
+  f.advance(61000); assert.equal(f.Loot.lockShare(), 0, 'the share covers the last minute only');
+  const g = fixture(); pickupPet(g, 0x147); g.drop(20, 3436); g.Activity.capture(true);
+  g.World.gp.inventoryPending = true; g.Controller.tick(); g.advance(1000); g.World.gp.inventoryPending = false; g.Controller.tick();
+  assert.equal(petSends(g), 1, 'a lock that was not the pet\'s (a potion) leaves no gap');
+  assert.equal(g.Activity.commands.some(e => e.code === 'pet-lock-held'), false);
+});
+test('an unreachable drop stops taking the inventory lock within its bound, and a reachable one is still collected', () => {
+  for (const [holdMs, bound] of [[300, 6], [9000, 2]]) {
+    const f = fixture(), pet = pickupPet(f, 0x147); f.drop(20, 3436);
+    let sentAt = -1, count = 0;
+    for (let i = 0; i < 6000; i++) {
+      f.advance(100); f.Controller.tick();
+      if (petSends(f) > count) { count = petSends(f); sentAt = i; f.World.gp.inventoryPending = true; }
+      if (f.World.gp.inventoryPending && (i - sentAt) * 100 >= holdMs) f.World.gp.inventoryPending = false;
+    }
+    assert.equal(count, bound, `holding ${holdMs} ms per try: given up after ${bound} tries`);
+    assert.equal(f.Loot.skips.get(20).until, Infinity, 'left until it despawns');
+    assert.ok(f.Log.lines.some(l => /the pet gives up on this drop/.test(l.text)));
+    const near = f.drop(21, 3436); near.x = 110; f.advance(1000); f.Controller.tick(); assert.equal(f.commands.at(-1).target, 21);
+    pet.inventory.push({ slot: 0, refObjId: 101, quantity: 1 }); f.advance(100); f.Controller.tick();
+    assert.equal(f.Loot.active, null); assert.equal(f.Loot.skips.get(21).until < Infinity, true, 'the reachable drop is collected');
+    f.bus.emit('despawn', { gid: 20 }); assert.equal(f.Loot.skips.has(20), false);
+  }
+  const f = fixture(); pickupPet(f, 0x147); const d = f.drop(20, 3436); f.Settings.profile.hunt.pickup.retries = 3; f.Loot.begin(d);
+  for (let i = 0; i < 4; i++) { f.bus.emit('game-error', 'Inventory command unavailable'); f.Loot.tick(); f.advance(800); f.Loot.tick(); }
+  assert.equal(f.Loot.spent.get(20).attempts, 0, 'busy refusals never took the lock and do not count');
+});
+test('the pet switch persists, travels in shares and backups, and old files load with it on', async () => {
+  const f = fixture(), P = f.Settings.profile.hunt.pickup;
+  assert.equal(f.botProfile({ hunt: { pickup: { collector: 'pet' } } }).hunt.pickup.petWhileManual, true);
+  P.petWhileManual = false; f.Settings.saveProfile();
+  assert.equal(f.botProfile(JSON.parse(JSON.stringify(f.Settings.profile))).hunt.pickup.petWhileManual, false);
+  assert.equal(JSON.parse(f.ProfileShare.text(false)).profile.hunt.pickup.petWhileManual, false);
+  const code = await f.ProfileShare.encode(f.ProfileShare.text(true)), g = fixture();
+  g.ProfileShare.pending = await g.ProfileShare.preview(code); assert.equal(g.ProfileShare.apply(), true);
+  assert.equal(g.Settings.profile.hunt.pickup.petWhileManual, false);
+  const u = fixture(); u.storage.set('sroBotLean:v1:backup:profile:default', JSON.stringify({ at: 1, profile: { hunt: { pickup: { enabled: true } } } }));
+  assert.equal(u.ProfileShare.undo(), true); assert.equal(u.Settings.profile.hunt.pickup.petWhileManual, true);
+});
+test('the bot\'s own item drops and Item Mall orders wait while the player uses the inventory or the mall', () => {
+  const f = townFixture(), gp = f.World.gp;
+  gp.inventory.push({ slot: 20, refObjId: 1003, typeFlags: 108, quantity: 1 });
+  f.ItemRules.set([1003], { act: 'drop' });
+  play(f, 'item-use', { slot: 14 });
+  assert.equal(f.ItemRules.dropTick(), false); assert.equal(f.commands.some(c => c.kind === 'item-drop' || c.kind === 'cos-drop'), false, 'held after the player\'s item use');
+  f.advance(2500); f.ItemRules.dropTick(); assert.equal(['item-drop', 'cos-drop'].includes(f.commands.at(-1).kind), true, 'then the rule runs');
+  const g = fixture(); g.Hunt.start(); Object.assign(g.Settings.profile.mall, { budgetSilk: 100, on: true }); g.Settings.profile.mall.hp.on = true;
+  play(g, 'mall-open'); assert.equal(g.MallBuyer.tick(), false); assert.equal(g.commands.some(c => c.kind.startsWith('mall-')), false, 'no bot mall command while the player uses the mall');
+  g.advance(60000); g.MallBuyer.tick(); assert.equal(g.commands.some(c => c.kind === 'mall-open'), true, 'the bot reads the catalogue once the hold is over');
+});
+test('resurrection waits the chosen time between offers and old files keep 31 s with no limit', async () => {
+  const f = fixture(); resurrection(f); f.Settings.profile.party.resWaitS = 60;
+  f.Controller.tick(); assert.equal(casts(f).length, 2);
+  f.advance(59900); f.Controller.tick(); assert.equal(casts(f).length, 2, 'not before the wait');
+  f.advance(100); f.Controller.tick(); assert.equal(casts(f).length, 4, 'offered again after 60 s');
+  const g = fixture(); resurrection(g); g.Settings.profile.party.resWaitS = 5;
+  assert.equal(g.Resurrect.waitMs(), 31000, 'never inside the 30 s answer window');
+  g.Settings.profile.party.resWaitS = 9999; assert.equal(g.Resurrect.waitMs(), 300000);
+  const old = f.botProfile({ party: { autoRes: true } }).party;
+  assert.equal(old.resWaitS, 31); assert.equal(old.resMax, 0);
+  const d = fixture(); resurrection(d);
+  for (let i = 0; i < 20; i++) { d.Controller.tick(); d.advance(31000); }
+  assert.equal(casts(d).length, 40, 'no limit and 31 s: one offer every 31 s, as in 2.0.4');
+  const p = f.Settings.profile.party; Object.assign(p, { resWaitS: 45, resMax: 3 }); f.Settings.saveProfile();
+  const saved = f.botProfile(JSON.parse(JSON.stringify(f.Settings.profile))).party; assert.equal(saved.resWaitS, 45); assert.equal(saved.resMax, 3);
+  const backup = JSON.parse(f.ProfileShare.text(false)); assert.equal(backup.profile.party.resWaitS, 45); assert.equal(backup.profile.party.resMax, 3);
+  const code = await f.ProfileShare.encode(f.ProfileShare.text(true)), h = fixture();
+  h.ProfileShare.pending = await h.ProfileShare.preview(code); assert.equal(h.ProfileShare.apply(), true);
+  assert.equal(h.Settings.profile.party.resWaitS, 45); assert.equal(h.Settings.profile.party.resMax, 3);
+  const u = fixture(); u.storage.set('sroBotLean:v1:backup:profile:default', JSON.stringify({ at: 1, profile: { party: { autoRes: true } } }));
+  assert.equal(u.ProfileShare.undo(), true); assert.equal(u.Settings.profile.party.resWaitS, 31); assert.equal(u.Settings.profile.party.resMax, 0);
+});
+test('the maximum resurrection attempts stop offers to that player, log it once and start again when they are alive or the bot starts', () => {
+  const f = fixture(), mate = resurrection(f); f.Settings.profile.party.resMax = 2;
+  f.Controller.tick(); f.advance(31000); f.Controller.tick(); assert.equal(casts(f).length, 4);
+  for (let i = 0; i < 5; i++) { f.advance(31000); f.Controller.tick(); }
+  assert.equal(casts(f).length, 4, 'no third offer');
+  const used = f.Log.lines.filter(l => /Resurrection attempts used up for Mate \(2\); no more Rebirth until they are alive again\./.test(l.text));
+  assert.equal(used.length, 1, 'logged once'); assert.match(f.Resurrect.message, /attempts used up for Mate/);
+  mate.status = 10; f.advance(1000); f.Controller.tick(); mate.status = 0; f.advance(1000); f.Controller.tick();
+  assert.equal(casts(f).length, 6, 'alive again: the count starts again');
+  f.advance(31000); f.Controller.tick(); assert.equal(casts(f).length, 8);
+  f.advance(31000); f.Controller.tick(); assert.equal(casts(f).length, 8, 'used up again');
+  f.Hunt.start(); f.advance(1000); f.Controller.tick(); assert.equal(casts(f).length, 10, 'pressing Start starts the count again');
+  const o = fixture(); outsiderRes(o); o.Settings.profile.party.resMax = 1;
+  o.Controller.tick(); o.advance(31000); o.Controller.tick(); assert.equal(casts(o).length, 2, 'listed outsiders are limited too');
+  assert.ok(o.Log.lines.some(l => /attempts used up for Lure \(not in the party\) \(1\)/.test(l.text)));
+  o.Settings.profile.party.resNames = 'Spare'; o.Controller.tick(); o.Settings.profile.party.resNames = 'Lure'; o.advance(1000); o.Controller.tick();
+  assert.equal(casts(o).length, 4, 'taken off the list and back: the count starts again');
+});
 test('a support character with Attack monsters off never starts a fight, and is not stopped as stuck', () => {
   const f = fixture(); f.Hunt.start(); let fights = 0;
   f.Combat.fight = () => { fights++; };

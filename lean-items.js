@@ -151,7 +151,7 @@ const ItemRules = {
   // that receives, so loot keeps flowing. Protected gear, supplies the trip needs and worn gear never move.
   balanceTick() {
     const gp = World.gp, pet = Loot.pet();
-    if (!(this.cfg().balance || this.cfg().petToBag) || !pet || !Hunt.running || Town.trip || !World.inWorld() || World.isDead() || !gp || gp.inventoryPending || gp.storage || gp.exchange?.open || Restock.activeShop()) return false;
+    if (!(this.cfg().balance || this.cfg().petToBag) || !pet || !Hunt.running || Town.trip || !World.inWorld() || World.isDead() || !gp || gp.inventoryPending || Loot.playerFirst() || gp.storage || gp.exchange?.open || Restock.activeShop()) return false;
     const t = now(), b = this.balancing, equipped = gp.equipmentSlotCount || 13;
     if (b) {
       const moved = (b.toPet ? Loot.items(pet) : World.items()).some(i => i.slot === b.destination && i.refObjId === b.ref);
@@ -184,7 +184,7 @@ const ItemRules = {
   // hunting and outside town service and open windows. A drop counts once the item has left that slot.
   dropTick() {
     const gp = World.gp;
-    if (!Hunt.running || Town.trip || !World.inWorld() || World.isDead() || !gp || gp.inventoryPending || gp.storage || gp.exchange?.open || Restock.activeShop()) return false;
+    if (!Hunt.running || Town.trip || !World.inWorld() || World.isDead() || !gp || gp.inventoryPending || Loot.playerFirst() || gp.storage || gp.exchange?.open || Restock.activeShop()) return false;
     const t = now(), d = this.dropping;
     if (d) {
       const still = (d.pet ? Loot.items(d.pet) : World.items()).some(i => i.slot === d.slot && i.refObjId === d.ref);

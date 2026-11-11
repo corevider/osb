@@ -11,21 +11,36 @@ const RES_ALIVE_MS = 30000; // a standing member the server reports alive is che
 const RES_REFUSED_MS = 10 * 60000;
 const RES_REFUSAL_MS = 3000;
 const RES_NAMES_MAX = 20;
+const RES_WAIT_MIN_S = 31, RES_WAIT_MAX_S = 300, RES_TRIES_MAX = 99;
 const Resurrect = {
   sent: {},           // member id -> time of the unanswered proposal
   checked: {},        // member id -> time until which a standing member counts as alive
   refused: {},
+  tries: {},
+  usedUp: {},
   lastCast: null,
   nextAt: -Infinity,  // earliest next attempt
   holdUntil: 0,
   trip: null,
-  windowMs: 31000,    // the server's answer window plus one tick
   message: 'No fallen party member.',
   reset() {
-    this.cancelTrip('', true); this.sent = {}; this.checked = {}; this.refused = {}; this.lastCast = null;
+    this.cancelTrip('', true); this.sent = {}; this.checked = {}; this.refused = {}; this.tries = {}; this.usedUp = {}; this.lastCast = null;
     this.nextAt = -Infinity; this.holdUntil = 0; this.message = 'No fallen party member.';
   },
   names() { return Party.names(Settings.profile.party.resNames).slice(0, RES_NAMES_MAX); },
+  waitMs() { return clamp(Math.round(Number(Settings.profile.party.resWaitS) || RES_WAIT_MIN_S), RES_WAIT_MIN_S, RES_WAIT_MAX_S) * 1000; },
+  maxTries() { return clamp(Math.round(Number(Settings.profile.party.resMax) || 0), 0, RES_TRIES_MAX); },
+  spent(w) {
+    const max = this.maxTries();
+    if (!max || (this.tries[w.key] || 0) < max) return false;
+    if (!this.usedUp[w.key]) {
+      this.usedUp[w.key] = true;
+      Log.info(this.usedUpText(w.name + (w.outsider ? ' (not in the party)' : ''), max));
+    }
+    return true;
+  },
+  usedUpText(label, max) { return 'Resurrection attempts used up for ' + label + ' (' + max + '); no more Rebirth until they are alive again.'; },
+  newRun() { this.tries = {}; this.usedUp = {}; },
   lower(name) { return String(name || '').trim().toLowerCase(); },
   key(name) { return 'name:' + this.lower(name); },
   outsiderDead(e) { return e.appearanceState?.[0] === 2 || World.hpOf(e.gid) === 0; },
@@ -148,7 +163,7 @@ const Resurrect = {
     const party = members.filter(m => m && m.id && m.name && m.name !== social.localName);
     const outsiders = this.outsiders(social, names);
     const t = now();
-    for (const list of [this.sent, this.checked]) for (const id of Object.keys(list)) {
+    for (const list of [this.sent, this.checked, this.tries, this.usedUp]) for (const id of Object.keys(list)) {
       if (id.startsWith('name:')) {
         const e = outsiders.find(x => this.key(x.name) === id);
         if (!names.includes(id.slice(5)) || e && !this.outsiderDead(e)) delete list[id];
@@ -162,8 +177,9 @@ const Resurrect = {
       ...party.filter(m => c.autoRes || names.includes(this.lower(m.name))).map(m => ({ key: m.id, name: m.name, member: m })),
       ...outsiders.map(e => ({ key: this.key(e.name), name: e.name, body: e, outsider: true })),
     ];
-    const offered = wanted.find(w => this.sent[w.key]);
+    const offered = wanted.find(w => this.sent[w.key] && !this.usedUp[w.key]), finished = wanted.find(w => this.usedUp[w.key]);
     this.message = offered ? 'Resurrection offered: ' + offered.name + '; waiting for the answer.' :
+      finished ? this.usedUpText(finished.name + (finished.outsider ? ' (not in the party)' : ''), this.maxTries()) :
       c.autoRes ? 'Watching for fallen party members.' : 'Watching for fallen players on the resurrect list.';
     const skill = this.skill();
     if (!skill) { this.cancelTrip('', true); this.message = 'No learned resurrection skill (Rebirth) was found.'; return; }
@@ -173,7 +189,8 @@ const Resurrect = {
         now() - Combat.lastCastAt < Settings.profile.macro.castGapMs || !Combat.mpOk(skill.id, World.me())) return !!this.trip;
     for (const w of wanted) {
       const m = w.member;
-      if (m && (m.status & 15) !== 0 || this.sent[w.key] && t - this.sent[w.key] < this.windowMs || this.checked[w.key] > t || this.refused[w.key] > t) continue;
+      if (m && (m.status & 15) !== 0 || this.sent[w.key] && t - this.sent[w.key] < this.waitMs() || this.checked[w.key] > t || this.refused[w.key] > t) continue;
+      if (this.spent(w)) { this.message = this.usedUpText(w.name + (w.outsider ? ' (not in the party)' : ''), this.maxTries()); continue; }
       // The corpse must be in view as an entity to aim the select at.
       const e = w.body || [...World.ents.values()].find(x => x && x.kind === 'player' && x.name === m.name);
       if (!e) continue;
@@ -203,6 +220,7 @@ const Resurrect = {
       this.nextAt = t + 700;
       const first = this.sent[w.key] === undefined;
       this.sent[w.key] = t;
+      this.tries[w.key] = (this.tries[w.key] || 0) + 1;
       const label = e.name + (w.outsider ? ' (not in the party)' : '');
       this.message = 'Resurrection offered: ' + label + '; waiting for the answer.';
       if (first) UI.toast('Resurrection offered: ' + label, 'info', 3000);
@@ -212,3 +230,4 @@ const Resurrect = {
   },
 };
 bus.on('game-error', text => Resurrect.noteRefusal(text));
+bus.on('hunt', running => { if (running) Resurrect.newRun(); });

@@ -818,6 +818,9 @@ const UI = {
       const L = () => H().pickup;
       const options = this.group('Collection', this.check('Pick up drops', () => L().enabled, v => L().enabled = v));
       options.append(this.select('Default collector', [['character', 'Character'], ['pet', 'Pickup pet']], () => L().collector, v => { L().collector = v; Loot.reset(); }));
+      const petManual = this.check('Pet keeps collecting while I play by hand', () => L().petWhileManual !== false, v => L().petWhileManual = v);
+      petManual.title = 'On: when you walk, attack or use skills yourself, the pickup pet keeps collecting; only the pet moves. Your own item use, Item Mall, shops, storage, trade and stall always go first. Off: the pet waits for the manual-control pause, like the character.';
+      options.append(petManual);
       options.append(this.check('Chime when pet bag is full', () => L().petFullSound, v => { L().petFullSound = v; Loot.fullAlert = null; }), this.button('Test pet chime', () => Sound.test()),
         ...SOX_SEALS.map((seal, i) => this.check(`Chime and notice when ${['Star', 'Moon', 'Sun'][i]} gear is picked up`, () => L().soxSeals[seal], v => L().soxSeals[seal] = v)), this.button('Test SoX chime', () => Sound.test('sox')));
       this.petNote = el('p', '', 'muted pet-note'); options.append(this.petNote);
@@ -827,7 +830,7 @@ const UI = {
         this.number('Retries after first attempt', () => L().retries, v => L().retries = v, 0, 3),
         this.text('Always include names', () => L().include, v => L().include = v),
         this.text('Exclude names', () => L().exclude, v => L().exclude = v),
-        el('p', 'Pets collect during combat regardless of the finish-fight setting, which applies to the character only. Inventory transactions and potion priority can briefly delay pet requests. Equipment: only SoX takes Star, Moon and Sun gear and leaves plain equipment, even when Equipment or an Always include name matches it; other items follow their own switches. It needs the item catalogue, which loads automatically. When several drops are eligible, Star, Moon and Sun gear is collected first (Sun before Moon before Star) whatever the distance; without the catalogue the nearest drop goes first. Presets clear Always include names; exclusions still apply. Other items excludes the separate categories above. Ownership and bag capacity always apply. Failed pickups use a backoff.', 'muted'));
+        el('p', 'Pets collect during combat regardless of the finish-fight setting, which applies to the character only. Inventory transactions, potion priority and your own item, Item Mall, shop, storage, trade and stall use can briefly delay pet requests. Equipment: only SoX takes Star, Moon and Sun gear and leaves plain equipment, even when Equipment or an Always include name matches it; other items follow their own switches. It needs the item catalogue, which loads automatically. When several drops are eligible, Star, Moon and Sun gear is collected first (Sun before Moon before Star) whatever the distance; without the catalogue the nearest drop goes first. Presets clear Always include names; exclusions still apply. Other items excludes the separate categories above. Ownership and bag capacity always apply. Failed pickups use a backoff.', 'muted'));
       host.append(options);
       host.append(this.group('Alert sounds',
         this.check('Chime when another player comes near', () => Settings.profile.sounds.player, v => Settings.profile.sounds.player = v),
@@ -1241,8 +1244,10 @@ const UI = {
         this.check('Auto-resurrect party members', () => party().autoRes, v => { party().autoRes = v; Resurrect.reset(); }),
         this.text('Also resurrect these players (not in the party)', () => party().resNames, v => { party().resNames = v; Resurrect.reset(); }, 'names, comma separated'),
         this.number('Maximum res distance from hunt spot (m)', () => party().resRadius / 10, v => party().resRadius = v * 10, 1, 100),
+        this.number('Wait between resurrection attempts (s)', () => party().resWaitS, v => party().resWaitS = v, 31, 300),
+        this.number('Max resurrection attempts per player (0 = no limit)', () => party().resMax, v => party().resMax = v, 0, 99),
         el('p', 'For helpers outside the party, such as a lure while the party is full. Up to 20 names, any letter case. A listed player is resurrected like a party member, even with Auto-resurrect party members off; nobody else outside the party is. If the game refuses Rebirth on one of them, the bot logs it and skips that player for 10 minutes.', 'muted'),
-        el('p', 'Works during hunting and while stopped. Walks into skill range for visible dead members within the maximum radius, casts Rebirth, then returns. During hunting the radius is measured from the saved hunt spot; while stopped it uses your starting position. Collision data is required for walking. Travel stops after 30 seconds or 12 seconds without progress per leg. The member must accept the revival. Travel, shopping and manual control take priority.', 'muted')));
+        el('p', 'Works during hunting and while stopped. Walks into skill range for visible dead members within the maximum radius, casts Rebirth, then returns. During hunting the radius is measured from the saved hunt spot; while stopped it uses your starting position. Collision data is required for walking. Travel stops after 30 seconds or 12 seconds without progress per leg. The member must accept the revival. Rebirth is offered again after the wait (31 s by default: the game’s 30 s answer window plus one tick) for as long as they stay dead, up to the maximum attempts per player (0 = no limit). The count starts again when they are alive, leave the party or the list, or you press Start. Travel, shopping and manual control take priority.', 'muted')));
   },
   section_combatLure(host) { Lure.draw(host); },
   section_combatPet(host) {

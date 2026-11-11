@@ -1,10 +1,26 @@
 // One pickup intent at a time. Progress, inventory changes and failures own its lifetime.
+const PET_GAP_MS = 800;
+const PLAYER_INV_HOLD_MS = 2500;
+const PLAYER_MALL_HOLD_MS = 60000;
+const PET_LOCK_LINK_MS = 1500;
+const PET_LOCK_WINDOW_MS = 60000;
+const PET_GIVE_UP_ATTEMPTS = 6;
+const PET_LOCK_BUDGET_MS = 15000;
+const PLAYER_INV_KINDS = new Set(['item-use', 'item-drop', 'inventory-move', 'avatar-move', 'equip', 'pickup', 'cos-pickup', 'cos-transfer', 'cos-drop', 'immortal', 'attr']);
+const PLAYER_INV_PREFIXES = /^(?:mall|shop|cos-shop|storage|stall|exchange|alchemy|gear)-/;
 const Loot = {
   active: null,
   skips: new Map(),
   failureCounts: new Map(),
   petSetup: null,
   fullAlert: null,
+  playerInvAt: -Infinity,
+  playerMallAt: -Infinity,
+  petSentAt: -Infinity,
+  petEndAt: -Infinity,
+  lock: null,
+  petLocks: [],
+  spent: new Map(),
   lastFullChimeAt: -Infinity,
   checkPetFull() {
     const P = Hunt.cfg().pickup;
@@ -56,14 +72,66 @@ const Loot = {
     if (!Number.isInteger(pet.rec.commandMode)) return 'Waiting for pet settings.';
     if (pet.rec.commandMode & 128) return this.petSetup?.attempts >= 3 && now() - this.petSetup.at >= 5000
       ? 'Auto-grab was not disabled. Turn it off in the game pet settings, then retry.' : 'Waiting for broad auto-grab to turn off.';
-    if (Hunt.running && World.gp.inventoryPending) return 'Pet waiting for pickup / inventory transaction to finish.';
-    if (Hunt.running && this.pressed()) return 'Pet waiting briefly for potion use.';
-    if (this.active?.petGid === pet.rec.gid) return 'Pet collecting: ' + (this.active.name || this.active.gid) + (this.active.retryAt ? ' (retry pending).' : '.');
-    return `Pet ready: ${Math.max(0, pet.rec.status - pet.rec.inventory.length)} empty slots. Collects while hunting and while the bot is stopped.`;
+    const share = this.lockNote();
+    if (Hunt.running && World.gp.inventoryPending) return 'Pet waiting for pickup / inventory transaction to finish.' + share;
+    if (Hunt.running && this.pressed()) return 'Pet waiting briefly for potion use.' + share;
+    const yielding = this.playerFirst();
+    if (yielding) return 'Pet waiting: ' + yielding + share;
+    if (this.active?.petGid === pet.rec.gid) return 'Pet collecting: ' + (this.active.name || this.active.gid) + (this.active.retryAt ? ' (retry pending).' : '.') + share;
+    return `Pet ready: ${Math.max(0, pet.rec.status - pet.rec.inventory.length)} empty slots. Collects while hunting and while the bot is stopped.` + share;
+  },
+  petWhileManual() { const P = Hunt.cfg().pickup; return P.petWhileManual !== false && P.enabled && this.petMode(); },
+  notePlayer(kind) {
+    if (typeof kind !== 'string' || !(PLAYER_INV_KINDS.has(kind) || PLAYER_INV_PREFIXES.test(kind))) return;
+    this.playerInvAt = now();
+    if (kind.startsWith('mall-')) this.playerMallAt = now();
+  },
+  playerFirst() {
+    const gp = World.gp, t = now();
+    if (t - this.playerMallAt < PLAYER_MALL_HOLD_MS) return 'you are using the Item Mall.';
+    if (gp?.exchange?.open || gp?.exchange?.requesting) return 'a trade window is open.';
+    if (gp?.stall?.phase && gp.stall.phase !== 'none') return 'a stall window is open.';
+    if (gp?.alchemy?.visible) return 'the alchemy window is open.';
+    if (t - this.playerInvAt < PLAYER_INV_HOLD_MS) return 'you are using the inventory.';
+    return '';
+  },
+  petBlocked() { return this.pressed() || !!this.lock?.pet || now() - this.petEndAt < PET_GAP_MS || !!this.playerFirst(); },
+  watchLock() {
+    const pending = !!World.gp?.inventoryPending, t = now(), w = this.lock;
+    if (pending && !w) {
+      const a = this.active;
+      this.lock = { at: t, pet: !!a?.petGid && t - this.petSentAt < PET_LOCK_LINK_MS, gid: a?.gid ?? 0 };
+    } else if (!pending && w) {
+      this.lock = null;
+      if (!w.pet) return;
+      const ms = t - w.at;
+      this.petEndAt = t;
+      this.petLocks.push({ at: w.at, end: t });
+      while (this.petLocks.length && (this.petLocks[0].end < t - PET_LOCK_WINDOW_MS || this.petLocks.length > 300)) this.petLocks.shift();
+      const spent = this.spent.get(w.gid);
+      if (spent) spent.lockMs += ms;
+      Activity.emit({ category: 'loot', code: 'pet-lock-held', level: 'cmd', outcome: 'summary',
+        text: 'Pet pickup held the inventory for ' + Math.round(ms) + ' ms.', details: { durationMs: Math.round(ms) } });
+    }
+  },
+  lockShare() {
+    const t = now(), from = t - PET_LOCK_WINDOW_MS;
+    let held = this.lock?.pet ? t - Math.max(from, this.lock.at) : 0;
+    for (const l of this.petLocks) if (l.end > from) held += l.end - Math.max(from, l.at);
+    return clamp(held / PET_LOCK_WINDOW_MS, 0, 1);
+  },
+  lockNote() {
+    const share = this.lockShare();
+    return share > 0 ? ` Inventory held by pet pickups: ${Math.round(share * 100)}% of the last minute.` : '';
   },
   items(petGid = 0) { return petGid ? World.gp?.cosRecords?.find(r => r.gid === petGid)?.inventory || [] : World.items(); },
   pickup(gid, petGid = 0) {
-    return petGid ? Cmd.spaced('cos-pickup') && Cmd.raw({ kind: 'cos-pickup', gid: petGid, target: gid }, 'Pet pickup') : Cmd.pickup(gid);
+    if (!petGid) return Cmd.pickup(gid);
+    this.watchLock();
+    if (this.petBlocked() || !Cmd.spaced('cos-pickup') || !Cmd.raw({ kind: 'cos-pickup', gid: petGid, target: gid }, 'Pet pickup')) return false;
+    this.petSentAt = now();
+    if (!this.spent.has(gid)) this.spent.set(gid, { attempts: 0, lockMs: 0 });
+    return true;
   },
   pressed() {
     // Controller runs potions first. Reserve only a short window after an
@@ -169,10 +237,11 @@ const Loot = {
     return { name: 'excluded by name', sox: 'not Star/Moon/Sun gear (SoX only)', star: 'Star gear (skipped by choice)', gold: 'gold', potions: 'potions', equipment: 'equipment', elixirs: 'elixirs',
       powders: 'lucky powders', magicStones: 'magic stones', attrStones: 'attribute stones', alchemy: 'other alchemy items', others: 'other items' }[key] || key;
   },
-  skip(e, reason, inventoryBound = false) {
+  skip(e, reason, inventoryBound = false, forGood = false) {
     const n = Math.min(6, (this.failureCounts.get(e.gid) || 0) + 1);
     this.failureCounts.set(e.gid, n);
-    this.skips.set(e.gid, { until: now() + Math.min(60000, 5000 * 2 ** (n - 1)), bag: inventoryBound ? this.bagSignature(e) : null });
+    this.skips.set(e.gid, { until: forGood ? Infinity : now() + Math.min(60000, 5000 * 2 ** (n - 1)), bag: inventoryBound ? this.bagSignature(e) : null });
+    if (this.active?.petGid) this.petEndAt = Math.max(this.petEndAt, now());
     Log.warn(`Loot skipped (${e.name || e.gid}): ${reason}`);
     this.active = null;
     Hunt.lootGid = 0;
@@ -206,7 +275,7 @@ const Loot = {
     const byPet = this.collector(e) === 'pet';
     if (!this.allowed(e) || World.gp?.inventoryPending || !byPet && World.isCasting()) return false;
     const petGid = byPet ? this.pet()?.rec.gid : 0;
-    if (byPet && (!petGid || this.pressed()) || !this.pickup(e.gid, petGid)) return false;
+    if (byPet && !petGid || !this.pickup(e.gid, petGid)) return false;
     const gold = ItemType.isGold(e.groundItem.typeFlags);
     this.active = { gid: e.gid, ref: e.refObjId, name: e.name, gold, petGid,
       before: gold ? toBigInt(World.gp?.progression?.gold) : this.count(e.refObjId, petGid),
@@ -226,6 +295,7 @@ const Loot = {
     if (!a.petGid) Hunt.state = 'loot';
     if (this.gained(a)) {
       Stats.pickup(a);
+      if (a.petGid) { this.petEndAt = Math.max(this.petEndAt, now()); this.spent.delete(a.gid); }
       // If inventory updates precede despawn, don't request this same drop again.
       this.skips.set(a.gid, { until: now() + 3000, bag: null });
       this.failureCounts.delete(a.gid);
@@ -248,7 +318,6 @@ const Loot = {
     if (World.gp?.inventoryPending) return true;
     if (a.retryAt) {
       if (now() < a.retryAt) return true;
-      if (a.petGid && this.pressed()) return true;
       if (this.pickup(a.gid, a.petGid)) {
         a.attempts++; a.retryAt = 0; a.at = now(); a.progressAt = now(); a.best = d; a.failure = '';
       }
@@ -258,26 +327,37 @@ const Loot = {
     if (!a.failure && now() - a.progressAt < 8000 && now() - a.at < 45000) return true;
     const reason = a.failure || 'no approach/pickup progress';
     const capacity = /full|capacity|(?:not enough|no|out of) (?:free |inventory |bag )?space|envanter.*dolu/i.test(reason);
+    const spent = a.petGid && !capacity ? this.spent.get(a.gid) : null;
+    if (spent && reason !== 'Inventory command unavailable') spent.attempts++;
+    if (spent && (spent.attempts >= PET_GIVE_UP_ATTEMPTS || spent.lockMs >= PET_LOCK_BUDGET_MS)) { this.skip(e, reason + '; the pet gives up on this drop', false, true); return false; }
     if (capacity || a.attempts > Hunt.cfg().pickup.retries) { this.skip(e, reason, capacity); return false; }
     // Movement cancels the outstanding worker pickup intent. Resubmit on a later tick.
-    if (a.petGid || Cmd.move(World.pose())) { a.retryAt = now() + 700; a.failure = ''; }
+    if (a.petGid || Cmd.move(World.pose())) { a.retryAt = now() + (a.petGid ? PET_GAP_MS : 700); a.failure = ''; }
     return true;
   },
   // The pet keeps collecting while the bot is stopped. Pet settings are left alone: with auto-grab on the game collects
   // natively (allowed() refuses), otherwise selective requests go out as during hunting. Character pickups stay bot-only.
   idleTick() {
     if (Hunt.running || !this.petMode() || !Hunt.cfg().pickup.enabled || World.isDead() || World.gp?.storage || Restock.activeShop() ||
-        now() - Manual.lastAt < Hunt.cfg().manualPauseS * 1000) {
+        now() - Manual.lastAt < Hunt.cfg().manualPauseS * 1000 && !this.petWhileManual()) {
       if (this.active?.petGid) this.suspend();
       return;
     }
+    this.petTick();
+  },
+  petTick() {
     if (this.active) { if (this.active.petGid) this.tick(); else this.suspend(); return; }
     const drop = this.choose('pet');
     if (drop) this.begin(drop);
   },
   suspend() { this.active = null; Hunt.lootGid = 0; },
-  reset() { this.suspend(); this.skips.clear(); this.failureCounts.clear(); this.petSetup = null; this.fullAlert = null; },
+  reset() {
+    this.suspend(); this.skips.clear(); this.failureCounts.clear(); this.spent.clear(); this.petSetup = null; this.fullAlert = null;
+    this.lock = null; this.petLocks = []; this.petEndAt = this.petSentAt = -Infinity;
+  },
   init() {
+    Hook.observers.push(command => { if (command?.kind === 'gameplay') this.notePlayer(command.command?.kind); });
+    bus.on('gameplay', () => this.watchLock());
     bus.on('game-error', message => {
       if (!this.active) return;
       const reason = String(message);
@@ -288,7 +368,7 @@ const Loot = {
       this.active.failure = reason;
     });
     bus.on('despawn', e => {
-      this.skips.delete(e.gid); this.failureCounts.delete(e.gid);
+      this.skips.delete(e.gid); this.failureCounts.delete(e.gid); this.spent.delete(e.gid);
     });
   },
 };

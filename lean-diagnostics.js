@@ -53,16 +53,17 @@ const Diagnostics = {
   },
   pet() {
     if (!Hunt.cfg().pickup.enabled || !Loot.petMode()) return '';
-    if (!Hunt.running) return 'Pet collection paused: bot stopped.';
     const pet = Loot.pet();
     if (!pet) return 'Pet waiting: summon a pickup pet.';
     if (!Number.isInteger(pet.rec.commandMode)) return 'Pet waiting for settings.';
     if (pet.rec.commandMode & 128) return 'Pet waiting for broad auto-grab to turn off.';
     if (World.gp?.inventoryPending) return 'Pet waiting for inventory transaction.';
     if (Loot.pressed()) return 'Pet waiting briefly for potion use.';
-    if (Loot.active?.petGid) return Loot.active.retryAt ? 'Pet pickup: retry pending.' : 'Pet pickup: waiting for collection confirmation.';
+    const first = Loot.playerFirst();
+    if (first) return 'Pet waiting: ' + first + Loot.lockNote();
+    if (Loot.active?.petGid) return (Loot.active.retryAt ? 'Pet pickup: retry pending.' : 'Pet pickup: waiting for collection confirmation.') + Loot.lockNote();
     if (pet.rec.inventory.length >= pet.rec.status) return 'Pet bag full; only compatible stacks can merge.';
-    return 'Pet ready; waiting for eligible drops. ' + this.noLoot();
+    return 'Pet ready; waiting for eligible drops. ' + this.noLoot() + Loot.lockNote();
   },
   // Why nothing is being collected, counted from the drops in view. Counts only, no item names.
   noLoot() {

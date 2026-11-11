@@ -82,7 +82,7 @@ const MallBuyer = {
     return out;
   },
   tick() {
-    if (World.gp?.inventoryPending || World.gp?.storage || Restock.activeShop()) { this.busyAt = now(); return false; }
+    if (World.gp?.inventoryPending || World.gp?.storage || Restock.activeShop() || Loot.playerFirst()) { this.busyAt = now(); return false; }
     if (!World.inWorld() || World.isDead() || !Hunt.running || Town.trip || Restock.trip) return false;
     return this.drive(this.buyers());
   },

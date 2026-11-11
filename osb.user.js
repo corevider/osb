@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         OSB
 // @namespace    https://github.com/corevider/osb
-// @version      2.0.4
+// @version      2.0.5
 // @homepageURL  https://github.com/corevider/osb
 // @supportURL   https://github.com/corevider/osb/issues
 // @updateURL    https://raw.githubusercontent.com/corevider/osb/main/osb.meta.js
@@ -25,7 +25,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[OSB] Another SRO assistant is active. Disable it and reload to use OSB.');
   return;
 }
-const VERSION = '2.0.4';
+const VERSION = '2.0.5';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });
@@ -255,7 +255,7 @@ const DEFAULT_PROFILE = {
   pet: { attack: { on: false, recall: true, radius: 15, timeout: 3, resend: 5 } },
   scroll: { damageInc: false, damageAbs: false },
   mall: { on: false, budgetSilk: 0, hp: { on: false, low: 10, target: 1000 }, mp: { on: false, low: 10, target: 1000 }, damageInc: { on: false, low: 5, target: 20 }, damageAbs: { on: false, low: 5, target: 20 }, reverse: { on: false, low: 1, target: 5 } },
-  party: { autoAcceptMatching: false, autoRecruit: false, joinMain: false, mainName: '', leaveIfNotLeader: false, onlyWhileRunning: false, acceptNames: '', autoRes: false, acceptRes: false, acceptResAny: false, resNames: '', reviveWaitS: 20, resRadius: 300, title: 'Hunting party', min: 1, max: 90, purpose: 0, expShare: true, itemShare: true,
+  party: { autoAcceptMatching: false, autoRecruit: false, joinMain: false, mainName: '', leaveIfNotLeader: false, onlyWhileRunning: false, acceptNames: '', autoRes: false, acceptRes: false, acceptResAny: false, resNames: '', reviveWaitS: 20, resRadius: 300, resWaitS: 31, resMax: 0, title: 'Hunting party', min: 1, max: 90, purpose: 0, expShare: true, itemShare: true,
     support: { enabled: false, whileStopped: false, range: 30, heal: { id: 0, group: 0, pct: 60, self: false }, group: { id: 0, group: 0, pct: 60, count: 2 }, buffs: [] },
     protect: { enabled: false, all: false, names: [], range: 40, whileNoAttack: false } },
   wardrobe: { on: true, phantom: true, realAnim: true, hideAvatars: false,
@@ -292,7 +292,7 @@ const DEFAULT_PROFILE = {
     levelMin: 0, levelMax: 0, include: '', exclude: '', priority: 'attackers', avoidKs: true, avoidKsScope: 'all', avoidKsBelow: 50,
     targetTimeoutS: 25,
     pickup: { enabled: true, soxOnly: false, skipStar: false, gold: true, potions: true, equipment: true, elixirs: true, powders: true, magicStones: true, attrStones: true, alchemy: true, others: true,
-      collector: 'character', by: {}, petFullSound: true, soxSeals: { star: true, moon: true, sun: true }, include: '', exclude: '', radius: 300, afterKillOnly: true, retries: 2 },
+      collector: 'character', by: {}, petFullSound: true, petWhileManual: true, soxSeals: { star: true, moon: true, sun: true }, include: '', exclude: '', radius: 300, afterKillOnly: true, retries: 2 },
     sit: { enabled: true, hpBelow: 35, mpBelow: 20, resumeAt: 90 },
     antiStuck: { enabled: true, minutes: 3, maxRecoveries: 3, recall: false },
     detour: { enabled: true, stallMs: 2500 },
@@ -6202,12 +6202,28 @@ const WalkBack = {
 
 
 // One pickup intent at a time. Progress, inventory changes and failures own its lifetime.
+const PET_GAP_MS = 800;
+const PLAYER_INV_HOLD_MS = 2500;
+const PLAYER_MALL_HOLD_MS = 60000;
+const PET_LOCK_LINK_MS = 1500;
+const PET_LOCK_WINDOW_MS = 60000;
+const PET_GIVE_UP_ATTEMPTS = 6;
+const PET_LOCK_BUDGET_MS = 15000;
+const PLAYER_INV_KINDS = new Set(['item-use', 'item-drop', 'inventory-move', 'avatar-move', 'equip', 'pickup', 'cos-pickup', 'cos-transfer', 'cos-drop', 'immortal', 'attr']);
+const PLAYER_INV_PREFIXES = /^(?:mall|shop|cos-shop|storage|stall|exchange|alchemy|gear)-/;
 const Loot = {
   active: null,
   skips: new Map(),
   failureCounts: new Map(),
   petSetup: null,
   fullAlert: null,
+  playerInvAt: -Infinity,
+  playerMallAt: -Infinity,
+  petSentAt: -Infinity,
+  petEndAt: -Infinity,
+  lock: null,
+  petLocks: [],
+  spent: new Map(),
   lastFullChimeAt: -Infinity,
   checkPetFull() {
     const P = Hunt.cfg().pickup;
@@ -6259,14 +6275,66 @@ const Loot = {
     if (!Number.isInteger(pet.rec.commandMode)) return 'Waiting for pet settings.';
     if (pet.rec.commandMode & 128) return this.petSetup?.attempts >= 3 && now() - this.petSetup.at >= 5000
       ? 'Auto-grab was not disabled. Turn it off in the game pet settings, then retry.' : 'Waiting for broad auto-grab to turn off.';
-    if (Hunt.running && World.gp.inventoryPending) return 'Pet waiting for pickup / inventory transaction to finish.';
-    if (Hunt.running && this.pressed()) return 'Pet waiting briefly for potion use.';
-    if (this.active?.petGid === pet.rec.gid) return 'Pet collecting: ' + (this.active.name || this.active.gid) + (this.active.retryAt ? ' (retry pending).' : '.');
-    return `Pet ready: ${Math.max(0, pet.rec.status - pet.rec.inventory.length)} empty slots. Collects while hunting and while the bot is stopped.`;
+    const share = this.lockNote();
+    if (Hunt.running && World.gp.inventoryPending) return 'Pet waiting for pickup / inventory transaction to finish.' + share;
+    if (Hunt.running && this.pressed()) return 'Pet waiting briefly for potion use.' + share;
+    const yielding = this.playerFirst();
+    if (yielding) return 'Pet waiting: ' + yielding + share;
+    if (this.active?.petGid === pet.rec.gid) return 'Pet collecting: ' + (this.active.name || this.active.gid) + (this.active.retryAt ? ' (retry pending).' : '.') + share;
+    return `Pet ready: ${Math.max(0, pet.rec.status - pet.rec.inventory.length)} empty slots. Collects while hunting and while the bot is stopped.` + share;
+  },
+  petWhileManual() { const P = Hunt.cfg().pickup; return P.petWhileManual !== false && P.enabled && this.petMode(); },
+  notePlayer(kind) {
+    if (typeof kind !== 'string' || !(PLAYER_INV_KINDS.has(kind) || PLAYER_INV_PREFIXES.test(kind))) return;
+    this.playerInvAt = now();
+    if (kind.startsWith('mall-')) this.playerMallAt = now();
+  },
+  playerFirst() {
+    const gp = World.gp, t = now();
+    if (t - this.playerMallAt < PLAYER_MALL_HOLD_MS) return 'you are using the Item Mall.';
+    if (gp?.exchange?.open || gp?.exchange?.requesting) return 'a trade window is open.';
+    if (gp?.stall?.phase && gp.stall.phase !== 'none') return 'a stall window is open.';
+    if (gp?.alchemy?.visible) return 'the alchemy window is open.';
+    if (t - this.playerInvAt < PLAYER_INV_HOLD_MS) return 'you are using the inventory.';
+    return '';
+  },
+  petBlocked() { return this.pressed() || !!this.lock?.pet || now() - this.petEndAt < PET_GAP_MS || !!this.playerFirst(); },
+  watchLock() {
+    const pending = !!World.gp?.inventoryPending, t = now(), w = this.lock;
+    if (pending && !w) {
+      const a = this.active;
+      this.lock = { at: t, pet: !!a?.petGid && t - this.petSentAt < PET_LOCK_LINK_MS, gid: a?.gid ?? 0 };
+    } else if (!pending && w) {
+      this.lock = null;
+      if (!w.pet) return;
+      const ms = t - w.at;
+      this.petEndAt = t;
+      this.petLocks.push({ at: w.at, end: t });
+      while (this.petLocks.length && (this.petLocks[0].end < t - PET_LOCK_WINDOW_MS || this.petLocks.length > 300)) this.petLocks.shift();
+      const spent = this.spent.get(w.gid);
+      if (spent) spent.lockMs += ms;
+      Activity.emit({ category: 'loot', code: 'pet-lock-held', level: 'cmd', outcome: 'summary',
+        text: 'Pet pickup held the inventory for ' + Math.round(ms) + ' ms.', details: { durationMs: Math.round(ms) } });
+    }
+  },
+  lockShare() {
+    const t = now(), from = t - PET_LOCK_WINDOW_MS;
+    let held = this.lock?.pet ? t - Math.max(from, this.lock.at) : 0;
+    for (const l of this.petLocks) if (l.end > from) held += l.end - Math.max(from, l.at);
+    return clamp(held / PET_LOCK_WINDOW_MS, 0, 1);
+  },
+  lockNote() {
+    const share = this.lockShare();
+    return share > 0 ? ` Inventory held by pet pickups: ${Math.round(share * 100)}% of the last minute.` : '';
   },
   items(petGid = 0) { return petGid ? World.gp?.cosRecords?.find(r => r.gid === petGid)?.inventory || [] : World.items(); },
   pickup(gid, petGid = 0) {
-    return petGid ? Cmd.spaced('cos-pickup') && Cmd.raw({ kind: 'cos-pickup', gid: petGid, target: gid }, 'Pet pickup') : Cmd.pickup(gid);
+    if (!petGid) return Cmd.pickup(gid);
+    this.watchLock();
+    if (this.petBlocked() || !Cmd.spaced('cos-pickup') || !Cmd.raw({ kind: 'cos-pickup', gid: petGid, target: gid }, 'Pet pickup')) return false;
+    this.petSentAt = now();
+    if (!this.spent.has(gid)) this.spent.set(gid, { attempts: 0, lockMs: 0 });
+    return true;
   },
   pressed() {
     // Controller runs potions first. Reserve only a short window after an
@@ -6372,10 +6440,11 @@ const Loot = {
     return { name: 'excluded by name', sox: 'not Star/Moon/Sun gear (SoX only)', star: 'Star gear (skipped by choice)', gold: 'gold', potions: 'potions', equipment: 'equipment', elixirs: 'elixirs',
       powders: 'lucky powders', magicStones: 'magic stones', attrStones: 'attribute stones', alchemy: 'other alchemy items', others: 'other items' }[key] || key;
   },
-  skip(e, reason, inventoryBound = false) {
+  skip(e, reason, inventoryBound = false, forGood = false) {
     const n = Math.min(6, (this.failureCounts.get(e.gid) || 0) + 1);
     this.failureCounts.set(e.gid, n);
-    this.skips.set(e.gid, { until: now() + Math.min(60000, 5000 * 2 ** (n - 1)), bag: inventoryBound ? this.bagSignature(e) : null });
+    this.skips.set(e.gid, { until: forGood ? Infinity : now() + Math.min(60000, 5000 * 2 ** (n - 1)), bag: inventoryBound ? this.bagSignature(e) : null });
+    if (this.active?.petGid) this.petEndAt = Math.max(this.petEndAt, now());
     Log.warn(`Loot skipped (${e.name || e.gid}): ${reason}`);
     this.active = null;
     Hunt.lootGid = 0;
@@ -6409,7 +6478,7 @@ const Loot = {
     const byPet = this.collector(e) === 'pet';
     if (!this.allowed(e) || World.gp?.inventoryPending || !byPet && World.isCasting()) return false;
     const petGid = byPet ? this.pet()?.rec.gid : 0;
-    if (byPet && (!petGid || this.pressed()) || !this.pickup(e.gid, petGid)) return false;
+    if (byPet && !petGid || !this.pickup(e.gid, petGid)) return false;
     const gold = ItemType.isGold(e.groundItem.typeFlags);
     this.active = { gid: e.gid, ref: e.refObjId, name: e.name, gold, petGid,
       before: gold ? toBigInt(World.gp?.progression?.gold) : this.count(e.refObjId, petGid),
@@ -6429,6 +6498,7 @@ const Loot = {
     if (!a.petGid) Hunt.state = 'loot';
     if (this.gained(a)) {
       Stats.pickup(a);
+      if (a.petGid) { this.petEndAt = Math.max(this.petEndAt, now()); this.spent.delete(a.gid); }
       // If inventory updates precede despawn, don't request this same drop again.
       this.skips.set(a.gid, { until: now() + 3000, bag: null });
       this.failureCounts.delete(a.gid);
@@ -6451,7 +6521,6 @@ const Loot = {
     if (World.gp?.inventoryPending) return true;
     if (a.retryAt) {
       if (now() < a.retryAt) return true;
-      if (a.petGid && this.pressed()) return true;
       if (this.pickup(a.gid, a.petGid)) {
         a.attempts++; a.retryAt = 0; a.at = now(); a.progressAt = now(); a.best = d; a.failure = '';
       }
@@ -6461,26 +6530,37 @@ const Loot = {
     if (!a.failure && now() - a.progressAt < 8000 && now() - a.at < 45000) return true;
     const reason = a.failure || 'no approach/pickup progress';
     const capacity = /full|capacity|(?:not enough|no|out of) (?:free |inventory |bag )?space|envanter.*dolu/i.test(reason);
+    const spent = a.petGid && !capacity ? this.spent.get(a.gid) : null;
+    if (spent && reason !== 'Inventory command unavailable') spent.attempts++;
+    if (spent && (spent.attempts >= PET_GIVE_UP_ATTEMPTS || spent.lockMs >= PET_LOCK_BUDGET_MS)) { this.skip(e, reason + '; the pet gives up on this drop', false, true); return false; }
     if (capacity || a.attempts > Hunt.cfg().pickup.retries) { this.skip(e, reason, capacity); return false; }
     // Movement cancels the outstanding worker pickup intent. Resubmit on a later tick.
-    if (a.petGid || Cmd.move(World.pose())) { a.retryAt = now() + 700; a.failure = ''; }
+    if (a.petGid || Cmd.move(World.pose())) { a.retryAt = now() + (a.petGid ? PET_GAP_MS : 700); a.failure = ''; }
     return true;
   },
   // The pet keeps collecting while the bot is stopped. Pet settings are left alone: with auto-grab on the game collects
   // natively (allowed() refuses), otherwise selective requests go out as during hunting. Character pickups stay bot-only.
   idleTick() {
     if (Hunt.running || !this.petMode() || !Hunt.cfg().pickup.enabled || World.isDead() || World.gp?.storage || Restock.activeShop() ||
-        now() - Manual.lastAt < Hunt.cfg().manualPauseS * 1000) {
+        now() - Manual.lastAt < Hunt.cfg().manualPauseS * 1000 && !this.petWhileManual()) {
       if (this.active?.petGid) this.suspend();
       return;
     }
+    this.petTick();
+  },
+  petTick() {
     if (this.active) { if (this.active.petGid) this.tick(); else this.suspend(); return; }
     const drop = this.choose('pet');
     if (drop) this.begin(drop);
   },
   suspend() { this.active = null; Hunt.lootGid = 0; },
-  reset() { this.suspend(); this.skips.clear(); this.failureCounts.clear(); this.petSetup = null; this.fullAlert = null; },
+  reset() {
+    this.suspend(); this.skips.clear(); this.failureCounts.clear(); this.spent.clear(); this.petSetup = null; this.fullAlert = null;
+    this.lock = null; this.petLocks = []; this.petEndAt = this.petSentAt = -Infinity;
+  },
   init() {
+    Hook.observers.push(command => { if (command?.kind === 'gameplay') this.notePlayer(command.command?.kind); });
+    bus.on('gameplay', () => this.watchLock());
     bus.on('game-error', message => {
       if (!this.active) return;
       const reason = String(message);
@@ -6491,7 +6571,7 @@ const Loot = {
       this.active.failure = reason;
     });
     bus.on('despawn', e => {
-      this.skips.delete(e.gid); this.failureCounts.delete(e.gid);
+      this.skips.delete(e.gid); this.failureCounts.delete(e.gid); this.spent.delete(e.gid);
     });
   },
 };
@@ -6927,21 +7007,36 @@ const RES_ALIVE_MS = 30000; // a standing member the server reports alive is che
 const RES_REFUSED_MS = 10 * 60000;
 const RES_REFUSAL_MS = 3000;
 const RES_NAMES_MAX = 20;
+const RES_WAIT_MIN_S = 31, RES_WAIT_MAX_S = 300, RES_TRIES_MAX = 99;
 const Resurrect = {
   sent: {},           // member id -> time of the unanswered proposal
   checked: {},        // member id -> time until which a standing member counts as alive
   refused: {},
+  tries: {},
+  usedUp: {},
   lastCast: null,
   nextAt: -Infinity,  // earliest next attempt
   holdUntil: 0,
   trip: null,
-  windowMs: 31000,    // the server's answer window plus one tick
   message: 'No fallen party member.',
   reset() {
-    this.cancelTrip('', true); this.sent = {}; this.checked = {}; this.refused = {}; this.lastCast = null;
+    this.cancelTrip('', true); this.sent = {}; this.checked = {}; this.refused = {}; this.tries = {}; this.usedUp = {}; this.lastCast = null;
     this.nextAt = -Infinity; this.holdUntil = 0; this.message = 'No fallen party member.';
   },
   names() { return Party.names(Settings.profile.party.resNames).slice(0, RES_NAMES_MAX); },
+  waitMs() { return clamp(Math.round(Number(Settings.profile.party.resWaitS) || RES_WAIT_MIN_S), RES_WAIT_MIN_S, RES_WAIT_MAX_S) * 1000; },
+  maxTries() { return clamp(Math.round(Number(Settings.profile.party.resMax) || 0), 0, RES_TRIES_MAX); },
+  spent(w) {
+    const max = this.maxTries();
+    if (!max || (this.tries[w.key] || 0) < max) return false;
+    if (!this.usedUp[w.key]) {
+      this.usedUp[w.key] = true;
+      Log.info(this.usedUpText(w.name + (w.outsider ? ' (not in the party)' : ''), max));
+    }
+    return true;
+  },
+  usedUpText(label, max) { return 'Resurrection attempts used up for ' + label + ' (' + max + '); no more Rebirth until they are alive again.'; },
+  newRun() { this.tries = {}; this.usedUp = {}; },
   lower(name) { return String(name || '').trim().toLowerCase(); },
   key(name) { return 'name:' + this.lower(name); },
   outsiderDead(e) { return e.appearanceState?.[0] === 2 || World.hpOf(e.gid) === 0; },
@@ -7064,7 +7159,7 @@ const Resurrect = {
     const party = members.filter(m => m && m.id && m.name && m.name !== social.localName);
     const outsiders = this.outsiders(social, names);
     const t = now();
-    for (const list of [this.sent, this.checked]) for (const id of Object.keys(list)) {
+    for (const list of [this.sent, this.checked, this.tries, this.usedUp]) for (const id of Object.keys(list)) {
       if (id.startsWith('name:')) {
         const e = outsiders.find(x => this.key(x.name) === id);
         if (!names.includes(id.slice(5)) || e && !this.outsiderDead(e)) delete list[id];
@@ -7078,8 +7173,9 @@ const Resurrect = {
       ...party.filter(m => c.autoRes || names.includes(this.lower(m.name))).map(m => ({ key: m.id, name: m.name, member: m })),
       ...outsiders.map(e => ({ key: this.key(e.name), name: e.name, body: e, outsider: true })),
     ];
-    const offered = wanted.find(w => this.sent[w.key]);
+    const offered = wanted.find(w => this.sent[w.key] && !this.usedUp[w.key]), finished = wanted.find(w => this.usedUp[w.key]);
     this.message = offered ? 'Resurrection offered: ' + offered.name + '; waiting for the answer.' :
+      finished ? this.usedUpText(finished.name + (finished.outsider ? ' (not in the party)' : ''), this.maxTries()) :
       c.autoRes ? 'Watching for fallen party members.' : 'Watching for fallen players on the resurrect list.';
     const skill = this.skill();
     if (!skill) { this.cancelTrip('', true); this.message = 'No learned resurrection skill (Rebirth) was found.'; return; }
@@ -7089,7 +7185,8 @@ const Resurrect = {
         now() - Combat.lastCastAt < Settings.profile.macro.castGapMs || !Combat.mpOk(skill.id, World.me())) return !!this.trip;
     for (const w of wanted) {
       const m = w.member;
-      if (m && (m.status & 15) !== 0 || this.sent[w.key] && t - this.sent[w.key] < this.windowMs || this.checked[w.key] > t || this.refused[w.key] > t) continue;
+      if (m && (m.status & 15) !== 0 || this.sent[w.key] && t - this.sent[w.key] < this.waitMs() || this.checked[w.key] > t || this.refused[w.key] > t) continue;
+      if (this.spent(w)) { this.message = this.usedUpText(w.name + (w.outsider ? ' (not in the party)' : ''), this.maxTries()); continue; }
       // The corpse must be in view as an entity to aim the select at.
       const e = w.body || [...World.ents.values()].find(x => x && x.kind === 'player' && x.name === m.name);
       if (!e) continue;
@@ -7119,6 +7216,7 @@ const Resurrect = {
       this.nextAt = t + 700;
       const first = this.sent[w.key] === undefined;
       this.sent[w.key] = t;
+      this.tries[w.key] = (this.tries[w.key] || 0) + 1;
       const label = e.name + (w.outsider ? ' (not in the party)' : '');
       this.message = 'Resurrection offered: ' + label + '; waiting for the answer.';
       if (first) UI.toast('Resurrection offered: ' + label, 'info', 3000);
@@ -7128,6 +7226,7 @@ const Resurrect = {
   },
 };
 bus.on('game-error', text => Resurrect.noteRefusal(text));
+bus.on('hunt', running => { if (running) Resurrect.newRun(); });
 
 
 // Native beta starter scroll: item 24198 -> skill 31107 (+100%, one hour).
@@ -10927,7 +11026,8 @@ Hunt.tick = function () {
     if (H.center && dist2D(World.pose(), H.center) > H.radius) { Controller.returnAfterRevive(); return; }
   }
   if (Restock.activeShop() || gp.storage || now() - Manual.lastAt < H.manualPauseS * 1000) {
-    Loot.suspend(); this.state = 'manual'; return;
+    if (Restock.activeShop() || gp.storage || !Loot.petWhileManual()) Loot.suspend(); else Loot.petTick();
+    this.state = 'manual'; return;
   }
   if (this.playerCheck()) { Loot.suspend(); this.state = 'player'; return; }
   if (H.stopNoHpPotion && Potion.count('hp') + Potion.count('vigor') === 0) return this.stop('out of HP potions');
@@ -11110,6 +11210,7 @@ const Controller = {
   },
   tick() {
     try {
+      Loot.watchLock();
       this.guard('Reconnect', () => Reconnect.tick());
       this.guard('Auto-start', () => AutoStart.tick());
       this.guard('Retry', () => Retry.tick());
@@ -11384,7 +11485,7 @@ const MallBuyer = {
     return out;
   },
   tick() {
-    if (World.gp?.inventoryPending || World.gp?.storage || Restock.activeShop()) { this.busyAt = now(); return false; }
+    if (World.gp?.inventoryPending || World.gp?.storage || Restock.activeShop() || Loot.playerFirst()) { this.busyAt = now(); return false; }
     if (!World.inWorld() || World.isDead() || !Hunt.running || Town.trip || Restock.trip) return false;
     return this.drive(this.buyers());
   },
@@ -16175,7 +16276,7 @@ const Alchemy = {
 };
 
 
-const RELEASE_NOTES = [{"version": "2.0.4", "title": "Resurrection from anyone, resurrecting helpers outside the party, zero-setup leveling", "items": ["New on the Party page: \"Accept resurrection from any player\" (off by default). When you are dead, the bot also answers Yes to a Rebirth from a player outside your party. The log names who resurrected you. With it on, any living player in view counts as a helper for \"Wait for a party resurrection\".", "New on the Party page: \"Also resurrect these players (not in the party)\". Enter up to 20 character names, for example a lure character helping a full party from outside it. A listed player who is dead, in view and within the maximum distance is resurrected like a party member, during hunting and while stopped. Nobody else outside the party is targeted. If the game refuses Rebirth on one of them, the bot says so once and skips that player for 10 minutes.", "\"Max every skill\" (Settings, Auto mastery) is now a switch. While it is on, it spends new skill points as you get them. Off by default.", "New on the Setup page: zero-setup leveling, \"Level up by itself\" (off by default). The bot picks a hunting spot for your level from built-in game data, buys the next tier of NPC weapon, armour and accessories on town trips, and can raise your weapon's mastery, learn its skills and spend stat points. Seal and rare gear, +4 and higher, and anything you protect are never replaced, and a gold reserve is never spent.", "Auto mastery has a new choice under \"Skills to upgrade\": \"Every skill of my chosen masteries\", which also learns new skills.", "The Update button can be clicked again in the compact window, the classic window keeps one size on every tab, and the wide window splits its boxes evenly."]}, {"version": "2.0.3", "title": "Fewer silent stops, town trips that retry, pet loot to your bag", "items": ["A monster the bot cannot reach no longer stops hunting when the game does not confirm that it was released. The bot asks again once, then leaves that monster alone for a minute and hunts on. Protect party members follows the same rule.", "Every stop now says why in the log, for example \"Hunting stopped: stopped by you (F8)\". A stop you make (F8, Start / stop, Stop all, or a stop from OSB Manager) is never undone; a stop the bot makes by itself is started again after 2 minutes when \"Start again when the bot stops by itself\" is on.", "Auto-start no longer gives up when the page was reloaded or the connection came back: it waits for the reconnect.", "The same game refusal and the same missing skill icon appear at most once a minute, with a count.", "Town trips no longer stop when the warehouse, a merchant or the world statue does not open, for example while the town is still loading. The bot waits, walks back and tries again, three tries per service.", "New option under Loot, Bag and pet space: \"Move pet loot to my bag when the pet is nearly full\". The loot is stored or sold on the next town trip like pet loot.", "Reverse Return Scrolls have one switch on the Town page: \"Buy Reverse Return Scrolls from the Item mall (silk)\". No merchant sells them for gold, so the merchant switch is gone; if it was on, the Item mall switch is turned on. Nothing is bought while the silk budget is 0.", "Item mall \"low stock ≤\" now includes the number itself, so a low mark of 0 buys when the item runs out."]}, {"version": "2.0.2", "title": "Attack rotations for every monster class", "items": ["Combat > Skills has one attack rotation per monster class: Normal, Champion, Party, Giant, Party champion, Party giant, Elite and Unique.", "An empty rotation uses the next filled class below it in that order, down to Normal, and its tab says which one, for example \"Empty: uses Party giant\".", "Your existing rotations stay. Party champions and party giants start with a copy of your Party rotation, so they fight as before.", "The SoX chime and notice now have one switch per seal: Star, Moon and Sun. If the chime was on, all three are ticked; if it was off, none are."]}, {"version": "2.0.1", "title": "Protect your party members", "items": ["New on the Party page: Protect party members. When a monster hits a member you ticked, the bot attacks that monster.", "Tick single members or All party members. Members who left stay in the list, greyed out.", "It works within a distance you choose (40 m by default) and inside your hunting area, and never attacks players.", "Your potions, death and return rules and town trips come first. Monsters in Skip these mobs and monsters other players fight are left alone.", "With Also with Attack monsters off, a support character protects the party too."]}, {"version": "2.0.0", "title": "OSB 2.0.0", "items": ["Based on version 1.2.224 of the previous bot. Your settings, share codes and backups carry over.", "Bug reports no longer go to the previous bot's server. Preview the report, then copy it or save it as a file and attach it to a GitHub issue, or press Send and confirm to send it to the OSB team at api.osb.lol. You choose bug report or feature request, you can add a screenshot of a tab you pick, and you get a report code. Nothing is sent before you confirm.", "New: Settings → Privacy. \"Share usage statistics\" is off by default; when you turn it on, OSB sends a short status report about every 10 minutes to api.osb.lol, linked to a random install ID. \"Show my characters in the OSB dashboard\" is a second, separate switch. You can see what is sent, download your data, or delete it. Turning the statistics off deletes your data from the server. With both switches off, OSB sends nothing to api.osb.lol. The same section has \"Check GitHub for OSB updates\" (on by default): the update check carries no data about you, and switching it off stops every update request.", "New from the upstream work up to 1.2.221, all off by default unless said otherwise: wear better gear you carry on town trips, move hunting to the next level spot when a spot gives no XP, a choice of how long to wait for a party resurrection, alert chimes (another player near, death, level up, a unique in view), and a choice of which monsters to avoid when another player is fighting them.", "Item names now show even when the game's data files are not served, and pet loot sells again on town trips. Town trips no longer stop at the smith after a skipped supply. With bag selling on, the weapon merchant now sells the character bag first and the pet loot after it, so a full bag no longer leaves pet loot unsold.", "Reliability fixes from upstream 1.2.222 to 1.2.224: a town trip stops cleanly when the game never settles before the return scroll, an unanswered rebirth is asked again every 10 seconds, combat gear left half swapped by a death or world change is restored quietly while hunting, quest data that fails to load is retried after 10 minutes, the pet-bag-full warning shows with the chime off, Max every skill stops when you leave the world, and settings are saved when you close the page.", "Heads up: the new option to spare giant and party monsters below an HP cutoff is set to 50. It only applies when \"Avoided monsters\" is \"Normal & champion only\", which is not the default.", "Town page: picking a town now sets up the town trip by itself (arrival point, warehouse, potion merchant, repair merchant, world statue), and switching the town trip on fills anything still missing. The separate \"Set up this town\" button is gone and the hand-saving buttons moved under \"Adjust by hand (optional)\".", "Wear better gear now runs before anything is sold. With bag selling on and a full bag, the weapon merchant no longer sells a piece the warehouse visit would wear.", "Wear better gear no longer compares a necklace, earring or ring with the wrong worn piece. A carried necklace was measured against the weakest worn accessory, even a ring, and the game refused the move (\"Inventory rejected: 14\"). Every piece now competes only for its own slot, and the plus level counts.", "When the game refuses to wear a piece, or does not confirm it, the bot logs one line, keeps the piece in your bag and does not sell it or try it again this session.", "Loot page: \"Pick up drops\" is now the first checkbox of the Collection group, in place of the old \"Collect drops\" further down. It is the same setting as the Turn on button on the Setup page, which still works.", "Gear that asks for a mastery level (for example Lynx Gale Glove or Hydra Gale Breast Mail) is now read correctly: wear better gear considers it when your mastery is high enough, and \"Also deposit gear requiring level\" now deposits it too, so gear it never matched before may now go to the warehouse.", "Only tested in simulation (a fake server and a virtual clock), not on the live server or against the real api.osb.lol. The game tick was measured with and without a server that never answers."]}, {"version": "1.2.224", "title": "Reliability fixes for death, rebirth and quests", "items": ["If you die or change world while a buff-gear swap is pending, hunting can now start anyway. The gear is restored quietly once it is safe, not during town trips or open trade, stall or shop windows.", "Rebirth is now re-sent every 10 seconds while your character is still dead.", "Quest data that fails to load is retried after 10 minutes instead of on every tick.", "The reconnect message no longer includes your character's name, so it stays out of reports.", "Smaller fixes: the pet-bag-full toast works with the chime off, Max skills stops when you leave the world, and settings are saved when you close the page. The town tier is reset when you switch character.", "No new option."], "note": "Contributed by duan78 (#96). Tested in simulation only, not in a live game."}, {"version": "1.2.223", "title": "Town trips no longer hang before the return scroll", "items": ["If the game keeps showing a pending inventory or an open cast when the bot is about to read the return scroll, the town trip used to wait forever. It now shows \"Waiting for the game to settle before the return scroll.\"", "After a full minute of that, the trip stops cleanly and hunting stays off. The bot never sends the scroll twice. Reload the game and check your character.", "If the game refuses the return scroll three times without giving a reason, the message now says the game itself may be refusing it and suggests using the scroll by hand.", "No new option."], "note": "Contributed by duan78 (#95). Tested in simulation only, not in a live game."}, {"version": "1.2.222", "title": "Full bags now sell before pet loot on town trips", "items": ["With \"Sell ordinary gear from the character bag too\" on, the bot now sells your bag items at the repair merchant first, then moves the pet's loot into the freed slots and sells it.", "This fixes trips where a full bag left pet loot with no free slot, so nothing was sold.", "With that option off, nothing changes. Items the merchant refuses are still skipped, and the rest are sold."], "note": "Contributed by corevider (#94). Tested in simulation only, not in a live game."}];
+const RELEASE_NOTES = [{"version": "2.0.5", "title": "The pickup pet keeps collecting while you play by hand, resurrection retry settings", "items": ["New in Loot → Collection: \"Pet keeps collecting while I play by hand\" (on by default). When you walk, attack or use skills yourself, the pickup pet now keeps collecting, with the bot running or stopped. Only the pet moves; your character's own pickups and hunting still pause after manual control. Turn it off to have the pet wait as before.", "Your own inventory use goes first. A pet pickup keeps the game's inventory busy until the pet reaches the drop, and meanwhile the game greys out its inventory and Item Mall buttons and quietly ignores a purchase. Now the pet sends no new pickup for 2.5 s after you use or move an item, pick something up or use a shop, storage, trade, stall or alchemy, and for 60 s after you open or use the Item Mall. It also waits while a trade, stall or alchemy window is open, and leaves a short gap after each pickup so your clicks get through. The bot's own item drops, pet-to-bag moves and Item Mall buying wait the same way. The bot never repeats a command of yours, so a purchase is never sent twice.", "A drop the pet cannot reach is now given up after a few tries instead of being tried again and again.", "The pet status line shows how much of the last minute pet pickups kept the inventory busy. With detailed capture on, the Activity log shows how long each pet pickup took. These numbers stay on your computer.", "New on the Party page: \"Wait between resurrection attempts (s)\" (31 s by default, the game's 30 s answer window plus one tick; 31 to 300) and \"Max resurrection attempts per player (0 = no limit)\". After the last attempt the bot stops offering Rebirth to that player and says so once; it starts counting again when the player is alive again, leaves the party or the list, or when you press Start."]}, {"version": "2.0.4", "title": "Resurrection from anyone, resurrecting helpers outside the party, zero-setup leveling", "items": ["New on the Party page: \"Accept resurrection from any player\" (off by default). When you are dead, the bot also answers Yes to a Rebirth from a player outside your party. The log names who resurrected you. With it on, any living player in view counts as a helper for \"Wait for a party resurrection\".", "New on the Party page: \"Also resurrect these players (not in the party)\". Enter up to 20 character names, for example a lure character helping a full party from outside it. A listed player who is dead, in view and within the maximum distance is resurrected like a party member, during hunting and while stopped. Nobody else outside the party is targeted. If the game refuses Rebirth on one of them, the bot says so once and skips that player for 10 minutes.", "\"Max every skill\" (Settings, Auto mastery) is now a switch. While it is on, it spends new skill points as you get them. Off by default.", "New on the Setup page: zero-setup leveling, \"Level up by itself\" (off by default). The bot picks a hunting spot for your level from built-in game data, buys the next tier of NPC weapon, armour and accessories on town trips, and can raise your weapon's mastery, learn its skills and spend stat points. Seal and rare gear, +4 and higher, and anything you protect are never replaced, and a gold reserve is never spent.", "Auto mastery has a new choice under \"Skills to upgrade\": \"Every skill of my chosen masteries\", which also learns new skills.", "The Update button can be clicked again in the compact window, the classic window keeps one size on every tab, and the wide window splits its boxes evenly."]}, {"version": "2.0.3", "title": "Fewer silent stops, town trips that retry, pet loot to your bag", "items": ["A monster the bot cannot reach no longer stops hunting when the game does not confirm that it was released. The bot asks again once, then leaves that monster alone for a minute and hunts on. Protect party members follows the same rule.", "Every stop now says why in the log, for example \"Hunting stopped: stopped by you (F8)\". A stop you make (F8, Start / stop, Stop all, or a stop from OSB Manager) is never undone; a stop the bot makes by itself is started again after 2 minutes when \"Start again when the bot stops by itself\" is on.", "Auto-start no longer gives up when the page was reloaded or the connection came back: it waits for the reconnect.", "The same game refusal and the same missing skill icon appear at most once a minute, with a count.", "Town trips no longer stop when the warehouse, a merchant or the world statue does not open, for example while the town is still loading. The bot waits, walks back and tries again, three tries per service.", "New option under Loot, Bag and pet space: \"Move pet loot to my bag when the pet is nearly full\". The loot is stored or sold on the next town trip like pet loot.", "Reverse Return Scrolls have one switch on the Town page: \"Buy Reverse Return Scrolls from the Item mall (silk)\". No merchant sells them for gold, so the merchant switch is gone; if it was on, the Item mall switch is turned on. Nothing is bought while the silk budget is 0.", "Item mall \"low stock ≤\" now includes the number itself, so a low mark of 0 buys when the item runs out."]}, {"version": "2.0.2", "title": "Attack rotations for every monster class", "items": ["Combat > Skills has one attack rotation per monster class: Normal, Champion, Party, Giant, Party champion, Party giant, Elite and Unique.", "An empty rotation uses the next filled class below it in that order, down to Normal, and its tab says which one, for example \"Empty: uses Party giant\".", "Your existing rotations stay. Party champions and party giants start with a copy of your Party rotation, so they fight as before.", "The SoX chime and notice now have one switch per seal: Star, Moon and Sun. If the chime was on, all three are ticked; if it was off, none are."]}, {"version": "2.0.1", "title": "Protect your party members", "items": ["New on the Party page: Protect party members. When a monster hits a member you ticked, the bot attacks that monster.", "Tick single members or All party members. Members who left stay in the list, greyed out.", "It works within a distance you choose (40 m by default) and inside your hunting area, and never attacks players.", "Your potions, death and return rules and town trips come first. Monsters in Skip these mobs and monsters other players fight are left alone.", "With Also with Attack monsters off, a support character protects the party too."]}, {"version": "2.0.0", "title": "OSB 2.0.0", "items": ["Based on version 1.2.224 of the previous bot. Your settings, share codes and backups carry over.", "Bug reports no longer go to the previous bot's server. Preview the report, then copy it or save it as a file and attach it to a GitHub issue, or press Send and confirm to send it to the OSB team at api.osb.lol. You choose bug report or feature request, you can add a screenshot of a tab you pick, and you get a report code. Nothing is sent before you confirm.", "New: Settings → Privacy. \"Share usage statistics\" is off by default; when you turn it on, OSB sends a short status report about every 10 minutes to api.osb.lol, linked to a random install ID. \"Show my characters in the OSB dashboard\" is a second, separate switch. You can see what is sent, download your data, or delete it. Turning the statistics off deletes your data from the server. With both switches off, OSB sends nothing to api.osb.lol. The same section has \"Check GitHub for OSB updates\" (on by default): the update check carries no data about you, and switching it off stops every update request.", "New from the upstream work up to 1.2.221, all off by default unless said otherwise: wear better gear you carry on town trips, move hunting to the next level spot when a spot gives no XP, a choice of how long to wait for a party resurrection, alert chimes (another player near, death, level up, a unique in view), and a choice of which monsters to avoid when another player is fighting them.", "Item names now show even when the game's data files are not served, and pet loot sells again on town trips. Town trips no longer stop at the smith after a skipped supply. With bag selling on, the weapon merchant now sells the character bag first and the pet loot after it, so a full bag no longer leaves pet loot unsold.", "Reliability fixes from upstream 1.2.222 to 1.2.224: a town trip stops cleanly when the game never settles before the return scroll, an unanswered rebirth is asked again every 10 seconds, combat gear left half swapped by a death or world change is restored quietly while hunting, quest data that fails to load is retried after 10 minutes, the pet-bag-full warning shows with the chime off, Max every skill stops when you leave the world, and settings are saved when you close the page.", "Heads up: the new option to spare giant and party monsters below an HP cutoff is set to 50. It only applies when \"Avoided monsters\" is \"Normal & champion only\", which is not the default.", "Town page: picking a town now sets up the town trip by itself (arrival point, warehouse, potion merchant, repair merchant, world statue), and switching the town trip on fills anything still missing. The separate \"Set up this town\" button is gone and the hand-saving buttons moved under \"Adjust by hand (optional)\".", "Wear better gear now runs before anything is sold. With bag selling on and a full bag, the weapon merchant no longer sells a piece the warehouse visit would wear.", "Wear better gear no longer compares a necklace, earring or ring with the wrong worn piece. A carried necklace was measured against the weakest worn accessory, even a ring, and the game refused the move (\"Inventory rejected: 14\"). Every piece now competes only for its own slot, and the plus level counts.", "When the game refuses to wear a piece, or does not confirm it, the bot logs one line, keeps the piece in your bag and does not sell it or try it again this session.", "Loot page: \"Pick up drops\" is now the first checkbox of the Collection group, in place of the old \"Collect drops\" further down. It is the same setting as the Turn on button on the Setup page, which still works.", "Gear that asks for a mastery level (for example Lynx Gale Glove or Hydra Gale Breast Mail) is now read correctly: wear better gear considers it when your mastery is high enough, and \"Also deposit gear requiring level\" now deposits it too, so gear it never matched before may now go to the warehouse.", "Only tested in simulation (a fake server and a virtual clock), not on the live server or against the real api.osb.lol. The game tick was measured with and without a server that never answers."]}, {"version": "1.2.224", "title": "Reliability fixes for death, rebirth and quests", "items": ["If you die or change world while a buff-gear swap is pending, hunting can now start anyway. The gear is restored quietly once it is safe, not during town trips or open trade, stall or shop windows.", "Rebirth is now re-sent every 10 seconds while your character is still dead.", "Quest data that fails to load is retried after 10 minutes instead of on every tick.", "The reconnect message no longer includes your character's name, so it stays out of reports.", "Smaller fixes: the pet-bag-full toast works with the chime off, Max skills stops when you leave the world, and settings are saved when you close the page. The town tier is reset when you switch character.", "No new option."], "note": "Contributed by duan78 (#96). Tested in simulation only, not in a live game."}, {"version": "1.2.223", "title": "Town trips no longer hang before the return scroll", "items": ["If the game keeps showing a pending inventory or an open cast when the bot is about to read the return scroll, the town trip used to wait forever. It now shows \"Waiting for the game to settle before the return scroll.\"", "After a full minute of that, the trip stops cleanly and hunting stays off. The bot never sends the scroll twice. Reload the game and check your character.", "If the game refuses the return scroll three times without giving a reason, the message now says the game itself may be refusing it and suggests using the scroll by hand.", "No new option."], "note": "Contributed by duan78 (#95). Tested in simulation only, not in a live game."}];
 
 // Check trusted repository metadata; never execute downloaded update code. The check sends no user data and is on by default;
 // the player can switch it off (Settings, Privacy), and then this module makes no request at all.
@@ -16333,16 +16434,17 @@ const Diagnostics = {
   },
   pet() {
     if (!Hunt.cfg().pickup.enabled || !Loot.petMode()) return '';
-    if (!Hunt.running) return 'Pet collection paused: bot stopped.';
     const pet = Loot.pet();
     if (!pet) return 'Pet waiting: summon a pickup pet.';
     if (!Number.isInteger(pet.rec.commandMode)) return 'Pet waiting for settings.';
     if (pet.rec.commandMode & 128) return 'Pet waiting for broad auto-grab to turn off.';
     if (World.gp?.inventoryPending) return 'Pet waiting for inventory transaction.';
     if (Loot.pressed()) return 'Pet waiting briefly for potion use.';
-    if (Loot.active?.petGid) return Loot.active.retryAt ? 'Pet pickup: retry pending.' : 'Pet pickup: waiting for collection confirmation.';
+    const first = Loot.playerFirst();
+    if (first) return 'Pet waiting: ' + first + Loot.lockNote();
+    if (Loot.active?.petGid) return (Loot.active.retryAt ? 'Pet pickup: retry pending.' : 'Pet pickup: waiting for collection confirmation.') + Loot.lockNote();
     if (pet.rec.inventory.length >= pet.rec.status) return 'Pet bag full; only compatible stacks can merge.';
-    return 'Pet ready; waiting for eligible drops. ' + this.noLoot();
+    return 'Pet ready; waiting for eligible drops. ' + this.noLoot() + Loot.lockNote();
   },
   // Why nothing is being collected, counted from the drops in view. Counts only, no item names.
   noLoot() {
@@ -17458,7 +17560,7 @@ const ItemRules = {
   // that receives, so loot keeps flowing. Protected gear, supplies the trip needs and worn gear never move.
   balanceTick() {
     const gp = World.gp, pet = Loot.pet();
-    if (!(this.cfg().balance || this.cfg().petToBag) || !pet || !Hunt.running || Town.trip || !World.inWorld() || World.isDead() || !gp || gp.inventoryPending || gp.storage || gp.exchange?.open || Restock.activeShop()) return false;
+    if (!(this.cfg().balance || this.cfg().petToBag) || !pet || !Hunt.running || Town.trip || !World.inWorld() || World.isDead() || !gp || gp.inventoryPending || Loot.playerFirst() || gp.storage || gp.exchange?.open || Restock.activeShop()) return false;
     const t = now(), b = this.balancing, equipped = gp.equipmentSlotCount || 13;
     if (b) {
       const moved = (b.toPet ? Loot.items(pet) : World.items()).some(i => i.slot === b.destination && i.refObjId === b.ref);
@@ -17491,7 +17593,7 @@ const ItemRules = {
   // hunting and outside town service and open windows. A drop counts once the item has left that slot.
   dropTick() {
     const gp = World.gp;
-    if (!Hunt.running || Town.trip || !World.inWorld() || World.isDead() || !gp || gp.inventoryPending || gp.storage || gp.exchange?.open || Restock.activeShop()) return false;
+    if (!Hunt.running || Town.trip || !World.inWorld() || World.isDead() || !gp || gp.inventoryPending || Loot.playerFirst() || gp.storage || gp.exchange?.open || Restock.activeShop()) return false;
     const t = now(), d = this.dropping;
     if (d) {
       const still = (d.pet ? Loot.items(d.pet) : World.items()).some(i => i.slot === d.slot && i.refObjId === d.ref);
@@ -18929,6 +19031,9 @@ const UI = {
       const L = () => H().pickup;
       const options = this.group('Collection', this.check('Pick up drops', () => L().enabled, v => L().enabled = v));
       options.append(this.select('Default collector', [['character', 'Character'], ['pet', 'Pickup pet']], () => L().collector, v => { L().collector = v; Loot.reset(); }));
+      const petManual = this.check('Pet keeps collecting while I play by hand', () => L().petWhileManual !== false, v => L().petWhileManual = v);
+      petManual.title = 'On: when you walk, attack or use skills yourself, the pickup pet keeps collecting; only the pet moves. Your own item use, Item Mall, shops, storage, trade and stall always go first. Off: the pet waits for the manual-control pause, like the character.';
+      options.append(petManual);
       options.append(this.check('Chime when pet bag is full', () => L().petFullSound, v => { L().petFullSound = v; Loot.fullAlert = null; }), this.button('Test pet chime', () => Sound.test()),
         ...SOX_SEALS.map((seal, i) => this.check(`Chime and notice when ${['Star', 'Moon', 'Sun'][i]} gear is picked up`, () => L().soxSeals[seal], v => L().soxSeals[seal] = v)), this.button('Test SoX chime', () => Sound.test('sox')));
       this.petNote = el('p', '', 'muted pet-note'); options.append(this.petNote);
@@ -18938,7 +19043,7 @@ const UI = {
         this.number('Retries after first attempt', () => L().retries, v => L().retries = v, 0, 3),
         this.text('Always include names', () => L().include, v => L().include = v),
         this.text('Exclude names', () => L().exclude, v => L().exclude = v),
-        el('p', 'Pets collect during combat regardless of the finish-fight setting, which applies to the character only. Inventory transactions and potion priority can briefly delay pet requests. Equipment: only SoX takes Star, Moon and Sun gear and leaves plain equipment, even when Equipment or an Always include name matches it; other items follow their own switches. It needs the item catalogue, which loads automatically. When several drops are eligible, Star, Moon and Sun gear is collected first (Sun before Moon before Star) whatever the distance; without the catalogue the nearest drop goes first. Presets clear Always include names; exclusions still apply. Other items excludes the separate categories above. Ownership and bag capacity always apply. Failed pickups use a backoff.', 'muted'));
+        el('p', 'Pets collect during combat regardless of the finish-fight setting, which applies to the character only. Inventory transactions, potion priority and your own item, Item Mall, shop, storage, trade and stall use can briefly delay pet requests. Equipment: only SoX takes Star, Moon and Sun gear and leaves plain equipment, even when Equipment or an Always include name matches it; other items follow their own switches. It needs the item catalogue, which loads automatically. When several drops are eligible, Star, Moon and Sun gear is collected first (Sun before Moon before Star) whatever the distance; without the catalogue the nearest drop goes first. Presets clear Always include names; exclusions still apply. Other items excludes the separate categories above. Ownership and bag capacity always apply. Failed pickups use a backoff.', 'muted'));
       host.append(options);
       host.append(this.group('Alert sounds',
         this.check('Chime when another player comes near', () => Settings.profile.sounds.player, v => Settings.profile.sounds.player = v),
@@ -19352,8 +19457,10 @@ const UI = {
         this.check('Auto-resurrect party members', () => party().autoRes, v => { party().autoRes = v; Resurrect.reset(); }),
         this.text('Also resurrect these players (not in the party)', () => party().resNames, v => { party().resNames = v; Resurrect.reset(); }, 'names, comma separated'),
         this.number('Maximum res distance from hunt spot (m)', () => party().resRadius / 10, v => party().resRadius = v * 10, 1, 100),
+        this.number('Wait between resurrection attempts (s)', () => party().resWaitS, v => party().resWaitS = v, 31, 300),
+        this.number('Max resurrection attempts per player (0 = no limit)', () => party().resMax, v => party().resMax = v, 0, 99),
         el('p', 'For helpers outside the party, such as a lure while the party is full. Up to 20 names, any letter case. A listed player is resurrected like a party member, even with Auto-resurrect party members off; nobody else outside the party is. If the game refuses Rebirth on one of them, the bot logs it and skips that player for 10 minutes.', 'muted'),
-        el('p', 'Works during hunting and while stopped. Walks into skill range for visible dead members within the maximum radius, casts Rebirth, then returns. During hunting the radius is measured from the saved hunt spot; while stopped it uses your starting position. Collision data is required for walking. Travel stops after 30 seconds or 12 seconds without progress per leg. The member must accept the revival. Travel, shopping and manual control take priority.', 'muted')));
+        el('p', 'Works during hunting and while stopped. Walks into skill range for visible dead members within the maximum radius, casts Rebirth, then returns. During hunting the radius is measured from the saved hunt spot; while stopped it uses your starting position. Collision data is required for walking. Travel stops after 30 seconds or 12 seconds without progress per leg. The member must accept the revival. Rebirth is offered again after the wait (31 s by default: the game’s 30 s answer window plus one tick) for as long as they stay dead, up to the maximum attempts per player (0 = no limit). The count starts again when they are alive, leave the party or the list, or you press Start. Travel, shopping and manual control take priority.', 'muted')));
   },
   section_combatLure(host) { Lure.draw(host); },
   section_combatPet(host) {

@@ -89,7 +89,8 @@ Hunt.tick = function () {
     if (H.center && dist2D(World.pose(), H.center) > H.radius) { Controller.returnAfterRevive(); return; }
   }
   if (Restock.activeShop() || gp.storage || now() - Manual.lastAt < H.manualPauseS * 1000) {
-    Loot.suspend(); this.state = 'manual'; return;
+    if (Restock.activeShop() || gp.storage || !Loot.petWhileManual()) Loot.suspend(); else Loot.petTick();
+    this.state = 'manual'; return;
   }
   if (this.playerCheck()) { Loot.suspend(); this.state = 'player'; return; }
   if (H.stopNoHpPotion && Potion.count('hp') + Potion.count('vigor') === 0) return this.stop('out of HP potions');
@@ -272,6 +273,7 @@ const Controller = {
   },
   tick() {
     try {
+      Loot.watchLock();
       this.guard('Reconnect', () => Reconnect.tick());
       this.guard('Auto-start', () => AutoStart.tick());
       this.guard('Retry', () => Retry.tick());
