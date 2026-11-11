@@ -3,7 +3,7 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const source = fs.readFileSync(__dirname + '/osb.user.js', 'utf8');
 const isolated = source.slice(0, source.lastIndexOf('installWorkerHook();')) +
-  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Assets, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Protect, Town, Travel, Quest, QuestData, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, SellStar, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, Equip, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, LevelSpot, ScrollBuff, boot, Ticker, Sound, LeanMap, Telemetry, Rotations, Leveling};\n})();';
+  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Assets, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Protect, Town, Travel, Quest, QuestData, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, SellStar, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, Equip, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, LevelSpot, ScrollBuff, boot, Ticker, Sound, LeanMap, Telemetry, Rotations, Leveling, UniqueHunt, UniqueNests, SpawnData};\n})();';
 function fixture(document, sharedStorage) {
   let time = 100000;
   const storage = sharedStorage || new Map(), commands = [], notices = [], intervals = [], timers = [];
@@ -9218,6 +9218,8 @@ async function updateTests() {
 }
 require('./lean.session.test.cjs')({ test, fixture, townFixture });
 require('./lean.logging.test.cjs')({ test, fixture, townFixture });
+require('./lean.unique.test.cjs')({ test, fixture, townFixture });
+require('./lean.unique-nests.test.cjs')({ test, fixture });
 require('./lean.telemetry.test.cjs')({ test, source: isolated });
 updateTests().catch(error => { console.error(error); process.exitCode = 1; });
 
@@ -9986,4 +9988,183 @@ test('skipStar waits for an equipment drop the catalogue has never seen', () => 
   assert.equal(f.Loot.allowed(unseen), false, 'once the wire teaches it and it is Star, still skipped');
   f.Items.data.set(901, { name: 'Plain sword', icon: '', code: 'ITEM_CH_SWORD_01' });
   assert.equal(f.Loot.allowed(unseen), true, 'a seen plain sword is picked up');
+});
+test('the manual-control resurrection warning is logged once per cancelled trip and never during a pause without a trip', () => {
+  const warnings = f => f.Log.lines.filter(l => /Manual control: resurrection travel cancelled/.test(l.text)).length;
+  const f = fixture(); resurrection(f);
+  play(f, 'move');
+  for (let n = 0; n < 50; n++) { f.advance(100); f.Resurrect.tick(); }
+  assert.equal(warnings(f), 0, 'no trip, no warning');
+  assert.equal(f.Resurrect.message, 'Manual control: resurrection travel cancelled.', 'the status message stays');
+  const g = resurrectionTravel(); g.Controller.tick(); assert.equal(g.Resurrect.trip.phase, 'approach');
+  play(g, 'move');
+  for (let n = 0; n < 50; n++) { g.advance(100); g.Resurrect.tick(); }
+  assert.equal(g.Resurrect.trip, null); assert.equal(warnings(g), 1, 'one warning for the one cancelled trip');
+  g.advance(7000); g.Controller.tick(); assert.ok(g.Resurrect.trip, 'a new trip after the pause');
+  play(g, 'move'); for (let n = 0; n < 20; n++) { g.advance(100); g.Resurrect.tick(); }
+  assert.equal(warnings(g), 2, 'and one more for the second cancelled trip');
+});
+test('the first game command of a manual pause is logged with its kind, at info level shortly after entering the game', () => {
+  const f = fixture(), seen = () => f.Log.lines.filter(l => l.code === 'manual-control');
+  f.bus.emit('phase', 'world'); f.advance(2500);
+  play(f, 'select', { gid: 0 });
+  assert.equal(seen().length, 1);
+  assert.equal(seen()[0].text, 'Manual control seen: game command select, 2.5 s after entering the game; the bot pauses for 6 s.');
+  assert.equal(f.Manual.lastAt, 102500, 'the pause itself is unchanged');
+  f.advance(1000); play(f, 'move'); assert.equal(seen().length, 1, 'once per pause');
+  f.advance(60000); play(f, 'attack', { gid: 9 }); assert.equal(seen().length, 1, 'later pauses go to detailed capture only');
+  f.Activity.captureUntil = Infinity; f.advance(10000); play(f, 'attack', { gid: 9 });
+  assert.ok(f.Activity.commands.some(c => c.code === 'manual-control' && /attack with a target/.test(c.text)));
+});
+function petGearFixture() {
+  const f = buffGearFixture();
+  f.Settings.profile.macro.buffs = [f.Settings.profile.macro.buffs[0]];
+  pickupPet(f, 0x147); f.Settings.profile.hunt.pickup.enabled = true;
+  return { f, gp: f.World.gp, drop: f.drop(20, 3436), moves: () => f.commands.filter(c => c.kind === 'inventory-move').length };
+}
+test('a buff gear run never starts in the gap between a pet pickup send and its inventory lock', () => {
+  const { f, gp, drop, moves } = petGearFixture();
+  assert.equal(f.Loot.begin(drop), true); assert.equal(f.commands.at(-1).kind, 'cos-pickup');
+  f.advance(100); f.BuffGear.tick(); f.BuffGear.tick();
+  assert.equal(f.BuffGear.run, null, 'one tick after the pet send the lock is not visible yet, and no run starts'); assert.equal(moves(), 0);
+  gp.inventoryPending = true; f.Loot.watchLock(); assert.equal(f.Loot.lock.owner, 'pet');
+  for (let n = 0; n < 30; n++) { f.advance(100); f.Loot.watchLock(); f.BuffGear.tick(); }
+  assert.equal(moves(), 0, 'no gear move inside the pet transaction');
+  gp.inventoryPending = false; f.Loot.watchLock();
+  f.advance(100); f.BuffGear.tick(); f.BuffGear.tick();
+  assert.equal(moves(), 1, 'the gear move goes out once the pet lock has ended');
+});
+test('a buff gear run holds pet pickups until it ends', () => {
+  const { f, drop, moves } = petGearFixture();
+  f.BuffGear.tick(); f.BuffGear.tick(); assert.ok(f.BuffGear.run.pending); assert.equal(moves(), 1);
+  const pets = () => f.commands.filter(c => c.kind === 'cos-pickup').length;
+  f.advance(1000); assert.equal(f.Loot.pickup(drop.gid, 50), false); f.Loot.petTick();
+  for (let n = 0; n < 10; n++) { f.advance(100); f.Controller.tick(); }
+  assert.equal(pets(), 0, 'no pet pickup while a gear move is pending');
+  assert.match(f.Loot.petStatus(), /buff gear is changing/);
+  f.confirmMove(); f.drive(); assert.equal(f.BuffGear.run, null);
+  f.advance(1000); f.Loot.petTick(); assert.equal(pets(), 1, 'the pet collects again after the run');
+});
+function applyGearMove(gp, p) {
+  const from = gp.inventory.find(i => i.slot === p.source), to = gp.inventory.find(i => i.slot === p.destination);
+  from.slot = p.destination; if (to) to.slot = p.source;
+}
+test('a gear move that waits behind another transaction lock for more than 15 s is confirmed afterwards', () => {
+  for (const order of ['after-own', 'potion']) {
+    const f = buffGearFixture(), gp = f.World.gp;
+    f.BuffGear.tick(); f.BuffGear.tick(); const p = f.BuffGear.run.pending;
+    if (order === 'potion') f.Potion.lastUse = f.BuffGear.sentAt + 50;
+    gp.inventoryPending = true; f.advance(100); f.BuffGear.tick();
+    if (order === 'after-own') { assert.equal(f.Loot.lock.owner, 'gear'); applyGearMove(gp, p); }
+    else assert.equal(f.Loot.lock.owner, 'potion');
+    for (let n = 0; n < 70; n++) { f.advance(300); f.BuffGear.tick(); }
+    assert.ok(f.BuffGear.run?.pending, order + ': still waiting after 21 s behind a lock that is not the move'); assert.equal(f.Hunt.running, true);
+    if (order === 'potion') applyGearMove(gp, p);
+    gp.inventoryPending = false; f.advance(300); f.BuffGear.tick();
+    assert.notEqual(f.BuffGear.run.pending, p, order + ': confirmed once the lock ends'); assert.equal(f.Hunt.running, true);
+    f.drive(); assert.equal(f.BuffGear.run, null); assert.equal(f.Hunt.running, true); assert.equal(f.BuffGear.recovery, null);
+  }
+  const g = buffGearFixture(), gg = g.World.gp;
+  g.BuffGear.tick(); g.BuffGear.tick(); g.Potion.lastUse = g.BuffGear.sentAt + 50; gg.inventoryPending = true;
+  for (let n = 0; n < 160; n++) { g.advance(300); g.BuffGear.tick(); }
+  assert.equal(g.Hunt.running, false, 'a lock that never ends still stops in a clear failure');
+  assert.match(g.BuffGear.message, /Equipment move unconfirmed .*inventory stayed busy with another action \(potion\) for 45 s/);
+});
+function gearRestoreMove(f) {
+  for (let n = 0; n < 100; n++) {
+    f.BuffGear.tick(); const r = f.BuffGear.run;
+    if (!r) throw Error('the run ended early');
+    if (r.pending && (r.restoring || !r.queue.length)) return r.pending;
+    if (r.pending) f.confirmMove();
+    if (r.cast) { f.confirmBuff(r.cast.id); f.advance(2000); }
+    f.advance(300);
+  }
+  throw Error('no restore move');
+}
+function refuseGearMove(f, ticks = 10) {
+  const gp = f.World.gp;
+  gp.inventoryPending = true; f.advance(100); f.BuffGear.tick();
+  f.bus.emit('game-error', 'Inventory rejected: 2'); gp.inventoryPending = false;
+  for (let n = 0; n < ticks; n++) { f.advance(300); f.BuffGear.tick(); }
+}
+test('a refused move in the restore of a saved set is sent once more, then handled without stopping hunting', () => {
+  const f = buffGearFixture(), moves = () => f.commands.filter(c => c.kind === 'inventory-move');
+  f.Settings.profile.macro.buffs = [f.Settings.profile.macro.buffs[0]];
+  const p = gearRestoreMove(f), sent = moves().length;
+  refuseGearMove(f);
+  assert.equal(moves().length, sent + 1, 'sent once more after the refusal');
+  assert.deepEqual([moves().at(-1).source, moves().at(-1).destination], [p.source, p.destination]);
+  assert.ok(f.Log.lines.some(l => /did not take the move .*sending it once more/.test(l.text)));
+  refuseGearMove(f);
+  assert.equal(moves().length, sent + 1, 'never a third time');
+  assert.equal(f.BuffGear.run, null); assert.equal(f.Hunt.running, true, 'hunting goes on with the worn weapon');
+  assert.match(f.BuffGear.message, /refused to move .* twice \(Inventory rejected: 2\); hunting goes on/);
+  assert.doesNotMatch(f.BuffGear.message, /unconfirmed/);
+  assert.ok(f.BuffGear.recovery && f.BuffGear.autoRestore);
+  for (let n = 0; n < 100; n++) { f.advance(2000); f.BuffGear.resume(); f.BuffGear.tick(); }
+  assert.equal(moves().length, sent + 1, 'nothing is sent again for five minutes');
+  f.advance(120000); f.BuffGear.resume(); assert.ok(f.BuffGear.run?.restoring, 'then the combat gear is tried again');
+  f.drive(); assert.equal(f.BuffGear.recovery, null); assert.equal(f.Hunt.running, true);
+  const g = buffGearFixture(); g.Settings.profile.macro.buffs = [g.Settings.profile.macro.buffs[0]];
+  gearRestoreMove(g); g.World.gp.inventory = g.World.gp.inventory.filter(i => i.slot !== 6);
+  refuseGearMove(g); refuseGearMove(g);
+  assert.equal(g.Hunt.running, false, 'with no weapon worn hunting stops'); assert.match(g.BuffGear.message, /twice .*no weapon is worn/);
+});
+test('a refused move while wearing a saved set skips its buffs for two minutes and restores the combat gear', () => {
+  const f = buffGearFixture(), home = JSON.stringify(f.BuffGear.setup()), moves = () => f.commands.filter(c => c.kind === 'inventory-move').length;
+  f.Settings.profile.macro.buffs = [f.Settings.profile.macro.buffs[0]];
+  f.BuffGear.tick(); f.BuffGear.tick(); assert.ok(f.BuffGear.run.pending); const sent = moves();
+  refuseGearMove(f); assert.equal(moves(), sent + 1);
+  refuseGearMove(f);
+  assert.equal(f.Hunt.running, true); assert.ok(f.Log.lines.some(l => /refused to move .* twice \(Inventory rejected: 2\); its buffs wait two minutes/.test(l.text)));
+  f.drive(); assert.equal(JSON.stringify(f.BuffGear.setup()), home); assert.equal(f.BuffGear.recovery, null);
+  assert.match(f.BuffGear.message, /its buffs wait two minutes\. Combat gear restored\./);
+  assert.equal(f.BuffGear.tick(), false, 'the skipped buff does not start another change right away');
+  assert.match(f.BuffGear.status(), /skipped because the game refused to wear its gear/);
+});
+test('a gear move is never sent again when anything moved', () => {
+  const f = buffGearFixture(), gp = f.World.gp, moves = () => f.commands.filter(c => c.kind === 'inventory-move').length;
+  f.Settings.profile.macro.buffs = [f.Settings.profile.macro.buffs[0]];
+  const p = gearRestoreMove(f), sent = moves();
+  gp.inventoryPending = true; f.advance(100); f.BuffGear.tick(); f.bus.emit('game-error', 'Inventory rejected: 2');
+  gp.inventory.find(i => i.slot === p.source).slot = 20; gp.inventoryPending = false;
+  for (let n = 0; n < 40; n++) { f.advance(300); f.BuffGear.tick(); }
+  assert.equal(moves(), sent, 'the state does not prove that nothing moved, so nothing is resent');
+  for (let n = 0; n < 20; n++) { f.advance(300); f.BuffGear.tick(); }
+  assert.equal(moves(), sent); assert.match(f.BuffGear.message, /Equipment move unconfirmed .*no retry sent/);
+});
+test('pet pickups that keep finishing quickly do not starve a due buff gear run', () => {
+  const { f, moves } = petGearFixture(), pet = f.World.gp.cosRecords[0];
+  const pets = () => f.commands.filter(c => c.kind === 'cos-pickup').length;
+  let gid = 30, started = null;
+  for (let n = 0; n < 60 && started === null; n++) {
+    if (!f.Loot.active) { const d = f.drop(gid++, 3436); d.x = 110; f.Loot.petTick(); }
+    f.advance(100); f.BuffGear.tick();
+    if (f.BuffGear.run) { started = n; break; }
+    const a = f.Loot.active;
+    if (a?.petGid) { pet.inventory.push({ slot: pet.inventory.length, refObjId: a.ref, quantity: 1 }); f.Loot.tick(); }
+  }
+  assert.ok(started !== null && started <= 20, 'the run starts within two seconds, not never'); assert.ok(pets() >= 1);
+  const sent = pets(); f.BuffGear.tick(); f.advance(1000); f.Loot.petTick(); assert.equal(pets(), sent, 'and the pet waits for it');
+  assert.equal(moves(), 1);
+});
+test('a pet pickup the game refuses with a code is sent at most twice, then given up', () => {
+  const f = fixture(); pickupPet(f, 0x147); const d = f.drop(20, 3436); d.name = 'Armet';
+  const pets = () => f.commands.filter(c => c.kind === 'cos-pickup' && c.target === d.gid).length;
+  let seen = 0;
+  for (let n = 0; n < 900; n++) {
+    f.advance(100); f.Controller.tick();
+    if (pets() > seen) { seen = pets(); f.advance(100); f.bus.emit('game-error', 'Inventory rejected: 2'); }
+  }
+  assert.equal(pets(), 2, 'one retry, then no more');
+  assert.ok(f.Log.lines.some(l => /Loot skipped \(Armet\): Inventory rejected: 2; the game refused this pickup twice/.test(l.text)));
+  f.bus.emit('despawn', d); f.World.ents.delete(d.gid);
+  const e = f.drop(21, 3436); f.advance(1000); f.Controller.tick();
+  assert.equal(f.commands.at(-1).target, e.gid, 'other drops are still collected');
+});
+test('refusal evidence keeps pet and drop command kinds', () => {
+  const f = fixture(); pickupPet(f, 0x147); const d = f.drop(20, 3436);
+  f.Loot.begin(d); f.advance(100); f.bus.emit('game-error', 'Inventory rejected: 2');
+  const row = f.Log.lines.find(l => l.code === 'game-refusal');
+  assert.ok(row); assert.equal(JSON.stringify(row.failure.recentCommands.map(c => c.kind)), '["cos-pickup"]');
 });

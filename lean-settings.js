@@ -49,6 +49,8 @@ function upgradeProfile(input) { return upgradeSoxSound(Rotations.upgrade(input)
 const DEFAULT_PROFILE = {
   items: { rules: {}, balance: false, petToBag: false, autoEquip: false, gear: { primaryWeapon: null, secondaryWeapon: null, shield: null } },
   sounds: { player: false, died: false, levelUp: false, unique: false },
+  unique: { spots: [], waitS: 30, learned: false, chase: 800, titans: false, selfDefence: true, skipBelow: 75, limitM: 60, chime: true },
+  uniqueNests: { on: false, picks: [], maxM: 1000 },
   stall: { title: '', greeting: '', network: true, closeWhenEmpty: true, prices: {} },
   alchemy: { target: 3, limit: 20, elixir: 0, powder: false, use: { luck: false, steady: false, immortal: false, astral: false }, stones: { luck: 1, steady: 1, immortal: 1, astral: 1 }, stoneLimit: 0,
     // The plus from which each helper is used: a failure from +5 up can destroy the item (Steady and Immortal matter from there),
@@ -119,7 +121,7 @@ function botProfile(input) {
   const result = deepMerge(DEFAULT_PROFILE, {});
   if (!input || typeof input !== 'object') return result;
   input = upgradeProfile(input);
-  for (const key of ['macro', 'potion', 'hunt', 'lure', 'pet', 'scroll', 'mall', 'wardrobe', 'party', 'alchemy', 'mastery', 'statPoints', 'leveling', 'trace', 'items', 'trade', 'stall', 'quest', 'sounds']) {
+  for (const key of ['macro', 'potion', 'hunt', 'lure', 'pet', 'scroll', 'mall', 'wardrobe', 'party', 'alchemy', 'mastery', 'statPoints', 'leveling', 'trace', 'items', 'trade', 'stall', 'quest', 'sounds', 'unique', 'uniqueNests']) {
     if (!input[key] || typeof input[key] !== 'object') continue;
     for (const field of Object.keys(DEFAULT_PROFILE[key])) {
       if (field in input[key]) result[key][field] = deepMerge(DEFAULT_PROFILE[key][field], input[key][field]);
@@ -151,6 +153,17 @@ function botProfile(input) {
   // The finish-steal cutoff stops at 50: above it the kill can still be won, so avoiding is pointless.
   if (!Number.isFinite(result.hunt.avoidKsBelow) || result.hunt.avoidKsBelow < 0) result.hunt.avoidKsBelow = 0;
   if (result.hunt.avoidKsBelow > 50) result.hunt.avoidKsBelow = 50;
+  const unique = result.unique, uniqueDefaults = DEFAULT_PROFILE.unique;
+  unique.spots = (Array.isArray(unique.spots) ? unique.spots : []).filter(s => s && Number.isInteger(s.regionId) && [s.x, s.y ?? 0, s.z].every(Number.isFinite))
+    .slice(0, 30).map(s => ({ name: typeof s.name === 'string' ? s.name.trim().slice(0, 32) : '', regionId: s.regionId, x: s.x, y: s.y ?? 0, z: s.z }));
+  for (const key of ['learned', 'titans', 'selfDefence', 'chime']) if (typeof unique[key] !== 'boolean') unique[key] = uniqueDefaults[key];
+  for (const [key, min, max] of [['waitS', 0, 600], ['chase', 100, 3000], ['skipBelow', 0, 100], ['limitM', 5, 1440]]) {
+    unique[key] = Number.isFinite(unique[key]) ? clamp(Math.round(unique[key]), min, max) : uniqueDefaults[key];
+  }
+  const nests = result.uniqueNests;
+  nests.on = nests.on === true;
+  nests.picks = [...new Set((Array.isArray(nests.picks) ? nests.picks : []).filter(c => typeof c === 'string' && /^[A-Za-z0-9_]{1,64}$/.test(c)))].slice(0, 100);
+  nests.maxM = Number.isFinite(nests.maxM) ? clamp(Math.round(nests.maxM / 100) * 100, 100, 5000) : DEFAULT_PROFILE.uniqueNests.maxM;
   const protect = result.party.protect;
   for (const key of ['enabled', 'all', 'whileNoAttack']) protect[key] = protect[key] === true;
   protect.range = Number.isFinite(protect.range) ? clamp(Math.round(protect.range), 5, 100) : DEFAULT_PROFILE.party.protect.range;
@@ -223,7 +236,8 @@ const Sound = {
   // Only these alerts are audible; existing combat/UI calls stay silent.
   tones: { 'pet-full': { notes: [659.25, 830.61, 987.77], gap: 0.18 }, sox: { notes: [783.99, 987.77, 1174.66, 1567.98], gap: 0.11 },
     player: { notes: [392, 329.63], gap: 0.25 }, died: { notes: [523.25, 415.3, 329.63], gap: 0.2 },
-    levelUp: { notes: [523.25, 659.25, 783.99, 1046.5], gap: 0.12 }, unique: { notes: [880, 1108.73, 880, 1108.73], gap: 0.15 } },
+    levelUp: { notes: [523.25, 659.25, 783.99, 1046.5], gap: 0.12 }, unique: { notes: [880, 1108.73, 880, 1108.73], gap: 0.15 },
+    uniqueKilled: { notes: [1318.51, 1046.5, 783.99, 1046.5, 1318.51, 1567.98], gap: 0.12 } },
   // Alert chimes for events the bus already carries (SBot-style alarms); every switch is off by default.
   level: null,
   anyOn() { const s = Settings.profile.sounds; return !!(s && (s.player || s.died || s.levelUp || s.unique)); },

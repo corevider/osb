@@ -6,6 +6,8 @@ const PET_LOCK_LINK_MS = 1500;
 const PET_LOCK_WINDOW_MS = 60000;
 const PET_GIVE_UP_ATTEMPTS = 6;
 const PET_LOCK_BUDGET_MS = 15000;
+const PET_REJECTED_MAX = 2;
+const PET_GEAR_HOLD_MS = 1000;
 const PLAYER_INV_KINDS = new Set(['item-use', 'item-drop', 'inventory-move', 'avatar-move', 'equip', 'pickup', 'cos-pickup', 'cos-transfer', 'cos-drop', 'immortal', 'attr']);
 const PLAYER_INV_PREFIXES = /^(?:mall|shop|cos-shop|storage|stall|exchange|alchemy|gear)-/;
 const Loot = {
@@ -75,6 +77,7 @@ const Loot = {
     const share = this.lockNote();
     if (Hunt.running && World.gp.inventoryPending) return 'Pet waiting for pickup / inventory transaction to finish.' + share;
     if (Hunt.running && this.pressed()) return 'Pet waiting briefly for potion use.' + share;
+    if (BuffGear.run || now() - BuffGear.wantAt < PET_GEAR_HOLD_MS) return 'Pet waiting: buff gear is changing.' + share;
     const yielding = this.playerFirst();
     if (yielding) return 'Pet waiting: ' + yielding + share;
     if (this.active?.petGid === pet.rec.gid) return 'Pet collecting: ' + (this.active.name || this.active.gid) + (this.active.retryAt ? ' (retry pending).' : '.') + share;
@@ -95,12 +98,20 @@ const Loot = {
     if (t - this.playerInvAt < PLAYER_INV_HOLD_MS) return 'you are using the inventory.';
     return '';
   },
-  petBlocked() { return this.pressed() || !!this.lock?.pet || now() - this.petEndAt < PET_GAP_MS || !!this.playerFirst(); },
+  petBlocked() { return this.pressed() || !!this.lock?.pet || now() - this.petEndAt < PET_GAP_MS || !!BuffGear.run || now() - BuffGear.wantAt < PET_GEAR_HOLD_MS || !!this.playerFirst(); },
+  petInFlight() { return !!this.lock?.pet || now() - this.petSentAt < PET_LOCK_LINK_MS; },
+  lockOwner(t) {
+    let owner = 'other', latest = t - PET_LOCK_LINK_MS;
+    for (const [name, sentAt] of [['pet', this.petSentAt], ['gear', BuffGear.sentAt], ['potion', Potion.lastUse > 0 ? Potion.lastUse : -Infinity], ['player', this.playerInvAt]]) {
+      if (sentAt >= latest && sentAt <= t) { owner = name; latest = sentAt; }
+    }
+    return owner;
+  },
   watchLock() {
     const pending = !!World.gp?.inventoryPending, t = now(), w = this.lock;
     if (pending && !w) {
-      const a = this.active;
-      this.lock = { at: t, pet: !!a?.petGid && t - this.petSentAt < PET_LOCK_LINK_MS, gid: a?.gid ?? 0 };
+      const a = this.active, pet = !!a?.petGid && t - this.petSentAt < PET_LOCK_LINK_MS;
+      this.lock = { at: t, pet, owner: pet ? 'pet' : this.lockOwner(t), gid: a?.gid ?? 0 };
     } else if (!pending && w) {
       this.lock = null;
       if (!w.pet) return;
@@ -329,6 +340,9 @@ const Loot = {
     const capacity = /full|capacity|(?:not enough|no|out of) (?:free |inventory |bag )?space|envanter.*dolu/i.test(reason);
     const spent = a.petGid && !capacity ? this.spent.get(a.gid) : null;
     if (spent && reason !== 'Inventory command unavailable') spent.attempts++;
+    const rejected = spent && /^Inventory rejected: \d+$/.test(reason);
+    if (rejected) spent.rejected = (spent.rejected || 0) + 1;
+    if (rejected && spent.rejected >= PET_REJECTED_MAX) { this.skip(e, reason + '; the game refused this pickup twice, so the pet gives up on this drop', false, true); return false; }
     if (spent && (spent.attempts >= PET_GIVE_UP_ATTEMPTS || spent.lockMs >= PET_LOCK_BUDGET_MS)) { this.skip(e, reason + '; the pet gives up on this drop', false, true); return false; }
     if (capacity || a.attempts > Hunt.cfg().pickup.retries) { this.skip(e, reason, capacity); return false; }
     // Movement cancels the outstanding worker pickup intent. Resubmit on a later tick.

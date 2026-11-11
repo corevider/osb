@@ -3,8 +3,12 @@
 const BUFF_GEAR_KINDS = ['primary', 'secondary', 'shield'];
 const BUFF_COMBAT_HOLD_MS = 5 * 60000;
 const BUFF_RUN_BUDGET_MS = 60000; // a weapon change stops starting casts after this and restores the combat gear
+const BUFF_MOVE_REFUSED_MS = 2000;
+const BUFF_MOVE_COUNTED_MS = 15000;
+const BUFF_MOVE_WATCH_MS = 1000;
+const BUFF_MOVE_TOTAL_MS = 45000;
 const BuffGear = {
-  run: null, recovery: null, autoRestore: false, message: 'Buff weapon swapping off.', skipped: new Map(), waiting: '', started: false, bad: new Set(), combatHold: 0,
+  run: null, recovery: null, autoRestore: false, message: 'Buff weapon swapping off.', skipped: new Map(), waiting: '', started: false, bad: new Set(), combatHold: 0, restoreAt: 0, sentAt: -Infinity, wantAt: -Infinity,
   cfg() { return Settings.profile.macro; },
   items() { return World.gp?.inventory || []; },
   at(slot) { return this.items().find(i => i.slot === slot) || null; },
@@ -121,6 +125,10 @@ const BuffGear = {
     Hook.observers.push(command => {
       if (command.kind === 'gameplay' && command.command?.kind === 'inventory-move' && this.run) this.fail('Manual equipment move interrupted buff swaps.');
     });
+    bus.on('game-error', text => {
+      const p = this.run?.pending;
+      if (p && /^Inventory (?:rejected: \d+|command unavailable)$/.test(String(text))) p.error = String(text);
+    });
     bus.on('cast', c => {
       const p = this.run?.cast;
       if (p && c.caster === World.localGid() && c.skill === p.id && !c.resultOnly && c.cancelledAtMs === undefined) p.accepted = true;
@@ -137,14 +145,14 @@ const BuffGear = {
     Settings.saveProfile(); UI.draw();
   },
   reset() {
-    this.run = this.recovery = null; this.skipped.clear(); this.bad.clear(); this.combatHold = 0;
+    this.run = this.recovery = null; this.skipped.clear(); this.bad.clear(); this.combatHold = 0; this.restoreAt = 0;
     this.message = 'Buff gear reset. Check equipped weapons after reconnecting.';
   },
   // Dying or changing world mid-swap is not a failure: remember the combat gear and put it back on once alive again.
   interrupt(text, soft = false) {
     if (!this.run) return;
     if (!soft) return this.fail(text);
-    this.recovery = this.run.home; this.autoRestore = true; this.run = null;
+    this.recovery = this.run.home; this.autoRestore = true; this.restoreAt = 0; this.run = null;
     this.message = text + ' Combat gear is restored once the character is back.';
   },
   fail(text) {
@@ -162,7 +170,7 @@ const BuffGear = {
   },
   // Called every tick: a swap cut short by death or a world change puts the combat weapon back by itself.
   resume() {
-    if (this.autoRestore && this.recovery && !this.run) this.restore(true);
+    if (this.autoRestore && this.recovery && !this.run && now() >= this.restoreAt) this.restore(true);
   },
   restore(auto = false) {
     const gp = World.gp;
@@ -200,6 +208,11 @@ const BuffGear = {
         Town.trip || WalkBack.active || Restock.trip || Restock.recording || Resurrect.trip || now() < Resurrect.holdUntil ||
         Restock.activeShop() || World.gp?.storage || World.gp?.exchange?.open || World.gp?.exchange?.requesting || World.gp?.stall?.phase && World.gp.stall.phase !== 'none' ||
         Alchemy.run || Alchemy.pending || Loot.active && !Loot.active.petGid || Loot.pressed());
+  },
+  petWait() {
+    if (!Loot.petInFlight()) return false;
+    this.wantAt = now();
+    return true;
   },
   // The bag weapon (and shield) for a skill the worn weapon cannot cast, or why there is none.
   autoSet(id, home) {
@@ -266,7 +279,7 @@ const BuffGear = {
     const why = this.problem(home, queue.map(q => q.set));
     if (why) return wait(why);
     this.waiting = note;
-    if (!Cmd.move(World.pose())) return false;
+    if (this.petWait() || !Cmd.move(World.pose())) return false;
     const have = queue.flatMap(q => q.buffs);
     for (const q of queue) { const more = this.extras(q.set, home, have); q.buffs.push(...more); have.push(...more); }
     Loot.suspend(); Hunt.state = 'buff'; this.run = this.create(home, queue); this.run.party = have.some(e => e.party);
@@ -299,7 +312,7 @@ const BuffGear = {
   wearCombat(home) {
     if (!home.primary || this.matches(home) || now() < this.combatHold) return false;
     if (this.at(7) && this.key(this.at(7)) !== home.shield && World.freeBagSlots() < 1) { this.waiting = 'Wearing your combat gear needs one free bag slot to take off the off-hand item.'; return false; }
-    if (!Cmd.move(World.pose())) return false;
+    if (this.petWait() || !Cmd.move(World.pose())) return false;
     Loot.suspend(); Hunt.state = 'buff'; this.run = this.create(home, []); this.run.restoring = true; this.run.combat = true;
     this.message = 'Wearing your combat gear.';
     return true;
@@ -318,18 +331,36 @@ const BuffGear = {
     if (this.run || this.blocked()) return false;
     const home = this.home(), why = this.problem(home, [set]);
     if (why) { this.waiting = why; return false; }
-    if (!Cmd.move(World.pose())) return false;
+    if (this.petWait() || !Cmd.move(World.pose())) return false;
     Loot.suspend(); if (Hunt.running) Hunt.state = 'buff';
     this.run = this.create(home, [{ set, buffs: [entry, ...this.extras(set, home, [entry])] }]); this.run.party = true;
     this.message = 'Equipping ' + set.name + ' for party buffs.';
     return true;
   },
-  move(source, destination) {
+  move(source, destination, resent = false) {
     const r = this.run, from = this.key(this.at(source)), to = this.key(this.at(destination));
     if (!from || !Cmd.spaced('inventory-move')) return;
-    if (Cmd.raw({ kind: 'inventory-move', source, destination, quantity: 0 }, 'Buff gear: move equipment')) {
-      r.pending = { source, destination, from, to, at: now() };
+    if (Cmd.raw({ kind: 'inventory-move', source, destination, quantity: 0 }, resent ? 'Buff gear: move equipment again' : 'Buff gear: move equipment')) {
+      this.sentAt = now();
+      r.pending = { source, destination, from, to, at: now(), seenAt: now(), counted: 0, calm: 0, resent };
     }
+  },
+  refusedText(p, what) { return `The game refused to move ${what} (slot ${p.source} to ${p.destination}) twice${p.error ? ' (' + p.error + ')' : ''}`; },
+  refusedMove(r, p, what) {
+    const text = this.refusedText(p, what);
+    r.pending = null;
+    if (!r.restoring && r.queue.length) {
+      const q = r.queue.shift();
+      for (const e of q?.buffs || []) if (!e.party) this.skipped.set(e.b.group, { signature: r.signature, until: now() + 120000, why: 'the game refused to wear its gear, trying again in two minutes' });
+      r.refused = text + '; its buffs wait two minutes.'; this.message = r.refused + ' Restoring combat gear.';
+      Log.warn(r.refused);
+      return true;
+    }
+    if (!this.weapon(this.at(6))) { this.fail(text + '; no weapon is worn.'); return true; }
+    this.recovery = r.home; this.autoRestore = true; this.restoreAt = now() + BUFF_COMBAT_HOLD_MS; this.run = null;
+    this.message = text + '; hunting goes on with what is worn, and the combat gear is tried again in five minutes.';
+    Log.warn(this.message);
+    return true;
   },
   equip(set) {
     if (this.matches(set)) return true;
@@ -357,12 +388,26 @@ const BuffGear = {
     // Party buffs also go out while hunting is stopped; your own buffs only while hunting.
     if (!Hunt.running) for (const q of r.queue) q.buffs = q.buffs.filter(e => e.party);
     if (r.pending) {
-      const p = r.pending;
-      if (!gp.inventoryPending && this.key(this.at(p.destination)) === p.from && this.key(this.at(p.source)) === p.to) r.pending = null;
+      const p = r.pending, t = now(), swapped = this.key(this.at(p.destination)) === p.from && this.key(this.at(p.source)) === p.to;
+      Loot.watchLock();
+      const lock = Loot.lock, own = !!lock && lock.owner === 'gear' && lock.at >= p.at;
+      if (own) p.lockSeen = true;
+      if (!gp.inventoryPending || own && !swapped) p.counted += t - p.seenAt;
+      p.calm = gp.inventoryPending ? 0 : p.calm + (t - p.seenAt <= BUFF_MOVE_WATCH_MS ? t - p.seenAt : 0);
+      p.seenAt = t;
+      if (!gp.inventoryPending && swapped) r.pending = null;
       else {
         const item = this.at(p.source) || this.at(p.destination), what = item ? item.name || Items.name(item.refObjId) : 'an item';
         // Nothing moved and nothing is pending: the game refused it (level, class). Skip that weapon, put gear back, carry on.
-        const refused = !gp.inventoryPending && now() - p.at > 2000 && this.key(this.at(p.source)) === p.from && this.key(this.at(p.destination)) === p.to;
+        const unchanged = !gp.inventoryPending && p.calm > BUFF_MOVE_REFUSED_MS && this.key(this.at(p.source)) === p.from && this.key(this.at(p.destination)) === p.to;
+        if (unchanged && !p.resent && (p.lockSeen || p.error)) {
+          if (!Loot.petInFlight()) {
+            this.move(p.source, p.destination, true);
+            if (r.pending !== p) Log.info(`The game did not take the move of ${what} (slot ${p.source} to ${p.destination}); sending it once more.`);
+          }
+          return true;
+        }
+        const refused = unchanged, expired = p.counted > BUFF_MOVE_COUNTED_MS, timedOut = expired || t - p.at > BUFF_MOVE_TOTAL_MS;
         // The chosen primary weapon or shield the game will not equip: never try it again (until it is picked again),
         // and put back what was worn before, including an off-hand item already taken off.
         const chosen = p.destination === 6 && p.from === r.home.weapon || p.destination === 7 && p.from === r.home.shield;
@@ -375,7 +420,7 @@ const BuffGear = {
           Log.warn(this.message); return true;
         }
         // Any other combat gear change the game does not take is left alone for five minutes instead of stopping hunting.
-        if (r.combat && (refused || now() - p.at > 15000)) {
+        if (r.combat && (refused || timedOut)) {
           this.combatHold = now() + BUFF_COMBAT_HOLD_MS; this.run = null;
           this.message = `The game would not move ${what}; your combat gear stays as it is for five minutes.`;
           Log.warn(this.message); return true;
@@ -385,9 +430,11 @@ const BuffGear = {
           r.refused = `The game would not equip ${what}; another weapon is tried next time.`; this.message = r.refused + ' Restoring combat gear.';
           return true;
         }
-        if (now() - p.at > 15000) {
-          if (r.queue[0]?.set.auto && p.destination === 6) this.bad.add(p.from);
-          this.fail(`Equipment move unconfirmed (${what}, slot ${p.source} to ${p.destination}); no retry sent.`);
+        if (refused && p.resent) return this.refusedMove(r, p, what);
+        if (timedOut) {
+          if (expired && r.queue[0]?.set.auto && p.destination === 6) this.bad.add(p.from);
+          const busy = expired ? '' : ` The game's inventory stayed busy with ${gp.inventoryPending && lock ? 'another action (' + lock.owner + ')' : 'other actions'} for ${Math.round((t - p.at) / 1000)} s.`;
+          this.fail(`Equipment move unconfirmed (${what}, slot ${p.source} to ${p.destination}); ${p.resent ? 'sent twice' : 'no retry sent'}.${busy}`);
         }
         return true;
       }
@@ -403,7 +450,7 @@ const BuffGear = {
       if (!p.accepted) { if (now() - p.at > 10000) { this.skipped.set(p.group, { signature: r.signature, until: now() + 120000, why: 'the cast was not confirmed, trying again in two minutes' }); this.cancel(); this.message = 'Buff cast unconfirmed; restoring combat gear.'; r.cast = null; } return true; }
       r.effects.push(p); r.cast = null;
     }
-    if (Combat.busy() || gp.inventoryPending || World.isSitting() || World.local()?.mountedOn || Loot.pressed()) return true;
+    if (Combat.busy() || gp.inventoryPending || World.isSitting() || World.local()?.mountedOn || Loot.pressed() || Loot.petInFlight()) return true;
     if (Restock.activeShop() || gp.storage || gp.exchange?.open || gp.exchange?.requesting || gp.stall?.phase && gp.stall.phase !== 'none' || gp.returnScroll) { this.fail('Buff swaps interrupted by another game action.'); return true; }
     if (r.restoring || !r.queue.length) {
       this.message = 'Restoring combat gear.';

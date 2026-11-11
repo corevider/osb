@@ -146,6 +146,7 @@ Hunt.tick = function () {
 // Stop (userStop) cancels that.
 function stopAll(reason = 'all activities stopped') {
   Town.record('stop');
+  UniqueHunt.stop(reason);
   Alchemy.stop();
   Trade.cancel();
   Stall.stop();
@@ -290,6 +291,7 @@ const Controller = {
       if (Alchemy.run || Alchemy.pending) { this.mode = 'alchemy'; return; }
       if (Stall.run) { if (World.inWorld()) Potion.tick(); Stall.tick(); this.mode = 'stall'; return; }
       if (SellStar.run) { SellStar.tick(); this.mode = 'sell star'; return; }
+      if (UniqueHunt.active && World.inWorld() && World.isDead()) UniqueHunt.stop('the character died');
       if (World.inWorld() && World.isDead() && Hunt.running) {
         Town.cancel(); Resurrect.cancelTrip(); Resurrect.holdUntil = 0;
         Hunt.tick(); this.mode = Hunt.state; return;
@@ -337,6 +339,7 @@ const Controller = {
       // visit owns the character like a town trip does.
       this.guard('Quest', () => Quest.observe());
       if (Quest.trip) { Quest.tick(); this.mode = 'quest'; return; }
+      if (UniqueHunt.active) { UniqueHunt.tick(); this.mode = UniqueHunt.mode(); return; }
       if (WalkBack.active) { this.mode = 'returning'; WalkBack.tick(); }
       else if (Travel.active) { this.mode = 'travelling'; Travel.tick(); }
       else if (Restock.recording) this.mode = 'recording';

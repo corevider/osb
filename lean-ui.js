@@ -258,11 +258,11 @@ const UI = {
     const dead = World.inWorld() && World.isDead(), mode = Controller.mode, error = mode === 'error';
     // Busy comes from the live trips, not from Controller.mode: that label lags a tick behind (it still says
     // "returning" for up to 100 ms after Stop all ended a walk-back).
-    const busy = Town.trip ? 'Town trip' : WalkBack.active ? 'Returning' : Reconnect.active() ? 'Reconnecting' : Restock.trip ? 'Shopping'
+    const busy = UniqueHunt.active ? 'Unique hunt' : Town.trip ? 'Town trip' : WalkBack.active ? 'Returning' : Reconnect.active() ? 'Reconnecting' : Restock.trip ? 'Shopping'
       : Resurrect.trip ? 'Resurrecting' : BuffGear.run ? 'Buff gear' : Trade.run ? 'Trading' : Alchemy.run || Alchemy.pending ? 'Alchemy' : Stall.run ? 'Stall' : SellStar.run ? 'Sell Star' : '';
     const label = dead ? 'Dead' : error ? 'Error' : busy || (Hunt.running ? 'Hunting' : 'Stopped');
     // `note` is what only the state can say; the icon falls back to the first wait reason, which the wide window shows below the strip.
-    const note = Town.trip ? Town.status() : Travel.active ? Travel.status() : WalkBack.active ? WalkBack.status() : Reconnect.active() && Reconnect.message ? Reconnect.message
+    const note = UniqueHunt.active ? UniqueHunt.status() : Town.trip ? Town.status() : Travel.active ? Travel.status() : WalkBack.active ? WalkBack.status() : Reconnect.active() && Reconnect.message ? Reconnect.message
       : Restock.recording ? 'Recording route: ' + Restock.draft.route.length + ' points' : '';
     const reason = note || (this.waitNote?.textContent || '').split('\n')[0];
     return { key: dead || error ? 'stop' : busy ? 'busy' : Hunt.running ? 'ok' : 'stop', label, dead, note, reason };
@@ -568,7 +568,7 @@ const UI = {
     const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();
     if (this.current === 'Combat') {
       const subtabs = el('div', null, 'subtabs');
-      for (const name of ['Skills', 'Buffs & imbue', 'Hunt area']) {
+      for (const name of ['Skills', 'Buffs & imbue', 'Hunt area', 'Unique hunt']) {
         const tab = this.button(name, () => { this.combatTab = name; this.draw(); });
         tab.setAttribute('aria-selected', String(name === this.combatTab)); subtabs.append(tab);
       }
@@ -576,6 +576,7 @@ const UI = {
       if (this.combatTab === 'Hunt area') this.sections('combatHuntArea', 'combatMonsters', 'combatLure', 'combatPet');
       if (this.combatTab === 'Skills') this.sections('combatRotation', 'combatOptions', 'combatBerserk');
       if (this.combatTab === 'Buffs & imbue') this.sections('combatGear', 'combatBuffs', 'combatImbue');
+      if (this.combatTab === 'Unique hunt') this.sections('combatUnique');
     } else if (this.current === 'Loot') {
       this.sections('lootCollection', 'lootWho', 'lootBalance');
     } else if (this.current === 'Supplies') {
@@ -621,7 +622,7 @@ const UI = {
         ['combatRotation'], ['combatOptions'], ['combatGear'], ['combatBuffs'], ['combatImbue']] },
       { name: 'Items/Storage', icon: 'action\\cos_cmd_inventory', pages: ['Items', 'Town'], draw() {
         this.drawItems(); this.sections('townTrip', 'townCycle', 'townAmmo'); } },
-      { name: 'Training place', icon: 'action\\icon_cha_camp', pages: ['Combat', 'Party'], sections: [['combatHuntArea', 'Training place'], ['partyTrace'], ['combatLure'], ['combatPet']] },
+      { name: 'Training place', icon: 'action\\icon_cha_camp', pages: ['Combat', 'Party'], sections: [['combatHuntArea', 'Training place'], ['partyTrace'], ['combatLure'], ['combatPet'], ['combatUnique']] },
       { name: 'Party/Autores', icon: 'action\\icon_cha_party', pages: ['Party'], sections: [
         ['partyMembers', 'Current party'], ['partyParty', 'Party settings'], ['partyHeal'], ['partyProtect']] },
       { name: 'Player buffing', icon: 'action\\icon_cha_party', pages: ['Party'], sections: [['partyBuffs', 'Player buffing']] },
@@ -638,7 +639,7 @@ const UI = {
   },
   // The classic tab that holds a compact page (so Setup and the checklist can open the right place).
   tabFor(page, combatTab) {
-    if (page === 'Combat') return combatTab === 'Hunt area' ? 'Training place' : 'Skills';
+    if (page === 'Combat') return combatTab === 'Hunt area' || combatTab === 'Unique hunt' ? 'Training place' : 'Skills';
     return { Loot: 'Settings', Supplies: 'Settings', Town: 'Items/Storage', Quest: 'Quest', Party: 'Party/Autores', Items: 'Items/Storage', Alchemy: 'Auto alchemy', Trade: 'Auto trade', Settings: 'Extra' }[page] || page;
   },
   // Is this compact page (and optional Combat sub-tab) what the window shows right now, in either layout?
@@ -1250,6 +1251,7 @@ const UI = {
         el('p', 'Works during hunting and while stopped. Walks into skill range for visible dead members within the maximum radius, casts Rebirth, then returns. During hunting the radius is measured from the saved hunt spot; while stopped it uses your starting position. Collision data is required for walking. Travel stops after 30 seconds or 12 seconds without progress per leg. The member must accept the revival. Rebirth is offered again after the wait (31 s by default: the game’s 30 s answer window plus one tick) for as long as they stay dead, up to the maximum attempts per player (0 = no limit). The count starts again when they are alive, leave the party or the list, or you press Start. Travel, shopping and manual control take priority.', 'muted')));
   },
   section_combatLure(host) { Lure.draw(host); },
+  section_combatUnique(host) { UniqueHunt.draw(host); },
   section_combatPet(host) {
     const P = () => Settings.profile.pet.attack;
     host.append(this.group('Attack pet',

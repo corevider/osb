@@ -279,6 +279,12 @@ const LeanMap = {
       ctx.fillStyle = '#ffd65a'; ctx.fillRect(cx - 2.5, cy - 2.5, 5, 5);
       ctx.restore();
     }
+    for (const nest of UniqueHunt.mapNests()) {
+      const s = this.space(nest);
+      if (!s) continue;
+      ctx.strokeStyle = MAP_CLASS_COLOR.unique; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(sx(s.X), sy(s.Z), 6, 0, Math.PI * 2); ctx.stroke();
+    }
     // Entities in view. Party members are drawn from the party list too, so ones out of sight still show.
     const social = World.gp?.social, party = new Set((social?.members || []).map(m => m?.name).filter(Boolean));
     const target = World.gp?.target, local = World.localGid(), drawn = new Set();

@@ -81,8 +81,9 @@ const Resurrect = {
   cancelTrip(message = '', halt = false) {
     if (this.trip && halt && this.trip.phase === 'approach') this.sent[this.trip.member] = now();
     if (this.trip && halt && World.inWorld() && !World.isDead()) Cmd.move(World.pose());
+    const cancelled = !!this.trip;
     this.trip = null;
-    if (message) { this.message = message; Log.warn(message); }
+    if (message) { this.message = message; if (cancelled) Log.warn(message); }
   },
   returnTrip(message = '') {
     const a = this.trip;
@@ -197,7 +198,7 @@ const Resurrect = {
       if (w.outsider ? !this.outsiderDead(e) : !this.dead(e)) { if (!w.outsider) this.checked[w.key] = t + RES_ALIVE_MS; continue; }
       if (this.trip && e.gid !== this.trip.gid) continue;
       const distance = dist2D(World.pose(), e);
-      const home = this.trip?.home || (Hunt.running && Settings.profile.hunt.center) || World.pose();
+      const home = this.trip?.home || (Hunt.running && Hunt.cfg().center) || World.pose();
       if (!Number.isFinite(distance) || dist2D(home, e) > c.resRadius) continue;
       if (!w.outsider && e.appearanceState?.[0] !== 2 && this.sent[w.key] === undefined) Log.info(m.name + ' is at 0 HP in the party list but shown standing; offering resurrection.');
       if (Loot.active && !Loot.active.petGid) {

@@ -27,6 +27,8 @@ Activity is available under **Settings → Recent activity** and in the session 
 
 Visible messages use monster names and plain language, such as **Targeting Mangyang**. Technical IDs, selection policy, outcomes and distances remain in diagnostic exports rather than being printed before each message. Standard exports omit names; raw exports explicitly include the original technical message and the readable message. Select log text and press **Ctrl+C** to copy only that selection.
 
+The first game command of each manual-control pause is noted with its kind, for example **Manual control seen: game command select, 2.5 s after entering the game; the bot pauses for 6 s.** Within 30 s of entering the game it is a normal entry, later only in detailed capture. It shows what delayed an auto-start or a buff change right after loading.
+
 Use category/severity filters and search to narrow the view. **Pause log** freezes that view while collection continues; **Follow latest** resumes it. Both views share filters and keep independent reading positions. **Clear history** requires a second click within five seconds and does not reset session statistics.
 
 **Detailed capture (10 minutes)** enables a separate, bounded 1,000-event command trace. Routine commands cannot evict normal warnings. Capture automatically stops after ten minutes; all history is local to this page and is lost on reload. Potion consumption is summarized rather than logging every routine use; detailed capture includes individual observed consumptions.
@@ -150,7 +152,14 @@ The Buffs & imbue page shows, for each buff assigned to a set, how long it has l
 
 One weapon change covers what uses the same gear. That is your own buffs assigned to it and up to 10 party buff casts (Party → Party buffs) that need it, on the members and on you, cast one after another before the combat weapon comes back. After a minute it stops starting casts and puts the combat weapon back; the rest goes in the next change. Buffs that would run out within a minute are renewed in the same change, so the next change does not follow a minute later. A buff whose cast was only unconfirmed is tried again after two minutes.
 
-Some buffs end when their weapon is removed. If observed, the bot skips that buff until its buff settings change. Interrupted or unconfirmed swaps stop hunting; use **Restore combat gear**, or inspect your equipment and choose **Use current gear**. Reloads discard unfinished recovery. Live-server swapping still needs confirmation.
+Some buffs end when their weapon is removed. If observed, the bot skips that buff until its buff settings change. Reloads discard unfinished recovery. Live-server swapping still needs confirmation.
+
+Every equipment move is confirmed before the next step. The game allows one inventory action at a time, so:
+
+- No weapon change starts while a pet pickup is on its way, and the pet sends no new pickup while a weapon change runs. When a weapon change is due, the pet waits for it.
+- Time in which another action (a potion, a pet pickup, your own item use) keeps the inventory busy does not count against a move. A move still unconfirmed after 15 s of its own time, or after 45 s in all, stops hunting with "Equipment move unconfirmed"; the message says when the inventory stayed busy.
+- When the game shows it refused a move (it handled the move, or reported an inventory refusal, and nothing moved), the bot sends that move once more. If the game refuses it again, the Activity log says "The game refused to move <item> … twice". A refused move while putting a buff set on skips that set's buffs for two minutes and puts the combat gear back. A refused move while putting the combat gear back leaves what is worn: hunting goes on and the combat gear is tried again after five minutes. Hunting stops only when no weapon is worn. A move is never sent again when anything moved.
+- Interrupted or unconfirmed swaps stop hunting; use **Restore combat gear**, or inspect your equipment and choose **Use current gear**.
 
 ## Item alchemy
 
@@ -200,6 +209,8 @@ The bot sees the attacks in the same game events it uses for monsters that hit y
 Tick **Auto-resurrect party members** on the **Party** page to cast your learned Rebirth skill on a dead party member in view. The party list shows HP in tenths, so 0 there can also mean nearly dead.
 
 A member who died while out of view is often drawn standing when you get back to them, because the game only shows deaths it saw. A standing member at 0 in the party list therefore counts as dead, unless the HP the server sent when the player came into view says otherwise. The bot casts Rebirth and the server decides: a nearly dead member refuses it, and the offer is not repeated within its 30-second answer window. A member the server's HP shows alive is checked again after 30 seconds.
+
+Manual control (walking, attacking, skills) pauses resurrection like hunting. If it cuts short a walk to a corpse, the Activity log says **Manual control: resurrection travel cancelled.** once for that walk; a pause without a walk only shows it in the status line.
 
 ### Players outside the party
 
@@ -337,6 +348,23 @@ On the **Setup** page, **Zero-setup leveling → Level up by itself** lets a cha
 
 Limits: the spot distance is measured from your town, so a character that outlevels the area around its town keeps the last spot in reach; bind your return scroll to the next town and press **Set up town** again. Spots come from spawn positions, not from live crowding.
 
+## Unique hunt
+
+The **Unique hunt** card on the **Setup** page has its own **Start**, **Stop** and a status line ("Patrolling: spot 2 of 5", "Going for Tiger Girl (82%)", "Tiger Girl killed; collecting drops", "Stopped: Tiger Girl killed."). **Settings** opens **Combat → Unique hunt**.
+
+- **What it does:** it walks a patrol of unique spots and fights only uniques, with your Unique rotation, berserk, imbue, buffs, potions, party support and resurrection as in normal hunting. When the unique it went for (or hit) dies, it plays the **kill chime**, writes "Unique killed: <name>" to the log, shows a notice, counts it under **Session stats → Uniques killed**, picks up the drops with your pickup settings (that unique's own drops first, for at most 40 seconds) and stops. The bot is then idle: it does not start hunting by itself.
+- **Your hunting settings stay as they are.** The saved hunting spot, radius, monster classes and rotations are never changed; the mode only applies its own rules while it runs. Distances count from the patrol spot it is at, or from where you started it when there are no spots, never from the hunting area.
+- **It runs alone.** It does not start while hunting, a town trip, a quest visit, auto trade, a stall, alchemy, Sell Star or a walk is running, and none of them starts while it runs (town trips for supplies still do, see below). F8, **Start / stop**, **Stop all** and **Stop** on the card end it. Starting it counts as your own stop for auto-start, so the next time the character enters the game the bot stays stopped until you press Start; starting again by itself does not bring the mode back, and a reconnect does not resume it.
+- **Targets:** uniques only; tick **Titans too** for titans. With **Fight monsters that hit me** (on by default) a monster that hits you is fought; every other monster is ignored. A unique that hits you is always fought back. **Chase distance** sets how far it goes for a unique.
+- **Others fighting the unique:** the drop goes to whoever dealt the most damage. A unique other players are fighting is skipped once they have brought it below **Skip a unique others have brought below this % HP** (75% by default: to win the drop from there you would have to deal damage more than twice as fast as everyone else together). A unique nobody else fights is always taken. During a fight the bot compares the damage it sees (its own, its party's and other players') and the unique's HP, and gives up when the others will clearly end with more damage. It never gives up on a unique that is hitting you. Each decision is written to the log once per unique.
+- **Patrol:** **Add this spot** saves where you stand, with an optional name (name a spot after its unique, for example "Tiger Girl"). Spots can be moved up and down and removed; they are saved per character and carried by settings files, share codes and backups. The bot walks them in order with the normal walk-back movement (teleports and ferries too when **Walking back may use teleports and ferries** is on), waits **Wait at each spot**, and loops. A spot it cannot reach twice is left out; when no spot is left, it stops. With no spots it waits where you started it.
+- **The game's unique nests:** tick **Patrol the game's unique nests** (under **Unique nests**, off by default) and the patrol also walks the places where uniques spawn, read from the game's own data files the page already serves (no setup and no other site). The list below the switch shows each known unique with its number of nests; tick the ones you want, or none for all of them. The bot knows a unique from the game's five own announcements (Tiger Girl, Isyutaru, Uruchi, Lord Yarkan, Demon Shaitan), from Cerberus and Captin Ivy, from any other unique the game announces by name, and from any unique it has seen; what it learns is kept on this computer only. Nests closer than 40 m count as one. Only nests within **Furthest nest from the start point** (1000 m by default) of where you start the hunt are walked, and never ones in another world or a dungeon; long trips use teleports and ferries only when **Walking back may use teleports and ferries** is on. The status line says where it goes, for example "Patrolling: walking to Tiger Girl nest 2 of 4", and the map marks the chosen nests with red rings. The switch, the ticked uniques and the distance are saved per character and carried by settings files, share codes and backups. If the game data cannot be loaded, the log says so once and the patrol uses your spots and learned spots.
+- **Patrol order:** your spots first, in your order; then the chosen nests, nearest to the start point first and then as a short tour; then learned spots. A nest or learned spot within 40 m of an earlier spot is not walked twice.
+- **Learned spots:** every unique the bot sees, whether the mode runs or not, is remembered with its name and place, on this computer only (nothing is sent anywhere). One place per unique within 40 m. Tick **Also patrol learned spots** to walk them after yours; **Clear learned spots** forgets them.
+- **Game notices:** when the game announces that a unique appeared, the patrol goes first to that unique's nests (nearest first) and to your spots whose name contains its name, then goes back to the normal order. When the game announces that unique was killed, that priority ends, and if it was the unique being chased, the chase ends.
+- **Safety:** potions, rest, "Stop when HP potions run out" and "Stop when bag is full" work as in hunting, and a town trip for supplies, a full bag or repairs returns to the patrol spot afterwards. The "no XP" and "every N minutes" town trips wait while the mode runs. A death stops the mode and says so. **Stop after** (60 minutes by default) ends the patrol; a fight that is going on is finished first.
+- **Sounds:** **Chime when a unique monster comes into view** (off by default, the same switch as under Alert sounds) and **Chime when the hunted unique dies** (on by default, a different tune). Each has a **Test** button. A unique that dies without the bot having gone for it or hit it plays nothing; leaving view is not a kill.
+
 ## Auto mastery and skills
 
 Under **Settings → Auto mastery and skills** the bot can spend skill points for you, one confirmed level at a time. It is off by default and saved per character.
@@ -413,7 +441,8 @@ The game allows one inventory action at a time. While a pet pickup holds it, the
 - After you open or use the Item Mall, the pet sends no new pickup for 60 s, counted again from each mall action. The bot cannot see whether the mall window is still open, so it waits this long instead.
 - While a trade, a stall or the alchemy window is open, and while a shop or the storage is open, the pet waits.
 - After each pet pickup the bot waits 0.8 s before the next one, so a click of yours can get in between.
-- A drop the pet cannot reach is given up until it disappears once the pet has failed on it 6 times, or once its pickups have held the inventory for 15 s in total. A drop the pet can reach is collected as before.
+- A drop the pet cannot reach is given up until it disappears once the pet has failed on it 6 times, or once its pickups have held the inventory for 15 s in total. A drop the game refuses to give the pet twice with an inventory refusal (for example **The game refused an inventory action (code 2)**) is given up after the second refusal. A drop the pet can reach is collected as before.
+- While a buff weapon change runs or is about to start, the pet waits (see Buff weapon swapping).
 - The bot never repeats or blocks a command of yours. An Item Mall purchase is never sent again.
 
 The bot's own item moves and drops (item rules, pet-to-bag balance) and its Item Mall buying wait the same way. Potions are never held back.
@@ -438,11 +467,11 @@ When the bot confirms a pickup of Star, Moon or Sun equipment, it shows the item
 
 ## Alert sounds
 
-Under **Loot → Alert sounds**, each switch turns on a short chime, all off by default: **another player comes near** (the same detection the player alert uses), **the character dies**, **a level up**, and **a unique monster coming into view**. A click anywhere in the game unlocks the sound after the browser blocked it; the pet and SoX chime buttons preview the sound.
+Under **Loot → Alert sounds**, each switch turns on a short chime, all off by default: **another player comes near** (the same detection the player alert uses), **the character dies**, **a level up**, and **a unique monster coming into view**. The unique hunt has its own kill chime, on by default (see Unique hunt). A click anywhere in the game unlocks the sound after the browser blocked it; the pet and SoX chime buttons preview the sound.
 
 ## Session stats
 
-Open **Settings → Session stats** for hunting time, XP/hour, net gold, confirmed kills, deaths, potion use, pickups and SoX found. Totals pause when hunting stops and stay across toggles. **Reset session**, reloading or changing character clears them. Stats stay local to the page.
+Open **Settings → Session stats** for hunting time, XP/hour, net gold, confirmed kills, deaths, potion use, pickups, SoX found and uniques killed by the unique hunt. Totals pause when hunting stops and stay across toggles. **Reset session**, reloading or changing character clears them. Stats stay local to the page.
 
 ## Map
 

@@ -20,7 +20,7 @@ const WalkBack = {
     if (Alchemy.run || Alchemy.pending) return UI.toast('Stop alchemy and wait for its result before travelling.', 'warn');
     if (Town.trip) return UI.toast('Stop the town cycle before starting walk-back.', 'warn');
     if (!World.inWorld() || World.isDead()) return UI.toast('Enter the world with a living character first.', 'warn');
-    const dest = Settings.profile.hunt.center, pose = World.pose();
+    const dest = Hunt.cfg().center, pose = World.pose();
     if (!dest || !pose) return UI.toast('Save a hunting spot first using Set here in Hunt → Area.', 'warn');
     if (!Number.isFinite(dist2D(pose, dest))) return UI.toast('Return to the same world or dungeon before walking back.', 'warn');
     if (World.gp?.inventoryPending) return UI.toast('Wait for the inventory transaction to finish.', 'warn');

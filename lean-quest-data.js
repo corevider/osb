@@ -1,7 +1,7 @@
 // Quest catalogue from the game's own data files (the live asset packs), like phBot's quest table. questData.json
 // lists every quest with its level and text keys (the first column is the quest's refId, the name key
-// SN_QNO_<NPC>_<n> carries the QNO_ codename the dialogue rows use), npcpos.json places every NPC by refObjId,
-// and the NPC manifest names each refObjId (NPC_<NPC>). A quest's giver is the NPC named in its codename; one that
+// SN_QNO_<NPC>_<n> carries the QNO_ codename the dialogue rows use), and SpawnData (npcpos.json joined with the NPC
+// manifest, shared with the unique hunt) places every NPC by codename (NPC_<NPC>). A quest's giver is the NPC named in its codename; one that
 // does not resolve is left to the game's quest markers. The server's monster spawns are not in the client, so the
 // monsters to hunt come from the journal's target list and from kills that advanced a quest.
 const QuestData = {
@@ -14,16 +14,9 @@ const QuestData = {
     // Quest observe asks every tick; a failed load waits ten minutes before another try.
     if (this.failed && now() - this.failedAt < 600000) return null;
     this.failed = false;
-    this.pending = Promise.all([Assets.json('/assets/data/questData.json'), Assets.json('/assets/data/npcpos.json'),
-      Assets.json('/assets/npc/manifest.json')]).then(([quest, pos, npc]) => {
+    this.pending = Promise.all([Assets.json('/assets/data/questData.json'), SpawnData.load()]).then(([quest, spawns]) => {
       const names = quest.textEntries || {};
-      const codeOf = new Map(Object.values(npc.models || {}).filter(v => v?.refObjId != null && v.codename).map(v => [v.refObjId, v.codename]));
-      for (const row of pos.rows || []) {
-        const [ref, region, x, y, z] = String(row).split('\t');
-        const code = codeOf.get(Number(ref));
-        if (!code || this.npcs.has(code)) continue;
-        this.npcs.set(code, { refObjId: Number(ref), regionId: Number(region), x: Number(x), y: Number(y), z: Number(z) });
-      }
+      for (const [code, npc] of spawns.npcs) if (!this.npcs.has(code)) this.npcs.set(code, npc);
       for (const row of quest.rows || []) {
         const c = String(row).split('\t'), refId = Number(c[0]), level = Number(c[1]), key = c[2] || '';
         const hit = /^SN_(QNO_(.+?)_\d+)$/.exec(key);

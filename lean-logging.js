@@ -254,6 +254,19 @@ bus.on( "character", name => {
 	Activity.contexts = {};
 	Activity.emit( { category: "session", code: "character-boundary", text: "Character loaded; subsequent activity belongs to this character." } );
 } );
+Activity.worldAt = -Infinity;
+Activity.manualSeenAt = Manual.lastAt;
+bus.on( "phase", phase => { if ( phase === "world" ) Activity.worldAt = now(); } );
+Hook.observers.push( command => {
+	if ( command?.kind !== "gameplay" || Manual.lastAt === Activity.manualSeenAt ) return;
+	const previous = Activity.manualSeenAt, pauseS = Hunt.cfg().manualPauseS;
+	Activity.manualSeenAt = Manual.lastAt;
+	if ( Manual.lastAt - previous < pauseS * 1000 ) return;
+	const kind = String( Manual.kind || "unknown" ), sinceEntryMs = Math.round( Manual.lastAt - Activity.worldAt ), early = sinceEntryMs >= 0 && sinceEntryMs < 30000;
+	const target = Number.isInteger( command.command?.gid ) && command.command.gid > 0 ? " with a target" : "";
+	const text = "Manual control seen: game command " + kind + target + (early ? ", " + (sinceEntryMs / 1000).toFixed( 1 ) + " s after entering the game" : "") + "; the bot pauses for " + pauseS + " s.";
+	Activity.emit( { category: "session", code: "manual-control", level: early ? "info" : "cmd", text, userText: text } );
+} );
 Activity.wrap( Alchemy, "note", function( result, text ) {
 	Activity.emit( { category: "alchemy", code: "alchemy-result", text,
 		level: /destroyed/i.test( text ) ? "error" : "info", outcome: /^(Success:|Failed at|Destroyed at)|stone (failed|fused)|→/.test( text ) ? "confirmed" : null } );

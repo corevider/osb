@@ -48,8 +48,10 @@ const jsonFixtures = {
   '/assets/data/missionPresentation.json': { itemsByRefObjId: {
     10:{codename:'ITEM_CH_SWORD_09_A',iconDdjPath:'icon/skill/test/skill0.ddj'},11:{codename:'ITEM_CH_SWORD_09_C_RARE_HONOR',iconDdjPath:'icon/skill/test/skill2.ddj'}
   } },
-  '/assets/npc/manifest.json': { models:{} },
+  '/assets/npc/manifest.json': { models:{ 2001:{refObjId:2001,codename:'MOB_CH_TIGERWOMAN',kind:'monster'} } },
+  '/assets/data/npcpos.json': { rows:['2001\t1\t300\t0\t100','2001\t1\t1500\t0\t100'] },
 };
+jsonFixtures['/assets/text/textdataname.en.json'].entries.SN_MOB_CH_TIGERWOMAN='Tiger Girl';
 for (let n=0;n<55;n++) {
   const id=200+n,code='ITEM_MALL_AVATAR_M_PAID_'+n;
   jsonFixtures['/assets/char/roster.json'].dress.equipment[id]={code,avatarSlot:n%4,bodies:{CH_M:{}}};
@@ -229,6 +231,27 @@ async function tickProof(browser, localPort) {
     await page.getByRole('button', { name: 'Hunt area', exact: true }).click();
     await page.getByRole('button', { name: 'Set hunting spot here', exact: true }).click();
     assert.equal(await page.evaluate(() => SROLean.settings.profile.hunt.center.x), 100);
+    await page.getByRole('button', { name: 'Unique hunt', exact: true }).click();
+    await page.getByLabel('Spot name (optional)', { exact: true }).fill('Tiger Girl');
+    await page.getByRole('button', { name: 'Add this spot', exact: true }).click();
+    assert.deepEqual(await page.evaluate(() => SROLean.settings.profile.unique.spots.map(s => s.name)), ['Tiger Girl']);
+    await page.getByText(/^1\. Tiger Girl · 0 m away$/).waitFor();
+    await page.locator('fieldset', { has: page.getByRole('button', { name: 'Add this spot', exact: true }) }).screenshot({ path: __dirname + '/lean-unique-hunt.png' });
+    await page.getByRole('button', { name: 'Remove', exact: true }).click();
+    assert.equal(await page.evaluate(() => SROLean.settings.profile.unique.spots.length), 0);
+    await page.getByLabel("Patrol the game's unique nests", { exact: true }).check();
+    await page.getByLabel('Tiger Girl · 2 nests', { exact: true }).check();
+    assert.deepEqual(await page.evaluate(() => SROLean.settings.profile.uniqueNests.picks), ['MOB_CH_TIGERWOMAN']);
+    await page.getByText('None ticked: every unique in the list.').waitFor();
+    await page.locator('fieldset', { hasText: 'Unique nests' }).screenshot({ path: __dirname + '/lean-unique-nests.png' });
+    await page.getByLabel('Tiger Girl · 2 nests', { exact: true }).uncheck();
+    await page.getByLabel("Patrol the game's unique nests", { exact: true }).uncheck();
+    assert.deepEqual(await page.evaluate(() => SROLean.settings.profile.uniqueNests), { on: false, picks: [], maxM: 1000 });
+    await page.getByRole('button', { name: 'Setup', exact: true }).click();
+    await page.getByText('Patrols your unique spots').waitFor();
+    await page.getByText('Not running.').waitFor();
+    await page.locator('fieldset', { hasText: 'Patrols your unique spots' }).screenshot({ path: __dirname + '/lean-unique-card.png' });
+    await page.getByRole('button', { name: 'Combat', exact: true }).click();
     await page.getByRole('button', { name: 'Skills', exact: true }).click();
     await page.getByRole('button', { name: 'Add Test attack', exact: true }).click();
     assert.equal(await page.evaluate(() => SROLean.settings.profile.macro.rotations.normal[0].id), 5);

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         OSB
 // @namespace    https://github.com/corevider/osb
-// @version      2.0.5
+// @version      2.0.6
 // @homepageURL  https://github.com/corevider/osb
 // @supportURL   https://github.com/corevider/osb/issues
 // @updateURL    https://raw.githubusercontent.com/corevider/osb/main/osb.meta.js
@@ -25,7 +25,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[OSB] Another SRO assistant is active. Disable it and reload to use OSB.');
   return;
 }
-const VERSION = '2.0.5';
+const VERSION = '2.0.6';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });
@@ -236,6 +236,8 @@ function upgradeProfile(input) { return upgradeSoxSound(Rotations.upgrade(input)
 const DEFAULT_PROFILE = {
   items: { rules: {}, balance: false, petToBag: false, autoEquip: false, gear: { primaryWeapon: null, secondaryWeapon: null, shield: null } },
   sounds: { player: false, died: false, levelUp: false, unique: false },
+  unique: { spots: [], waitS: 30, learned: false, chase: 800, titans: false, selfDefence: true, skipBelow: 75, limitM: 60, chime: true },
+  uniqueNests: { on: false, picks: [], maxM: 1000 },
   stall: { title: '', greeting: '', network: true, closeWhenEmpty: true, prices: {} },
   alchemy: { target: 3, limit: 20, elixir: 0, powder: false, use: { luck: false, steady: false, immortal: false, astral: false }, stones: { luck: 1, steady: 1, immortal: 1, astral: 1 }, stoneLimit: 0,
     // The plus from which each helper is used: a failure from +5 up can destroy the item (Steady and Immortal matter from there),
@@ -306,7 +308,7 @@ function botProfile(input) {
   const result = deepMerge(DEFAULT_PROFILE, {});
   if (!input || typeof input !== 'object') return result;
   input = upgradeProfile(input);
-  for (const key of ['macro', 'potion', 'hunt', 'lure', 'pet', 'scroll', 'mall', 'wardrobe', 'party', 'alchemy', 'mastery', 'statPoints', 'leveling', 'trace', 'items', 'trade', 'stall', 'quest', 'sounds']) {
+  for (const key of ['macro', 'potion', 'hunt', 'lure', 'pet', 'scroll', 'mall', 'wardrobe', 'party', 'alchemy', 'mastery', 'statPoints', 'leveling', 'trace', 'items', 'trade', 'stall', 'quest', 'sounds', 'unique', 'uniqueNests']) {
     if (!input[key] || typeof input[key] !== 'object') continue;
     for (const field of Object.keys(DEFAULT_PROFILE[key])) {
       if (field in input[key]) result[key][field] = deepMerge(DEFAULT_PROFILE[key][field], input[key][field]);
@@ -338,6 +340,17 @@ function botProfile(input) {
   // The finish-steal cutoff stops at 50: above it the kill can still be won, so avoiding is pointless.
   if (!Number.isFinite(result.hunt.avoidKsBelow) || result.hunt.avoidKsBelow < 0) result.hunt.avoidKsBelow = 0;
   if (result.hunt.avoidKsBelow > 50) result.hunt.avoidKsBelow = 50;
+  const unique = result.unique, uniqueDefaults = DEFAULT_PROFILE.unique;
+  unique.spots = (Array.isArray(unique.spots) ? unique.spots : []).filter(s => s && Number.isInteger(s.regionId) && [s.x, s.y ?? 0, s.z].every(Number.isFinite))
+    .slice(0, 30).map(s => ({ name: typeof s.name === 'string' ? s.name.trim().slice(0, 32) : '', regionId: s.regionId, x: s.x, y: s.y ?? 0, z: s.z }));
+  for (const key of ['learned', 'titans', 'selfDefence', 'chime']) if (typeof unique[key] !== 'boolean') unique[key] = uniqueDefaults[key];
+  for (const [key, min, max] of [['waitS', 0, 600], ['chase', 100, 3000], ['skipBelow', 0, 100], ['limitM', 5, 1440]]) {
+    unique[key] = Number.isFinite(unique[key]) ? clamp(Math.round(unique[key]), min, max) : uniqueDefaults[key];
+  }
+  const nests = result.uniqueNests;
+  nests.on = nests.on === true;
+  nests.picks = [...new Set((Array.isArray(nests.picks) ? nests.picks : []).filter(c => typeof c === 'string' && /^[A-Za-z0-9_]{1,64}$/.test(c)))].slice(0, 100);
+  nests.maxM = Number.isFinite(nests.maxM) ? clamp(Math.round(nests.maxM / 100) * 100, 100, 5000) : DEFAULT_PROFILE.uniqueNests.maxM;
   const protect = result.party.protect;
   for (const key of ['enabled', 'all', 'whileNoAttack']) protect[key] = protect[key] === true;
   protect.range = Number.isFinite(protect.range) ? clamp(Math.round(protect.range), 5, 100) : DEFAULT_PROFILE.party.protect.range;
@@ -410,7 +423,8 @@ const Sound = {
   // Only these alerts are audible; existing combat/UI calls stay silent.
   tones: { 'pet-full': { notes: [659.25, 830.61, 987.77], gap: 0.18 }, sox: { notes: [783.99, 987.77, 1174.66, 1567.98], gap: 0.11 },
     player: { notes: [392, 329.63], gap: 0.25 }, died: { notes: [523.25, 415.3, 329.63], gap: 0.2 },
-    levelUp: { notes: [523.25, 659.25, 783.99, 1046.5], gap: 0.12 }, unique: { notes: [880, 1108.73, 880, 1108.73], gap: 0.15 } },
+    levelUp: { notes: [523.25, 659.25, 783.99, 1046.5], gap: 0.12 }, unique: { notes: [880, 1108.73, 880, 1108.73], gap: 0.15 },
+    uniqueKilled: { notes: [1318.51, 1046.5, 783.99, 1046.5, 1318.51, 1567.98], gap: 0.12 } },
   // Alert chimes for events the bus already carries (SBot-style alarms); every switch is off by default.
   level: null,
   anyOn() { const s = Settings.profile.sounds; return !!(s && (s.player || s.died || s.levelUp || s.unique)); },
@@ -5945,7 +5959,7 @@ const WalkBack = {
     if (Alchemy.run || Alchemy.pending) return UI.toast('Stop alchemy and wait for its result before travelling.', 'warn');
     if (Town.trip) return UI.toast('Stop the town cycle before starting walk-back.', 'warn');
     if (!World.inWorld() || World.isDead()) return UI.toast('Enter the world with a living character first.', 'warn');
-    const dest = Settings.profile.hunt.center, pose = World.pose();
+    const dest = Hunt.cfg().center, pose = World.pose();
     if (!dest || !pose) return UI.toast('Save a hunting spot first using Set here in Hunt → Area.', 'warn');
     if (!Number.isFinite(dist2D(pose, dest))) return UI.toast('Return to the same world or dungeon before walking back.', 'warn');
     if (World.gp?.inventoryPending) return UI.toast('Wait for the inventory transaction to finish.', 'warn');
@@ -6209,6 +6223,8 @@ const PET_LOCK_LINK_MS = 1500;
 const PET_LOCK_WINDOW_MS = 60000;
 const PET_GIVE_UP_ATTEMPTS = 6;
 const PET_LOCK_BUDGET_MS = 15000;
+const PET_REJECTED_MAX = 2;
+const PET_GEAR_HOLD_MS = 1000;
 const PLAYER_INV_KINDS = new Set(['item-use', 'item-drop', 'inventory-move', 'avatar-move', 'equip', 'pickup', 'cos-pickup', 'cos-transfer', 'cos-drop', 'immortal', 'attr']);
 const PLAYER_INV_PREFIXES = /^(?:mall|shop|cos-shop|storage|stall|exchange|alchemy|gear)-/;
 const Loot = {
@@ -6278,6 +6294,7 @@ const Loot = {
     const share = this.lockNote();
     if (Hunt.running && World.gp.inventoryPending) return 'Pet waiting for pickup / inventory transaction to finish.' + share;
     if (Hunt.running && this.pressed()) return 'Pet waiting briefly for potion use.' + share;
+    if (BuffGear.run || now() - BuffGear.wantAt < PET_GEAR_HOLD_MS) return 'Pet waiting: buff gear is changing.' + share;
     const yielding = this.playerFirst();
     if (yielding) return 'Pet waiting: ' + yielding + share;
     if (this.active?.petGid === pet.rec.gid) return 'Pet collecting: ' + (this.active.name || this.active.gid) + (this.active.retryAt ? ' (retry pending).' : '.') + share;
@@ -6298,12 +6315,20 @@ const Loot = {
     if (t - this.playerInvAt < PLAYER_INV_HOLD_MS) return 'you are using the inventory.';
     return '';
   },
-  petBlocked() { return this.pressed() || !!this.lock?.pet || now() - this.petEndAt < PET_GAP_MS || !!this.playerFirst(); },
+  petBlocked() { return this.pressed() || !!this.lock?.pet || now() - this.petEndAt < PET_GAP_MS || !!BuffGear.run || now() - BuffGear.wantAt < PET_GEAR_HOLD_MS || !!this.playerFirst(); },
+  petInFlight() { return !!this.lock?.pet || now() - this.petSentAt < PET_LOCK_LINK_MS; },
+  lockOwner(t) {
+    let owner = 'other', latest = t - PET_LOCK_LINK_MS;
+    for (const [name, sentAt] of [['pet', this.petSentAt], ['gear', BuffGear.sentAt], ['potion', Potion.lastUse > 0 ? Potion.lastUse : -Infinity], ['player', this.playerInvAt]]) {
+      if (sentAt >= latest && sentAt <= t) { owner = name; latest = sentAt; }
+    }
+    return owner;
+  },
   watchLock() {
     const pending = !!World.gp?.inventoryPending, t = now(), w = this.lock;
     if (pending && !w) {
-      const a = this.active;
-      this.lock = { at: t, pet: !!a?.petGid && t - this.petSentAt < PET_LOCK_LINK_MS, gid: a?.gid ?? 0 };
+      const a = this.active, pet = !!a?.petGid && t - this.petSentAt < PET_LOCK_LINK_MS;
+      this.lock = { at: t, pet, owner: pet ? 'pet' : this.lockOwner(t), gid: a?.gid ?? 0 };
     } else if (!pending && w) {
       this.lock = null;
       if (!w.pet) return;
@@ -6532,6 +6557,9 @@ const Loot = {
     const capacity = /full|capacity|(?:not enough|no|out of) (?:free |inventory |bag )?space|envanter.*dolu/i.test(reason);
     const spent = a.petGid && !capacity ? this.spent.get(a.gid) : null;
     if (spent && reason !== 'Inventory command unavailable') spent.attempts++;
+    const rejected = spent && /^Inventory rejected: \d+$/.test(reason);
+    if (rejected) spent.rejected = (spent.rejected || 0) + 1;
+    if (rejected && spent.rejected >= PET_REJECTED_MAX) { this.skip(e, reason + '; the game refused this pickup twice, so the pet gives up on this drop', false, true); return false; }
     if (spent && (spent.attempts >= PET_GIVE_UP_ATTEMPTS || spent.lockMs >= PET_LOCK_BUDGET_MS)) { this.skip(e, reason + '; the pet gives up on this drop', false, true); return false; }
     if (capacity || a.attempts > Hunt.cfg().pickup.retries) { this.skip(e, reason, capacity); return false; }
     // Movement cancels the outstanding worker pickup intent. Resubmit on a later tick.
@@ -6580,7 +6608,7 @@ const Loot = {
 // Page-local hunting session. No persistence, uploads or gameplay commands.
 const Stats = {
   values: { loot: 0, casts: 0, potions: 0, deaths: 0 },
-  session: { ms: 0, xp: 0n, gold: 0n, kills: 0, deaths: 0, potions: 0, items: 0, sox: 0 },
+  session: { ms: 0, xp: 0n, gold: 0n, kills: 0, deaths: 0, potions: 0, items: 0, sox: 0, uniques: 0 },
   active: false, lastAt: null, baseline: null, dead: false, character: null, started: false,
   levels: null, loading: null, retryAt: 0, pendingXP: [], xpPartial: false, xpKnown: false, goldKnown: false,
   killed: new Set(), potions: [], potionTotals: new Map(), fields: {},
@@ -6604,7 +6632,7 @@ const Stats = {
   },
   reset() {
     this.values = { loot: 0, casts: 0, potions: 0, deaths: 0 };
-    this.session = { ms: 0, xp: 0n, gold: 0n, kills: 0, deaths: 0, potions: 0, items: 0, sox: 0 };
+    this.session = { ms: 0, xp: 0n, gold: 0n, kills: 0, deaths: 0, potions: 0, items: 0, sox: 0, uniques: 0 };
     this.lastAt = now(); this.active = false; this.baseline = null;
     this.dead = World.isDead(); this.pendingXP = []; this.xpPartial = this.xpKnown = this.goldKnown = false;
     this.potions = []; this.potionTotals.clear();
@@ -6725,16 +6753,16 @@ const Stats = {
     return { state: this.active ? 'Tracking' : 'Paused', time,
       xp: this.xpKnown ? this.number(s.xp) + partial : '—', rate: this.xpKnown ? rate + partial : '—',
       gold: this.goldKnown ? (s.gold > 0n ? '+' : '') + this.number(s.gold) : '—',
-      kills: this.number(s.kills), deaths: this.number(s.deaths), potions: this.number(s.potions), items: this.number(s.items), sox: this.number(s.sox) };
+      kills: this.number(s.kills), deaths: this.number(s.deaths), potions: this.number(s.potions), items: this.number(s.items), sox: this.number(s.sox), uniques: this.number(s.uniques || 0) };
   },
   draw(parent) {
     const box = UI.group('Session stats'); this.fields = {};
-    for (const [key, label] of [['state','Session'],['time','Hunting time'],['xp','XP gained'],['rate','XP / hour'],['gold','Net gold'],['kills','Confirmed kills'],['deaths','Deaths'],['potions','Potions used'],['items','Items picked up'],['sox','SoX found']]) {
+    for (const [key, label] of [['state','Session'],['time','Hunting time'],['xp','XP gained'],['rate','XP / hour'],['gold','Net gold'],['kills','Confirmed kills'],['deaths','Deaths'],['potions','Potions used'],['items','Items picked up'],['sox','SoX found'],['uniques','Uniques killed']]) {
       const value = el('span'); value.setAttribute('aria-label', label); this.fields[key] = value;
       const row = el('div', null, 'field'); row.append(el('span', label), value); box.append(row);
     }
     box.append(UI.button('Reset session', () => this.reset()),
-      el('p', 'Local to this page; pauses while hunting is stopped or disconnected. Reset or reload clears totals. Town trips count while hunting stays enabled. Gold includes purchases and repairs. Kills require your or your pet’s fatal result; item counts use confirmed bot pickups; SoX found counts confirmed pickups of Star, Moon and Sun gear. HP, MP, vigor and cure uses require inventory confirmation. XP/hour appears after 30 seconds; partial means a level transition or missing data is unresolved.', 'muted'));
+      el('p', 'Local to this page; pauses while hunting is stopped or disconnected. Reset or reload clears totals. Town trips count while hunting stays enabled. Gold includes purchases and repairs. Kills require your or your pet’s fatal result; item counts use confirmed bot pickups; SoX found counts confirmed pickups of Star, Moon and Sun gear. Uniques killed counts the uniques the unique hunt went for, hit and saw die. HP, MP, vigor and cure uses require inventory confirmation. XP/hour appears after 30 seconds; partial means a level transition or missing data is unresolved.', 'muted'));
     parent.append(box); this.render();
   },
   render() {
@@ -7077,8 +7105,9 @@ const Resurrect = {
   cancelTrip(message = '', halt = false) {
     if (this.trip && halt && this.trip.phase === 'approach') this.sent[this.trip.member] = now();
     if (this.trip && halt && World.inWorld() && !World.isDead()) Cmd.move(World.pose());
+    const cancelled = !!this.trip;
     this.trip = null;
-    if (message) { this.message = message; Log.warn(message); }
+    if (message) { this.message = message; if (cancelled) Log.warn(message); }
   },
   returnTrip(message = '') {
     const a = this.trip;
@@ -7193,7 +7222,7 @@ const Resurrect = {
       if (w.outsider ? !this.outsiderDead(e) : !this.dead(e)) { if (!w.outsider) this.checked[w.key] = t + RES_ALIVE_MS; continue; }
       if (this.trip && e.gid !== this.trip.gid) continue;
       const distance = dist2D(World.pose(), e);
-      const home = this.trip?.home || (Hunt.running && Settings.profile.hunt.center) || World.pose();
+      const home = this.trip?.home || (Hunt.running && Hunt.cfg().center) || World.pose();
       if (!Number.isFinite(distance) || dist2D(home, e) > c.resRadius) continue;
       if (!w.outsider && e.appearanceState?.[0] !== 2 && this.sent[w.key] === undefined) Log.info(m.name + ' is at 0 HP in the party list but shown standing; offering resurrection.');
       if (Loot.active && !Loot.active.petGid) {
@@ -8458,10 +8487,62 @@ const Town = {
 };
 
 
+const SPAWN_POS_PATH = '/assets/data/npcpos.json', SPAWN_MANIFEST_PATH = '/assets/npc/manifest.json';
+const SpawnData = {
+  npcs: new Map(), mobs: new Map(), codes: new Map(), refsByCode: new Map(), pending: null, loaded: false, rows: 0,
+  load() {
+    if (this.loaded) return Promise.resolve(this);
+    if (this.pending) return this.pending;
+    this.pending = Promise.all([Assets.json(SPAWN_POS_PATH), Assets.json(SPAWN_MANIFEST_PATH)]).then(([pos, manifest]) => {
+      this.parse(pos, manifest);
+      this.loaded = true; this.pending = null;
+      return this;
+    }, e => { this.pending = null; throw e; });
+    return this.pending;
+  },
+  parse(pos, manifest) {
+    const codes = new Map(), npcs = new Map(), points = new Map(), refsByCode = new Map();
+    for (const v of Object.values(manifest?.models || {})) {
+      const ref = Number(v?.refObjId);
+      if (v?.refObjId == null || !Number.isInteger(ref) || !v.codename) continue;
+      const code = String(v.codename), kind = String(v.kind || '');
+      codes.set(ref, { code, kind });
+      if (!refsByCode.has(code)) refsByCode.set(code, []);
+      refsByCode.get(code).push(ref);
+    }
+    let rows = 0;
+    for (const row of pos?.rows || []) {
+      const [r, region, x, y, z] = String(row).split('\t'), ref = Number(r), info = codes.get(ref);
+      if (!info) continue;
+      const rid = Number(region), p = { regionId: rid & 0xffff, x: Number(x), y: Number(y), z: Number(z) };
+      if (!Number.isInteger(rid) || ![p.x, p.y, p.z].every(Number.isFinite)) continue;
+      rows++;
+      if (!npcs.has(info.code)) npcs.set(info.code, { refObjId: ref, ...p });
+      if (!this.isMonster(info)) continue;
+      if (!points.has(ref)) points.set(ref, []);
+      points.get(ref).push(p.regionId, p.x, p.y, p.z);
+    }
+    this.codes = codes; this.npcs = npcs; this.refsByCode = refsByCode; this.rows = rows;
+    this.mobs = new Map([...points].map(([ref, list]) => [ref, Float32Array.from(list)]));
+  },
+  isMonster(info) { return info.kind === 'monster' || info.code.startsWith('MOB_'); },
+  code(ref) { return this.codes.get(Number(ref))?.code || ''; },
+  points(code) {
+    const out = [];
+    for (const ref of this.refsByCode.get(code) || []) {
+      const list = this.mobs.get(ref);
+      if (!list) continue;
+      for (let i = 0; i < list.length; i += 4) out.push({ regionId: list[i], x: list[i + 1], y: list[i + 2], z: list[i + 3] });
+    }
+    return out;
+  },
+};
+
+
 // Quest catalogue from the game's own data files (the live asset packs), like phBot's quest table. questData.json
 // lists every quest with its level and text keys (the first column is the quest's refId, the name key
-// SN_QNO_<NPC>_<n> carries the QNO_ codename the dialogue rows use), npcpos.json places every NPC by refObjId,
-// and the NPC manifest names each refObjId (NPC_<NPC>). A quest's giver is the NPC named in its codename; one that
+// SN_QNO_<NPC>_<n> carries the QNO_ codename the dialogue rows use), and SpawnData (npcpos.json joined with the NPC
+// manifest, shared with the unique hunt) places every NPC by codename (NPC_<NPC>). A quest's giver is the NPC named in its codename; one that
 // does not resolve is left to the game's quest markers. The server's monster spawns are not in the client, so the
 // monsters to hunt come from the journal's target list and from kills that advanced a quest.
 const QuestData = {
@@ -8474,16 +8555,9 @@ const QuestData = {
     // Quest observe asks every tick; a failed load waits ten minutes before another try.
     if (this.failed && now() - this.failedAt < 600000) return null;
     this.failed = false;
-    this.pending = Promise.all([Assets.json('/assets/data/questData.json'), Assets.json('/assets/data/npcpos.json'),
-      Assets.json('/assets/npc/manifest.json')]).then(([quest, pos, npc]) => {
+    this.pending = Promise.all([Assets.json('/assets/data/questData.json'), SpawnData.load()]).then(([quest, spawns]) => {
       const names = quest.textEntries || {};
-      const codeOf = new Map(Object.values(npc.models || {}).filter(v => v?.refObjId != null && v.codename).map(v => [v.refObjId, v.codename]));
-      for (const row of pos.rows || []) {
-        const [ref, region, x, y, z] = String(row).split('\t');
-        const code = codeOf.get(Number(ref));
-        if (!code || this.npcs.has(code)) continue;
-        this.npcs.set(code, { refObjId: Number(ref), regionId: Number(region), x: Number(x), y: Number(y), z: Number(z) });
-      }
+      for (const [code, npc] of spawns.npcs) if (!this.npcs.has(code)) this.npcs.set(code, npc);
       for (const row of quest.rows || []) {
         const c = String(row).split('\t'), refId = Number(c[0]), level = Number(c[1]), key = c[2] || '';
         const hit = /^SN_(QNO_(.+?)_\d+)$/.exec(key);
@@ -9631,8 +9705,12 @@ bus.on('notice', n => Travel.notice(n));
 const BUFF_GEAR_KINDS = ['primary', 'secondary', 'shield'];
 const BUFF_COMBAT_HOLD_MS = 5 * 60000;
 const BUFF_RUN_BUDGET_MS = 60000; // a weapon change stops starting casts after this and restores the combat gear
+const BUFF_MOVE_REFUSED_MS = 2000;
+const BUFF_MOVE_COUNTED_MS = 15000;
+const BUFF_MOVE_WATCH_MS = 1000;
+const BUFF_MOVE_TOTAL_MS = 45000;
 const BuffGear = {
-  run: null, recovery: null, autoRestore: false, message: 'Buff weapon swapping off.', skipped: new Map(), waiting: '', started: false, bad: new Set(), combatHold: 0,
+  run: null, recovery: null, autoRestore: false, message: 'Buff weapon swapping off.', skipped: new Map(), waiting: '', started: false, bad: new Set(), combatHold: 0, restoreAt: 0, sentAt: -Infinity, wantAt: -Infinity,
   cfg() { return Settings.profile.macro; },
   items() { return World.gp?.inventory || []; },
   at(slot) { return this.items().find(i => i.slot === slot) || null; },
@@ -9749,6 +9827,10 @@ const BuffGear = {
     Hook.observers.push(command => {
       if (command.kind === 'gameplay' && command.command?.kind === 'inventory-move' && this.run) this.fail('Manual equipment move interrupted buff swaps.');
     });
+    bus.on('game-error', text => {
+      const p = this.run?.pending;
+      if (p && /^Inventory (?:rejected: \d+|command unavailable)$/.test(String(text))) p.error = String(text);
+    });
     bus.on('cast', c => {
       const p = this.run?.cast;
       if (p && c.caster === World.localGid() && c.skill === p.id && !c.resultOnly && c.cancelledAtMs === undefined) p.accepted = true;
@@ -9765,14 +9847,14 @@ const BuffGear = {
     Settings.saveProfile(); UI.draw();
   },
   reset() {
-    this.run = this.recovery = null; this.skipped.clear(); this.bad.clear(); this.combatHold = 0;
+    this.run = this.recovery = null; this.skipped.clear(); this.bad.clear(); this.combatHold = 0; this.restoreAt = 0;
     this.message = 'Buff gear reset. Check equipped weapons after reconnecting.';
   },
   // Dying or changing world mid-swap is not a failure: remember the combat gear and put it back on once alive again.
   interrupt(text, soft = false) {
     if (!this.run) return;
     if (!soft) return this.fail(text);
-    this.recovery = this.run.home; this.autoRestore = true; this.run = null;
+    this.recovery = this.run.home; this.autoRestore = true; this.restoreAt = 0; this.run = null;
     this.message = text + ' Combat gear is restored once the character is back.';
   },
   fail(text) {
@@ -9790,7 +9872,7 @@ const BuffGear = {
   },
   // Called every tick: a swap cut short by death or a world change puts the combat weapon back by itself.
   resume() {
-    if (this.autoRestore && this.recovery && !this.run) this.restore(true);
+    if (this.autoRestore && this.recovery && !this.run && now() >= this.restoreAt) this.restore(true);
   },
   restore(auto = false) {
     const gp = World.gp;
@@ -9828,6 +9910,11 @@ const BuffGear = {
         Town.trip || WalkBack.active || Restock.trip || Restock.recording || Resurrect.trip || now() < Resurrect.holdUntil ||
         Restock.activeShop() || World.gp?.storage || World.gp?.exchange?.open || World.gp?.exchange?.requesting || World.gp?.stall?.phase && World.gp.stall.phase !== 'none' ||
         Alchemy.run || Alchemy.pending || Loot.active && !Loot.active.petGid || Loot.pressed());
+  },
+  petWait() {
+    if (!Loot.petInFlight()) return false;
+    this.wantAt = now();
+    return true;
   },
   // The bag weapon (and shield) for a skill the worn weapon cannot cast, or why there is none.
   autoSet(id, home) {
@@ -9894,7 +9981,7 @@ const BuffGear = {
     const why = this.problem(home, queue.map(q => q.set));
     if (why) return wait(why);
     this.waiting = note;
-    if (!Cmd.move(World.pose())) return false;
+    if (this.petWait() || !Cmd.move(World.pose())) return false;
     const have = queue.flatMap(q => q.buffs);
     for (const q of queue) { const more = this.extras(q.set, home, have); q.buffs.push(...more); have.push(...more); }
     Loot.suspend(); Hunt.state = 'buff'; this.run = this.create(home, queue); this.run.party = have.some(e => e.party);
@@ -9927,7 +10014,7 @@ const BuffGear = {
   wearCombat(home) {
     if (!home.primary || this.matches(home) || now() < this.combatHold) return false;
     if (this.at(7) && this.key(this.at(7)) !== home.shield && World.freeBagSlots() < 1) { this.waiting = 'Wearing your combat gear needs one free bag slot to take off the off-hand item.'; return false; }
-    if (!Cmd.move(World.pose())) return false;
+    if (this.petWait() || !Cmd.move(World.pose())) return false;
     Loot.suspend(); Hunt.state = 'buff'; this.run = this.create(home, []); this.run.restoring = true; this.run.combat = true;
     this.message = 'Wearing your combat gear.';
     return true;
@@ -9946,18 +10033,36 @@ const BuffGear = {
     if (this.run || this.blocked()) return false;
     const home = this.home(), why = this.problem(home, [set]);
     if (why) { this.waiting = why; return false; }
-    if (!Cmd.move(World.pose())) return false;
+    if (this.petWait() || !Cmd.move(World.pose())) return false;
     Loot.suspend(); if (Hunt.running) Hunt.state = 'buff';
     this.run = this.create(home, [{ set, buffs: [entry, ...this.extras(set, home, [entry])] }]); this.run.party = true;
     this.message = 'Equipping ' + set.name + ' for party buffs.';
     return true;
   },
-  move(source, destination) {
+  move(source, destination, resent = false) {
     const r = this.run, from = this.key(this.at(source)), to = this.key(this.at(destination));
     if (!from || !Cmd.spaced('inventory-move')) return;
-    if (Cmd.raw({ kind: 'inventory-move', source, destination, quantity: 0 }, 'Buff gear: move equipment')) {
-      r.pending = { source, destination, from, to, at: now() };
+    if (Cmd.raw({ kind: 'inventory-move', source, destination, quantity: 0 }, resent ? 'Buff gear: move equipment again' : 'Buff gear: move equipment')) {
+      this.sentAt = now();
+      r.pending = { source, destination, from, to, at: now(), seenAt: now(), counted: 0, calm: 0, resent };
     }
+  },
+  refusedText(p, what) { return `The game refused to move ${what} (slot ${p.source} to ${p.destination}) twice${p.error ? ' (' + p.error + ')' : ''}`; },
+  refusedMove(r, p, what) {
+    const text = this.refusedText(p, what);
+    r.pending = null;
+    if (!r.restoring && r.queue.length) {
+      const q = r.queue.shift();
+      for (const e of q?.buffs || []) if (!e.party) this.skipped.set(e.b.group, { signature: r.signature, until: now() + 120000, why: 'the game refused to wear its gear, trying again in two minutes' });
+      r.refused = text + '; its buffs wait two minutes.'; this.message = r.refused + ' Restoring combat gear.';
+      Log.warn(r.refused);
+      return true;
+    }
+    if (!this.weapon(this.at(6))) { this.fail(text + '; no weapon is worn.'); return true; }
+    this.recovery = r.home; this.autoRestore = true; this.restoreAt = now() + BUFF_COMBAT_HOLD_MS; this.run = null;
+    this.message = text + '; hunting goes on with what is worn, and the combat gear is tried again in five minutes.';
+    Log.warn(this.message);
+    return true;
   },
   equip(set) {
     if (this.matches(set)) return true;
@@ -9985,12 +10090,26 @@ const BuffGear = {
     // Party buffs also go out while hunting is stopped; your own buffs only while hunting.
     if (!Hunt.running) for (const q of r.queue) q.buffs = q.buffs.filter(e => e.party);
     if (r.pending) {
-      const p = r.pending;
-      if (!gp.inventoryPending && this.key(this.at(p.destination)) === p.from && this.key(this.at(p.source)) === p.to) r.pending = null;
+      const p = r.pending, t = now(), swapped = this.key(this.at(p.destination)) === p.from && this.key(this.at(p.source)) === p.to;
+      Loot.watchLock();
+      const lock = Loot.lock, own = !!lock && lock.owner === 'gear' && lock.at >= p.at;
+      if (own) p.lockSeen = true;
+      if (!gp.inventoryPending || own && !swapped) p.counted += t - p.seenAt;
+      p.calm = gp.inventoryPending ? 0 : p.calm + (t - p.seenAt <= BUFF_MOVE_WATCH_MS ? t - p.seenAt : 0);
+      p.seenAt = t;
+      if (!gp.inventoryPending && swapped) r.pending = null;
       else {
         const item = this.at(p.source) || this.at(p.destination), what = item ? item.name || Items.name(item.refObjId) : 'an item';
         // Nothing moved and nothing is pending: the game refused it (level, class). Skip that weapon, put gear back, carry on.
-        const refused = !gp.inventoryPending && now() - p.at > 2000 && this.key(this.at(p.source)) === p.from && this.key(this.at(p.destination)) === p.to;
+        const unchanged = !gp.inventoryPending && p.calm > BUFF_MOVE_REFUSED_MS && this.key(this.at(p.source)) === p.from && this.key(this.at(p.destination)) === p.to;
+        if (unchanged && !p.resent && (p.lockSeen || p.error)) {
+          if (!Loot.petInFlight()) {
+            this.move(p.source, p.destination, true);
+            if (r.pending !== p) Log.info(`The game did not take the move of ${what} (slot ${p.source} to ${p.destination}); sending it once more.`);
+          }
+          return true;
+        }
+        const refused = unchanged, expired = p.counted > BUFF_MOVE_COUNTED_MS, timedOut = expired || t - p.at > BUFF_MOVE_TOTAL_MS;
         // The chosen primary weapon or shield the game will not equip: never try it again (until it is picked again),
         // and put back what was worn before, including an off-hand item already taken off.
         const chosen = p.destination === 6 && p.from === r.home.weapon || p.destination === 7 && p.from === r.home.shield;
@@ -10003,7 +10122,7 @@ const BuffGear = {
           Log.warn(this.message); return true;
         }
         // Any other combat gear change the game does not take is left alone for five minutes instead of stopping hunting.
-        if (r.combat && (refused || now() - p.at > 15000)) {
+        if (r.combat && (refused || timedOut)) {
           this.combatHold = now() + BUFF_COMBAT_HOLD_MS; this.run = null;
           this.message = `The game would not move ${what}; your combat gear stays as it is for five minutes.`;
           Log.warn(this.message); return true;
@@ -10013,9 +10132,11 @@ const BuffGear = {
           r.refused = `The game would not equip ${what}; another weapon is tried next time.`; this.message = r.refused + ' Restoring combat gear.';
           return true;
         }
-        if (now() - p.at > 15000) {
-          if (r.queue[0]?.set.auto && p.destination === 6) this.bad.add(p.from);
-          this.fail(`Equipment move unconfirmed (${what}, slot ${p.source} to ${p.destination}); no retry sent.`);
+        if (refused && p.resent) return this.refusedMove(r, p, what);
+        if (timedOut) {
+          if (expired && r.queue[0]?.set.auto && p.destination === 6) this.bad.add(p.from);
+          const busy = expired ? '' : ` The game's inventory stayed busy with ${gp.inventoryPending && lock ? 'another action (' + lock.owner + ')' : 'other actions'} for ${Math.round((t - p.at) / 1000)} s.`;
+          this.fail(`Equipment move unconfirmed (${what}, slot ${p.source} to ${p.destination}); ${p.resent ? 'sent twice' : 'no retry sent'}.${busy}`);
         }
         return true;
       }
@@ -10031,7 +10152,7 @@ const BuffGear = {
       if (!p.accepted) { if (now() - p.at > 10000) { this.skipped.set(p.group, { signature: r.signature, until: now() + 120000, why: 'the cast was not confirmed, trying again in two minutes' }); this.cancel(); this.message = 'Buff cast unconfirmed; restoring combat gear.'; r.cast = null; } return true; }
       r.effects.push(p); r.cast = null;
     }
-    if (Combat.busy() || gp.inventoryPending || World.isSitting() || World.local()?.mountedOn || Loot.pressed()) return true;
+    if (Combat.busy() || gp.inventoryPending || World.isSitting() || World.local()?.mountedOn || Loot.pressed() || Loot.petInFlight()) return true;
     if (Restock.activeShop() || gp.storage || gp.exchange?.open || gp.exchange?.requesting || gp.stall?.phase && gp.stall.phase !== 'none' || gp.returnScroll) { this.fail('Buff swaps interrupted by another game action.'); return true; }
     if (r.restoring || !r.queue.length) {
       this.message = 'Restoring combat gear.';
@@ -11083,6 +11204,7 @@ Hunt.tick = function () {
 // Stop (userStop) cancels that.
 function stopAll(reason = 'all activities stopped') {
   Town.record('stop');
+  UniqueHunt.stop(reason);
   Alchemy.stop();
   Trade.cancel();
   Stall.stop();
@@ -11227,6 +11349,7 @@ const Controller = {
       if (Alchemy.run || Alchemy.pending) { this.mode = 'alchemy'; return; }
       if (Stall.run) { if (World.inWorld()) Potion.tick(); Stall.tick(); this.mode = 'stall'; return; }
       if (SellStar.run) { SellStar.tick(); this.mode = 'sell star'; return; }
+      if (UniqueHunt.active && World.inWorld() && World.isDead()) UniqueHunt.stop('the character died');
       if (World.inWorld() && World.isDead() && Hunt.running) {
         Town.cancel(); Resurrect.cancelTrip(); Resurrect.holdUntil = 0;
         Hunt.tick(); this.mode = Hunt.state; return;
@@ -11274,6 +11397,7 @@ const Controller = {
       // visit owns the character like a town trip does.
       this.guard('Quest', () => Quest.observe());
       if (Quest.trip) { Quest.tick(); this.mode = 'quest'; return; }
+      if (UniqueHunt.active) { UniqueHunt.tick(); this.mode = UniqueHunt.mode(); return; }
       if (WalkBack.active) { this.mode = 'returning'; WalkBack.tick(); }
       else if (Travel.active) { this.mode = 'travelling'; Travel.tick(); }
       else if (Restock.recording) this.mode = 'recording';
@@ -13578,8 +13702,827 @@ for (const [name, method] of [['Follow party member', 'tick']]) {
 }
 
 
-// Sharing settings. A share code or file holds only what differs from the defaults and nothing personal: positions,
-// town and merchant points, walking routes, buff weapon sets, the chosen weapons and shield, the wardrobe and what zero-setup leveling already set up stay out. Importing never runs
+const UNIQUE_NEST_SAME = 400, UNIQUE_NEST_MAX = 40, UNIQUE_NEST_RETRY_MS = 600000, UNIQUE_KNOWN_KEY = 'unique:known', UNIQUE_KNOWN_MAX = 100;
+const UNIQUE_SYMBOL_CODES = { TIGER_GIRL: 'MOB_CH_TIGERWOMAN', IYUTARU: 'MOB_KK_ISYUTARU', URRUCHI: 'MOB_OA_URUCHI', BONELORD: 'MOB_TK_BONELORD', TAHOMET: 'MOB_RM_TAHOMET' };
+const UNIQUE_BUILT_IN_CODES = ['MOB_AM_IVY', 'MOB_EU_KERBEROS'], UNIQUE_NO_NESTS = Object.freeze([]);
+const UniqueNests = {
+  pending: null, loaded: false, failed: false, failedAt: 0, rev: 0, names: new Map(), byName: new Map(), grouped: new Map(), cache: null, memo: null,
+  cfg() { return Settings.profile.uniqueNests; },
+  on() { return this.cfg()?.on === true; },
+  maxDistance() { return clamp(Number(this.cfg().maxM) || 1000, 100, 5000) * 10; },
+  load() {
+    if (this.loaded || this.pending) return this.pending;
+    if (this.failed && now() - this.failedAt < UNIQUE_NEST_RETRY_MS) return null;
+    this.failed = false;
+    this.pending = Promise.all([SpawnData.load(), Assets.texts()]).then(([, texts]) => {
+      this.index(texts);
+      this.loaded = true; this.pending = null;
+      UniqueHunt.nestsReady();
+    }).catch(e => {
+      this.pending = null; this.failed = true; this.failedAt = now();
+      Log.warn('Unique hunt: the game\'s unique nests could not be loaded (' + String(e?.message || e).slice(0, 120) + '); patrolling your spots and learned spots only.');
+    });
+    return this.pending;
+  },
+  index(texts) {
+    const names = new Map(), byName = new Map();
+    for (const info of SpawnData.codes.values()) {
+      const code = info.code;
+      if (names.has(code) || !SpawnData.isMonster(info)) continue;
+      const name = String(texts?.['SN_' + code] || '').trim() || code;
+      names.set(code, name);
+      const key = name.toLowerCase();
+      if (!byName.has(key)) byName.set(key, []);
+      byName.get(key).push(code);
+    }
+    this.names = names; this.byName = byName; this.grouped.clear(); this.cache = null; this.rev++;
+  },
+  name(code) { return this.names.get(code) || code; },
+  known() {
+    if (!this.memo) {
+      const saved = Store.get(UNIQUE_KNOWN_KEY, null), list = v => Array.isArray(v) ? v : [];
+      this.memo = { refs: list(saved?.refs).filter(Number.isInteger).slice(0, UNIQUE_KNOWN_MAX),
+        names: list(saved?.names).filter(n => typeof n === 'string' && n.trim()).map(n => n.trim().slice(0, 40)).slice(0, UNIQUE_KNOWN_MAX), rev: 0 };
+    }
+    return this.memo;
+  },
+  remember(kind, value) {
+    const m = this.known(), list = m[kind];
+    if (list.some(v => kind === 'names' ? v.toLowerCase() === value.toLowerCase() : v === value)) return false;
+    list.unshift(value);
+    if (list.length > UNIQUE_KNOWN_MAX) list.length = UNIQUE_KNOWN_MAX;
+    m.rev++; this.cache = null;
+    Store.set(UNIQUE_KNOWN_KEY, { refs: m.refs, names: m.names });
+    return true;
+  },
+  seenRef(e) { if (Number.isInteger(e?.refObjId) && e.refObjId > 0) this.remember('refs', e.refObjId); },
+  announced(name) { const n = String(name || '').trim().slice(0, 40); if (n) this.remember('names', n); },
+  codesByName(name) { return this.byName.get(String(name || '').trim().toLowerCase()) || []; },
+  identity(symbol, name) {
+    const codes = new Set(this.codesByName(name));
+    if (UNIQUE_SYMBOL_CODES[symbol]) codes.add(UNIQUE_SYMBOL_CODES[symbol]);
+    return [...codes];
+  },
+  uniques() {
+    const out = new Map(), add = (code, source) => {
+      if (!code || !this.names.has(code)) return;
+      if (!out.has(code)) out.set(code, { code, name: this.name(code), sources: [] });
+      if (!out.get(code).sources.includes(source)) out.get(code).sources.push(source);
+    };
+    if (!this.loaded) return [];
+    for (const code of Object.values(UNIQUE_SYMBOL_CODES)) add(code, 'announced');
+    for (const code of UNIQUE_BUILT_IN_CODES) add(code, 'built-in');
+    const m = this.known();
+    for (const name of m.names) for (const code of this.codesByName(name)) add(code, 'notice');
+    for (const ref of m.refs) add(SpawnData.code(ref), 'seen');
+    return [...out.values()].map(u => ({ ...u, nests: this.nestsOf(u.code).length })).sort((a, b) => a.name.localeCompare(b.name));
+  },
+  chosen() {
+    const picks = this.cfg().picks || [];
+    return picks.length ? picks.filter(c => this.names.has(c)) : this.uniques().map(u => u.code);
+  },
+  toggle(code, on) {
+    const C = this.cfg(), picks = new Set(C.picks || []);
+    if (on) picks.add(code); else picks.delete(code);
+    C.picks = [...picks]; Settings.saveProfile();
+  },
+  nestsOf(code) {
+    if (this.grouped.has(code)) return this.grouped.get(code);
+    const groups = [];
+    for (const p of SpawnData.points(code)) if (!groups.some(g => dist2D(g, p) <= UNIQUE_NEST_SAME)) groups.push(p);
+    this.grouped.set(code, groups);
+    return groups;
+  },
+  spots(origin, taken = []) {
+    if (!this.on() || !this.loaded || !origin) return UNIQUE_NO_NESTS;
+    const C = this.cfg(), key = [this.rev, this.known().rev, (C.picks || []).join(','), C.maxM, origin.regionId, Math.round(origin.x), Math.round(origin.z),
+      taken.map(s => s.regionId + ':' + Math.round(s.x) + ':' + Math.round(s.z)).join(',')].join('|');
+    if (this.cache?.key === key) return this.cache.list;
+    const max = this.maxDistance(), found = [];
+    for (const code of this.chosen()) {
+      for (const p of this.nestsOf(code)) {
+        const d = dist2D(origin, p);
+        if (!Number.isFinite(d) || d > max || taken.some(s => dist2D(s, p) <= UNIQUE_NEST_SAME)) continue;
+        const near = found.find(s => dist2D(s, p) <= UNIQUE_NEST_SAME);
+        if (near) { if (!near.codes.includes(code)) near.codes.push(code); continue; }
+        found.push({ regionId: p.regionId, x: Math.round(p.x), y: Math.round(p.y), z: Math.round(p.z), nest: true, code, codes: [code] });
+      }
+    }
+    const list = [];
+    let here = origin;
+    while (found.length && list.length < UNIQUE_NEST_MAX) {
+      let best = 0;
+      for (let i = 1; i < found.length; i++) if (dist2D(here, found[i]) < dist2D(here, found[best])) best = i;
+      here = found.splice(best, 1)[0];
+      list.push(here);
+    }
+    const counts = new Map();
+    for (const s of list) counts.set(s.code, (counts.get(s.code) || 0) + 1);
+    const seen = new Map();
+    for (const s of list) {
+      const n = (seen.get(s.code) || 0) + 1;
+      seen.set(s.code, n);
+      s.name = this.name(s.code) + ' nest ' + n + ' of ' + counts.get(s.code);
+    }
+    this.cache = { key, list };
+    return list;
+  },
+  state() {
+    if (this.loaded) return 'loaded';
+    if (this.pending) return 'loading';
+    return this.failed ? 'failed' : 'idle';
+  },
+  draw(host) {
+    const C = () => this.cfg(), picker = el('div', null, 'sx-rows');
+    let drawn = '';
+    const fill = () => {
+      const sig = this.state() + ':' + this.rev + ':' + this.known().rev + ':' + C().on;
+      if (sig === drawn) return;
+      drawn = sig;
+      if (!C().on) return picker.replaceChildren();
+      if (!this.loaded) {
+        this.load();
+        return picker.replaceChildren(el('p', this.state() === 'failed' ? 'The game\'s unique list could not be loaded. Your spots and learned spots are still patrolled.' : 'Loading the unique list from the game…', 'muted'));
+      }
+      const list = this.uniques(), picks = new Set(C().picks || []);
+      if (!list.length) return picker.replaceChildren(el('p', 'No unique is known yet.', 'muted'));
+      picker.replaceChildren(...list.map(u => {
+        const input = el('input'); input.type = 'checkbox'; input.checked = picks.has(u.code);
+        input.addEventListener('change', () => this.toggle(u.code, input.checked));
+        return UI.field(u.name + ' · ' + (u.nests ? u.nests + ' nest' + (u.nests === 1 ? '' : 's') : 'no nest in the game data'), input);
+      }), el('p', 'None ticked: every unique in the list.', 'muted'));
+    };
+    fill();
+    UI.refreshers.push(fill);
+    host.append(UI.group('Unique nests',
+      UI.check('Patrol the game\'s unique nests', () => C().on, v => { C().on = v; if (v) this.load(); fill(); }),
+      el('p', 'Reads where each unique spawns from the game\'s own data. Your spots come first, then the chosen nests nearest to where you start, then learned spots.', 'muted'),
+      UI.number('Furthest nest from the start point (m)', () => C().maxM, v => { C().maxM = v; }, 100, 5000, 100),
+      picker));
+  },
+};
+
+
+const UNIQUE_SPOT_REACH = 50, UNIQUE_SPOT_MAX = 30, UNIQUE_SPOT_FAILS = 2;
+const UNIQUE_SEEN_KEY = 'unique:seen', UNIQUE_SEEN_MAX = 200, UNIQUE_SEEN_SAME = 400;
+const UNIQUE_OTHERS_MS = 8000, UNIQUE_HIT_MS = 20000, UNIQUE_GIVE_UP_MS = 10000, UNIQUE_GIVE_UP_RATIO = 1.5, UNIQUE_GIVE_UP_LOSS = 0.05;
+const UNIQUE_COLLECT_MS = 40000, UNIQUE_COLLECT_SETTLE_MS = 3000, UNIQUE_OWN_DROP_MS = 8000, UNIQUE_OWN_DROP_DIST = 150;
+const UNIQUE_REACH_FACTOR = 1.5, UNIQUE_TRACKS_MAX = 64;
+const UNIQUE_NOTICE_NAMES = { TIGER_GIRL: 'Tiger Girl', IYUTARU: 'Isyutaru', URRUCHI: 'Uruchi', BONELORD: 'Lord Yarkan', TAHOMET: 'Demon Shaitan' };
+const UniqueHunt = {
+  active: null, message: '', tracks: new Map(), hits: new Set(), seenGids: new Set(),
+  cfg() { return Settings.profile.unique; },
+  isUnique(e) {
+    if (!e || e.kind !== 'monster') return false;
+    const cls = monsterClass(e);
+    return cls === 'unique' || cls === 'titan' && this.cfg().titans === true;
+  },
+  same(a, b) { const x = String(a || '').trim().toLowerCase(), y = String(b || '').trim().toLowerCase(); return !!x && !!y && (x === y || x.includes(y) || y.includes(x)); },
+  huntCfg() {
+    const a = this.active, base = Settings.profile.hunt;
+    if (!a) return base;
+    const U = this.cfg(), anchor = this.here();
+    if (a.cfg && a.cfgBase === base && a.cfgAnchor === anchor && a.cfgKey === U.chase + ':' + U.titans) return a.cfg;
+    const cfg = Object.create(base), chase = this.chase();
+    Object.assign(cfg, {
+      center: anchor ? { regionId: anchor.regionId, x: anchor.x, y: anchor.y, z: anchor.z } : null, radius: chase, chase,
+      classes: { normal: false, champion: false, giant: false, party: false, elite: false, unique: true, titan: U.titans === true },
+      levelMin: 0, levelMax: 0, include: '', exclude: '', avoidKs: false, priority: 'attackers', returnToCenter: false, attack: true,
+      levelSpots: { on: false, list: [] }, playerAlert: { ...base.playerAlert, pause: false }, onDeath: 'stop',
+    });
+    a.cfg = cfg; a.cfgBase = base; a.cfgAnchor = anchor; a.cfgKey = U.chase + ':' + U.titans;
+    return cfg;
+  },
+  chase() { return clamp(Number(this.cfg().chase) || 800, 100, 3000); },
+  here() { const a = this.active; return a ? a.walk ? World.pose() : a.anchor || a.origin : null; },
+  blocked() {
+    if (!World.inWorld()) return 'Enter the game world first.';
+    if (World.isDead()) return 'The character is dead.';
+    if (Hunt.running) return 'Stop hunting first.';
+    if (Town.trip) return 'Wait for the town trip to finish (or stop the bot).';
+    if (Quest.trip) return 'Wait for the quest visit to finish (or stop the bot).';
+    if (Trade.run) return 'Stop auto trade first.';
+    if (Stall.run || World.gp?.stall?.phase && World.gp.stall.phase !== 'none') return 'Close the stall first.';
+    if (Alchemy.run || Alchemy.pending) return 'Stop alchemy and wait for its result first.';
+    if (SellStar.run) return 'Wait for Sell Star to finish.';
+    if (BuffGear.run || BuffGear.recovery && !BuffGear.autoRestore) return 'Restore or review combat gear first.';
+    if (WalkBack.active || Travel.active || Restock.trip || Resurrect.trip || Controller.resumeAfterRevive) return 'Wait for the current walk or trip to finish (or stop the bot).';
+    if (Restock.recording) return 'Finish or cancel route recording first.';
+    return '';
+  },
+  start() {
+    if (this.active) return UI.toast('The unique hunt is already running.', 'warn');
+    const why = this.blocked();
+    if (why) return UI.toast(why, 'warn');
+    Sound.unlock();
+    RunIntent.set(false);
+    AutoStart.cancel('');
+    const pose = World.pose();
+    this.tracks.clear(); this.hits.clear();
+    this.active = { startedAt: now(), origin: { regionId: pose.regionId, x: pose.x, y: pose.y, z: pose.z }, anchor: null, index: -1, phase: 'patrol',
+      waitUntil: 0, walk: null, away: false, loops: 0, fails: new Map(), priority: '', priorityCodes: [], priorityDone: new Set(), goal: null, kill: null, cfg: null };
+    this.message = '';
+    if (UniqueNests.on()) UniqueNests.load();
+    this.resume();
+    Log.info('Unique hunt started: ' + this.plan() + '.');
+    UI.toast('Unique hunt started.', 'info', 3000);
+    this.next();
+  },
+  plan() {
+    const spots = this.spots(), n = spots.length, nests = spots.filter(s => s.nest).length;
+    if (!n) return 'waiting at the start point (' + this.noSpots() + ')';
+    return 'patrolling ' + n + ' spot' + (n === 1 ? '' : 's') + (nests ? ', ' + nests + ' of them unique nests' : '') + (UniqueNests.on() && UniqueNests.pending ? '; loading the game\'s unique nests' : '');
+  },
+  noSpots() {
+    if (!UniqueNests.on()) return 'no patrol spots saved';
+    if (UniqueNests.pending) return 'loading the game\'s unique nests';
+    if (UniqueNests.loaded) return 'no patrol spots saved and no chosen unique nest within ' + Math.round(UniqueNests.maxDistance() / 10) + ' m';
+    return 'no patrol spots saved';
+  },
+  nestsReady() {
+    if (!this.active) return;
+    const n = this.spots().filter(s => s.nest).length;
+    Log.info('Unique hunt: ' + (n ? n + ' unique nest' + (n === 1 ? '' : 's') + ' added to the patrol.' : 'no chosen unique nest within ' + Math.round(UniqueNests.maxDistance() / 10) + ' m of the start point.'));
+  },
+  resume() {
+    const a = this.active;
+    if (!a) return;
+    a.away = false;
+    Hunt.running = true; Hunt.paused = false; Hunt.state = 'start'; Hunt.targetGid = 0; Hunt.selTries = 0; Hunt.lootGid = 0;
+    Hunt.revived = false; Hunt.deathAt = 0; Hunt.ban.clear(); Hunt.lootBan.clear();
+    Loot.reset(); Lure.reset(); Stats.huntStart();
+    bus.emit('hunt', true);
+  },
+  halt() {
+    if (!Hunt.running) return;
+    if (World.inWorld() && !World.isDead()) Cmd.move(World.pose());
+    Restock.trip = null; Loot.suspend();
+    Hunt.running = false; Hunt.state = 'idle'; Hunt.targetGid = 0;
+    Stats.huntStop();
+    bus.emit('hunt', false);
+  },
+  stop(reason = 'stopped') {
+    const a = this.active;
+    if (!a) return false;
+    this.endWalk();
+    this.active = null;
+    const text = /^stopped\b/i.test(reason) ? 'S' + reason.slice(1) + '.' : 'Stopped: ' + reason + '.';
+    this.message = text;
+    Log.info('Unique hunt: ' + text);
+    UI.toast('Unique hunt: ' + text, /killed|by you|from outside/.test(reason) ? 'info' : 'warn', 6000);
+    Retry.note('unique hunt: ' + reason);
+    this.halt();
+    return true;
+  },
+  away() {
+    const a = this.active;
+    if (!a) return;
+    a.away = true; a.walk = null;
+    this.halt();
+  },
+  endWalk() {
+    const a = this.active;
+    if (!a?.walk) return;
+    a.walk = null;
+    if (Travel.active) Travel.cancel();
+    if (WalkBack.active) WalkBack.cancel('', false);
+  },
+  spots() {
+    const U = this.cfg(), own = (U.spots || []).filter(s => s && Number.isFinite(s.x)).map(s => ({ ...s }));
+    const nests = UniqueNests.spots(this.active?.origin || World.pose(), own), before = nests.length ? [...own, ...nests] : own;
+    if (!U.learned) return before;
+    let raw = null;
+    try { raw = W.localStorage.getItem(Store.prefix + UNIQUE_SEEN_KEY); } catch {}
+    const memo = this.spotMemo;
+    if (memo && memo.own === U.spots && memo.nests === nests && memo.raw === raw) return memo.list;
+    const learned = this.seen().filter(s => !before.some(o => dist2D(o, s) <= UNIQUE_SEEN_SAME)).sort((x, y) => (y.at || 0) - (x.at || 0));
+    const list = [...before, ...learned.map(s => ({ name: s.name, regionId: s.regionId, x: s.x, y: s.y, z: s.z, learned: true }))].slice(0, UNIQUE_SPOT_MAX * 2 + UNIQUE_NEST_MAX);
+    this.spotMemo = { own: U.spots, nests, raw, list };
+    return list;
+  },
+  matches(spot, name, codes) { return !!spot && (!!spot.codes && codes.some(c => spot.codes.includes(c)) || this.same(spot.name, name)); },
+  mapNests() { return UniqueNests.on() && UniqueNests.loaded ? this.spots().filter(s => s.nest) : []; },
+  addSpot(name = '') {
+    const pose = World.pose();
+    if (!World.inWorld() || !pose) return UI.toast('Enter the game world first.', 'warn');
+    const U = this.cfg();
+    if ((U.spots || []).length >= UNIQUE_SPOT_MAX) return UI.toast('At most ' + UNIQUE_SPOT_MAX + ' patrol spots.', 'warn');
+    const spot = { name: String(name || '').trim().slice(0, 32), regionId: pose.regionId, x: pose.x, y: pose.y, z: pose.z };
+    U.spots = [...(U.spots || []), spot];
+    Settings.saveProfile();
+    UI.toast('Patrol spot ' + U.spots.length + ' saved' + (spot.name ? ': ' + spot.name : '') + '.');
+    return true;
+  },
+  removeSpot(i) { const U = this.cfg(); U.spots = U.spots.filter((_, j) => j !== i); Settings.saveProfile(); },
+  moveSpot(i, by) {
+    const U = this.cfg(), j = i + by;
+    if (j < 0 || j >= U.spots.length) return;
+    const list = [...U.spots];
+    [list[i], list[j]] = [list[j], list[i]];
+    U.spots = list; Settings.saveProfile();
+  },
+  seen() { const list = Store.get(UNIQUE_SEEN_KEY, []); return Array.isArray(list) ? list.filter(s => s && typeof s.name === 'string' && Number.isFinite(s.x) && Number.isFinite(s.z) && Number.isInteger(s.regionId)) : []; },
+  clearSeen() { Store.set(UNIQUE_SEEN_KEY, []); this.seenGids.clear(); UI.toast('Learned unique spots cleared.'); },
+  learn(e) {
+    if (!e || e.kind !== 'monster' || monsterClass(e) !== 'unique' || !e.name || !Number.isFinite(e.x) || !Number.isInteger(e.regionId) || this.seenGids.has(e.gid)) return;
+    this.seenGids.add(e.gid);
+    if (this.seenGids.size > 500) this.seenGids.delete(this.seenGids.values().next().value);
+    const list = this.seen(), at = Date.now(), name = String(e.name).slice(0, 40);
+    const old = list.find(s => s.name === name && dist2D(s, e) <= UNIQUE_SEEN_SAME);
+    if (old) { old.at = at; old.count = (old.count || 1) + 1; }
+    else {
+      list.push({ name, regionId: e.regionId, x: Math.round(e.x), y: Math.round(e.y ?? 0), z: Math.round(e.z), at, count: 1 });
+      Log.info('Unique seen: ' + name + '; its spot is remembered.');
+    }
+    list.sort((x, y) => (y.at || 0) - (x.at || 0));
+    Store.set(UNIQUE_SEEN_KEY, list.slice(0, UNIQUE_SEEN_MAX));
+  },
+  track(e) {
+    let t = this.tracks.get(e.gid);
+    if (!t) {
+      t = { gid: e.gid, name: e.name || 'a unique', ours: 0, others: new Map(), engagedAt: 0, engageHp: null, othersBefore: false, decision: '', logged: new Set(), wanted: false, dead: false, lastHp: null };
+      this.tracks.set(e.gid, t);
+      while (this.tracks.size > UNIQUE_TRACKS_MAX) this.tracks.delete(this.tracks.keys().next().value);
+      this.learn(e);
+    }
+    return t;
+  },
+  note(t, kind, text) {
+    if (t.logged.has(kind)) return;
+    t.logged.add(kind);
+    Log.info('Unique hunt: ' + text);
+  },
+  othersFighting(e, sim = World.simNow() ?? 0) { return sim - (World.hitByOthers.get(e.gid) ?? -Infinity) < UNIQUE_OTHERS_MS; },
+  hitUs(e, sim = World.simNow() ?? 0) { return sim - (World.attackers.get(e.gid) ?? -Infinity) < 6000; },
+  weHit(e, sim = World.simNow() ?? 0) {
+    const t = this.tracks.get(e.gid);
+    if (sim - (World.hitByUs.get(e.gid) ?? -Infinity) < UNIQUE_HIT_MS) { if (t) t.hitAt = now(); return true; }
+    return !!t && (t.ours > 0 || now() - (t.hitAt ?? -Infinity) < UNIQUE_HIT_MS);
+  },
+  playersNear(e) {
+    const party = new Set((World.gp?.social?.members || []).map(m => m?.name));
+    let n = 0;
+    for (const p of World.ents.values()) if (p.kind === 'player' && p.gid !== World.localGid() && !party.has(p.name) && dist2D(p, e) <= 300) n++;
+    return n;
+  },
+  maxHpOf(e) { return World.vitalsOf(e.gid)?.maxHp || effectiveMaxHp(e) || null; },
+  pct(e) { const p = World.hpPctOf(e); return p === null ? null : Math.round(p); },
+  judge(e) {
+    const t = this.track(e), sim = World.simNow() ?? 0, U = this.cfg();
+    if (t.decision === 'gave up') return false;
+    if (this.weHit(e, sim)) { t.decision = 'take'; t.why = 'we are fighting it'; return true; }
+    const pct = World.hpPctOf(e), others = this.othersFighting(e, sim), below = Number(U.skipBelow) || 0;
+    const label = t.name + (pct === null ? '' : ' (' + Math.round(pct) + '% HP)');
+    if (others && pct !== null && pct < below) {
+      t.decision = 'skip';
+      this.note(t, 'skip', 'skipping ' + label + ': other players are fighting it and it is below ' + below + '% HP, so its drop is out of reach. Players near it: ' + this.playersNear(e) + '.');
+      return false;
+    }
+    t.decision = 'take';
+    t.why = label + (others ? ': others are fighting it, but it is still above ' + below + '% HP.' : ': nobody else is fighting it.');
+    return true;
+  },
+  outDamaged(e) {
+    const t = this.tracks.get(e.gid);
+    if (!t || !t.engagedAt || this.hitUs(e) || now() - t.engagedAt < UNIQUE_GIVE_UP_MS) return null;
+    const max = this.maxHpOf(e), hp = World.hpOf(e.gid);
+    if (!max || !Number.isFinite(hp) || !Number.isFinite(t.engageHp)) return null;
+    const lost = t.engageHp - hp;
+    if (lost < max * UNIQUE_GIVE_UP_LOSS || !t.ours && !t.others.size || !t.others.size && !this.othersFighting(e)) return null;
+    let seen = 0, top = 0;
+    for (const v of t.others.values()) { seen += v; top = Math.max(top, v); }
+    const during = Math.max(seen, lost - t.ours), prior = t.othersBefore ? Math.max(0, max - t.engageHp) : 0;
+    const rival = prior + top + Math.max(0, during - seen), rivalDuring = top + Math.max(0, during - seen);
+    if (!(rival > 0)) return null;
+    const ours = t.ours + hp * (t.ours / lost), theirs = rival + hp * (rivalDuring / lost);
+    if (theirs <= ours * UNIQUE_GIVE_UP_RATIO) return null;
+    return { ours: Math.round(t.ours / max * 100), theirs: Math.round(rival / max * 100) };
+  },
+  onCast(cast) {
+    if (!this.active || !cast) return;
+    const local = World.localGid(), caster = World.ents.get(cast.caster);
+    const ours = cast.caster === local || caster?.kind === 'cos' && caster.ownerGid === local;
+    const party = new Set((World.gp?.social?.members || []).map(m => m?.name));
+    const owner = caster?.kind === 'cos' ? World.ents.get(caster.ownerGid) : caster;
+    const friendly = ours || !!owner?.name && party.has(owner.name);
+    const token = cast.token ?? cast.startedAtMs ?? cast.receivedAtMs ?? '';
+    if (!(cast.results || []).length && cast.fatal) {
+      const target = World.ents.get(cast.target);
+      if (target && this.tracks.has(target.gid)) this.died(target, 'a fatal hit');
+    }
+    for (const result of cast.results || []) {
+      const target = World.ents.get(result?.target);
+      if (!target || !this.isUnique(target)) continue;
+      const t = this.track(target);
+      for (const [index, impact] of (result.impacts || []).entries()) {
+        if (impact?.fatal) this.died(target, 'a fatal hit');
+        if (!(impact?.damage > 0)) continue;
+        const key = `${cast.caster}:${token}:${cast.skill}:${result.target}:${impact.stage ?? index}:${impact.damage}`;
+        if (this.hits.has(key)) continue;
+        this.hits.add(key);
+        if (friendly) {
+          if (!t.engagedAt) { t.engagedAt = now(); t.engageHp = (World.hpOf(target.gid) ?? 0) + impact.damage; t.othersBefore = this.othersFighting(target); }
+          t.ours += impact.damage;
+        } else t.others.set(cast.caster, (t.others.get(cast.caster) || 0) + impact.damage);
+      }
+    }
+    while (this.hits.size > 1024) this.hits.delete(this.hits.values().next().value);
+  },
+  died(e, how, killer = '') {
+    const a = this.active, t = this.tracks.get(e.gid);
+    if (!a || !t || t.dead) return;
+    t.dead = true;
+    const goal = a.goal?.gid === e.gid, hit = this.weHit(e);
+    if (!t.wanted && !hit) return;
+    if (this.cfg().chime !== false) Sound.play('uniqueKilled');
+    Log.info('Unique killed: ' + t.name + (killer ? ' (by ' + killer + ')' : '') + '.');
+    UI.toast('Unique killed: ' + t.name, 'info', 8000);
+    if (goal && hit) {
+      Stats.session.uniques = (Stats.session.uniques || 0) + 1;
+      const at = Number.isFinite(e.x) ? { regionId: e.regionId, x: e.x, y: e.y ?? 0, z: e.z } : World.pose();
+      a.kill = { name: t.name, at: now(), pose: at, drops: new Set(), how };
+      a.goal = null; a.phase = 'collect'; a.anchor = at;
+      Hunt.targetGid = 0;
+      return;
+    }
+    if (goal) {
+      Log.info('Unique hunt: ' + t.name + ' died before we could fight it; back to patrolling.');
+      this.lose();
+    }
+  },
+  lose(why = '') {
+    const a = this.active;
+    if (!a) return;
+    if (why && a.goal) Log.info('Unique hunt: lost ' + a.goal.name + ' (' + why + '); back to patrolling.');
+    if (a.goal && Hunt.targetGid === a.goal.gid) Hunt.targetGid = 0;
+    a.goal = null;
+    if (a.phase !== 'collect') { a.phase = 'patrol'; a.waitUntil = 0; a.resumeSpot = true; }
+  },
+  onDespawn(e) {
+    const a = this.active, t = this.tracks.get(e?.gid);
+    if (a?.kill && e?.kind === 'ground-item') a.kill.drops.delete(e.gid);
+    if (!a || !t) return;
+    if (!t.dead && (e.appearanceState?.[0] === 2 || t.lastHp === 0)) this.died(e, 'its death');
+    if (!t.dead && a.goal?.gid === e.gid) this.lose('out of view');
+    this.tracks.delete(e.gid);
+  },
+  onSpawn(e) {
+    if (e?.kind === 'monster' && monsterClass(e) === 'unique') UniqueNests.seenRef(e);
+    this.learn(e);
+    const k = this.active?.kill;
+    if (k && e?.kind === 'ground-item' && now() - k.at <= UNIQUE_OWN_DROP_MS && dist2D(e, k.pose) <= UNIQUE_OWN_DROP_DIST) k.drops.add(e.gid);
+  },
+  notice(n) {
+    const m = /^UIIT_MSG_(APPEAR|DEAD|ANYONE_DEAD)_([A-Z_]+)$/.exec(String(n?.key || ''));
+    if (!m || !(m[2] in UNIQUE_NOTICE_NAMES || m[2] === 'UNIC')) return;
+    const args = Array.isArray(n.arguments) ? n.arguments.map(x => String(x ?? '').trim()) : [];
+    const killer = m[1] === 'ANYONE_DEAD' ? args[0] || '' : '';
+    const name = UNIQUE_NOTICE_NAMES[m[2]] || (m[1] === 'ANYONE_DEAD' ? args[1] : args[0]) || n.name || '';
+    if (m[2] === 'UNIC' && name) UniqueNests.announced(name);
+    const a = this.active;
+    if (!a || !name) return;
+    const codes = UniqueNests.identity(m[2], name);
+    if (m[1] === 'APPEAR') {
+      const n = this.spots().filter(s => this.matches(s, name, codes)).length;
+      a.priority = n ? name : ''; a.priorityCodes = n ? codes : []; a.priorityDone = new Set();
+      Log.info('Unique hunt: the game says ' + name + ' appeared' + (n ? '; patrolling ' + (n === 1 ? 'its spot' : 'its ' + n + ' spots') + ' first.' : '; no saved spot has its name.'));
+      if (n && a.phase === 'patrol' && !a.goal) { this.endWalk(); a.waitUntil = 0; }
+      return;
+    }
+    if (a.priority && (this.same(a.priority, name) || codes.some(c => a.priorityCodes.includes(c)))) {
+      a.priority = ''; a.priorityCodes = [];
+      Log.info('Unique hunt: the game says ' + name + ' was killed' + (killer ? ' by ' + killer : '') + '; back to the normal patrol order.');
+    }
+    const g = a.goal;
+    if (!g || !this.same(g.name, name)) return;
+    const e = World.ents.get(g.gid);
+    if (e && World.isAlive(e)) return;
+    if (!e) return this.lose('the game says it was killed' + (killer ? ' by ' + killer : ''));
+    const t = this.tracks.get(g.gid);
+    if (t && killer && World.charName && killer === World.charName) t.hitAt = now();
+    this.died(e, 'a game notice', killer);
+  },
+  hittingUs(pose, sim) {
+    let best = null;
+    for (const e of World.ents.values()) {
+      if (!this.isUnique(e) || !isAttackableMob(e) || !this.hitUs(e, sim) || !(dist2D(pose, e) <= this.chase() * UNIQUE_REACH_FACTOR)) continue;
+      if (!best || dist2D(pose, e) < dist2D(pose, best)) best = e;
+    }
+    return best;
+  },
+  defence(pose, sim) {
+    if (this.cfg().selfDefence === false) return null;
+    let best = null;
+    for (const [gid, at] of World.attackers) {
+      const e = World.ents.get(gid);
+      if (sim - at >= 6000 || !isAttackableMob(e) || Hunt.banned(Hunt.ban, gid) || !(dist2D(pose, e) <= this.chase())) continue;
+      if (!best || (World.hpPctOf(e) ?? 100) < (World.hpPctOf(best) ?? 100)) best = e;
+    }
+    return best;
+  },
+  pick() {
+    const a = this.active, here = this.here(), chase = this.chase();
+    if (!here) return null;
+    const goal = a.goal && World.ents.get(a.goal.gid);
+    if (goal && isAttackableMob(goal) && dist2D(here, goal) <= chase * UNIQUE_REACH_FACTOR) {
+      if (this.judge(goal)) return goal;
+      this.lose();
+    } else if (a.goal) this.lose(goal ? 'out of reach' : 'out of view');
+    let best = null;
+    for (const e of World.ents.values()) {
+      if (!this.isUnique(e) || !isAttackableMob(e) || Hunt.banned(Hunt.ban, e.gid) || !(dist2D(here, e) <= chase)) continue;
+      if (!this.judge(e)) continue;
+      if (!best || dist2D(here, e) < dist2D(here, best)) best = e;
+    }
+    return best;
+  },
+  chooseTarget() {
+    const a = this.active, pose = World.pose(), sim = World.simNow() ?? 0;
+    if (!a || !pose) return null;
+    const attacker = this.hittingUs(pose, sim);
+    if (attacker) { this.want(attacker); return attacker; }
+    if (a.phase === 'collect') return this.defence(pose, sim);
+    const goal = this.pick();
+    if (goal) { this.want(goal); return goal; }
+    return this.defence(pose, sim);
+  },
+  want(e) {
+    const a = this.active, t = this.track(e);
+    t.wanted = true;
+    if (a.goal?.gid === e.gid) return;
+    this.note(t, 'take', 'going for ' + (this.hitUs(e) ? t.name + ': it is hitting us.' : t.why || t.name + '.'));
+    a.goal = { gid: e.gid, name: t.name, at: now() };
+    if (a.walk) { this.endWalk(); a.anchor = { ...World.pose() }; a.resumeSpot = true; }
+    a.phase = 'chase';
+  },
+  threats() {
+    const a = this.active, pose = World.pose(), sim = World.simNow() ?? 0;
+    if (!pose) return false;
+    if (this.hittingUs(pose, sim) || this.defence(pose, sim)) return true;
+    return !!this.pick();
+  },
+  giveUpCheck() {
+    const a = this.active, e = a.goal && World.ents.get(a.goal.gid);
+    if (!e) return;
+    const t = this.track(e);
+    t.lastHp = World.hpOf(e.gid) ?? t.lastHp;
+    if (t.lastHp === 0) return this.died(e, 'zero HP');
+    const out = this.outDamaged(e);
+    if (!out) return;
+    t.decision = 'gave up'; t.wanted = false;
+    this.note(t, 'gave up', 'giving up ' + t.name + ': others dealt about ' + out.theirs + '% of its HP and we ' + out.ours + '%; they will get the drop.');
+    if (Hunt.targetGid === e.gid) { Hunt.targetGid = 0; if (World.inWorld() && !World.isDead()) Cmd.move(World.pose()); }
+    a.goal = null;
+    this.lose();
+  },
+  next() {
+    const a = this.active, spots = this.spots();
+    a.phase = 'patrol'; a.resumeSpot = false;
+    if (!spots.length) { a.index = -1; a.anchor = a.origin; return this.go(a.origin, -1); }
+    let i = -1;
+    if (a.priority) {
+      const pose = World.pose();
+      for (const [j, s] of spots.entries()) {
+        if (!this.matches(s, a.priority, a.priorityCodes) || a.priorityDone.has(this.key(s)) || (a.fails.get(this.key(s)) || 0) >= UNIQUE_SPOT_FAILS) continue;
+        if (i < 0 || dist2D(pose, s) < dist2D(pose, spots[i])) i = j;
+      }
+      if (i >= 0) a.priorityDone.add(this.key(spots[i]));
+      else { a.priority = ''; a.priorityCodes = []; }
+    }
+    if (i < 0) {
+      const usable = spots.map((_, j) => j).filter(j => (a.fails.get(this.key(spots[j])) || 0) < UNIQUE_SPOT_FAILS);
+      if (!usable.length) return this.stop('no patrol spot can be reached');
+      i = usable.find(j => j > a.index) ?? usable[0];
+      if (a.index >= 0 && i <= a.index) a.loops++;
+    }
+    a.index = i;
+    a.anchor = { regionId: spots[i].regionId, x: spots[i].x, y: spots[i].y, z: spots[i].z };
+    this.go(a.anchor, i);
+  },
+  key(s) { return s.regionId + ':' + Math.round(s.x) + ':' + Math.round(s.z); },
+  go(spot, i) {
+    const a = this.active, pose = World.pose(), d = dist2D(pose, spot);
+    if (d <= UNIQUE_SPOT_REACH) return this.arrived(i);
+    if (!Number.isFinite(d)) {
+      if (i < 0) return this.stop('the start point is in another world or dungeon');
+      return this.failed(i, 'it is in another world or dungeon');
+    }
+    a.walk = { index: i, kind: 'walk', at: now() };
+    const label = i < 0 ? 'the start point' : 'unique spot ' + (i + 1);
+    if (Travel.on() && Travel.begin(pose, spot, false)) { a.walk.kind = 'travel'; return; }
+    const walk = a.walk;
+    const ok = WalkBack.startTo(spot, { label, stop: Math.round(UNIQUE_SPOT_REACH * 0.6),
+      onDone: () => { if (this.active?.walk === walk) { this.active.walk = null; this.arrived(i); } },
+      onFail: reason => {
+        if (this.active?.walk !== walk) return;
+        this.active.walk = null;
+        if (/manual control/i.test(String(reason))) { this.active.resumeSpot = true; return; }
+        this.failed(i, reason);
+      } });
+    if (!ok && a.walk === walk) { a.walk = null; this.failed(i, 'the walk did not start'); }
+  },
+  arrived(i) {
+    const a = this.active;
+    if (!a) return;
+    a.phase = 'patrol'; a.walk = null;
+    if (i >= 0) a.fails.delete(this.key(this.spots()[i] || a.anchor));
+    a.waitUntil = now() + clamp(Number(this.cfg().waitS) || 0, 0, 3600) * 1000;
+  },
+  failed(i, reason) {
+    const a = this.active;
+    if (!a) return;
+    a.walk = null;
+    if (i < 0) return this.stop('could not walk back to the start point (' + reason + ')');
+    const spot = this.spots()[i], key = spot ? this.key(spot) : '';
+    a.fails.set(key, (a.fails.get(key) || 0) + 1);
+    Log.warn('Unique hunt: spot ' + (i + 1) + (spot?.name ? ' (' + spot.name + ')' : '') + ' skipped: ' + String(reason || 'the walk gave up').replace(/\.$/, '') + '.');
+    a.waitUntil = 0;
+    this.next();
+  },
+  ownDrop(by) {
+    const k = this.active?.kill;
+    if (!k?.drops.size) return null;
+    const pose = World.pose();
+    let best = null;
+    for (const gid of k.drops) {
+      const e = World.ents.get(gid);
+      if (!e || Loot.whyNot(e) || by && Loot.collector(e) !== by) continue;
+      if (!best || dist2D(pose, e) < dist2D(pose, best)) best = e;
+    }
+    return best;
+  },
+  collect() {
+    const a = this.active, k = a.kill;
+    if (Hunt.running) Hunt.tick();
+    if (!this.active) return;
+    const waited = now() - k.at;
+    if (waited >= UNIQUE_COLLECT_MS) return this.stop(k.name + ' killed; drops collected for ' + Math.round(UNIQUE_COLLECT_MS / 1000) + ' s');
+    if (waited < UNIQUE_COLLECT_SETTLE_MS || Loot.active || Hunt.targetGid) return;
+    const P = Hunt.cfg().pickup;
+    if (P.enabled && (Loot.choose('character') || Loot.petMode() && Loot.choose('pet'))) return;
+    this.stop(k.name + ' killed');
+  },
+  tick() {
+    const a = this.active;
+    if (!a || !World.inWorld()) return;
+    if (World.isDead()) return this.stop('the character died');
+    if (WalkBack.active && !a.walk) { WalkBack.tick(); return; }
+    if (Travel.active && !a.walk) { Travel.tick(); return; }
+    if (a.away || !Hunt.running) { this.resume(); a.resumeSpot = true; }
+    if (UniqueNests.on() && !UniqueNests.loaded && !UniqueNests.pending) UniqueNests.load();
+    this.huntCfg();
+    if (a.phase === 'collect') return this.collect();
+    if (a.goal) this.giveUpCheck();
+    if (a.phase === 'collect') return this.collect();
+    const limit = clamp(Number(this.cfg().limitM) || 0, 0, 1440);
+    if (!a.goal && limit && now() - a.startedAt >= limit * 60000) return this.stop('time limit of ' + limit + ' min reached');
+    if (a.walk?.kind === 'walk' && !WalkBack.active) { a.walk = null; a.resumeSpot = true; }
+    if (a.walk) {
+      if (!this.threats() && this.active?.walk) {
+        if (a.walk.kind === 'travel' && !Travel.active) {
+          const w = a.walk; a.walk = null;
+          const spot = w.index < 0 ? a.origin : this.spots()[w.index];
+          if (spot && dist2D(World.pose(), spot) <= UNIQUE_SPOT_REACH * 3) this.arrived(w.index); else this.failed(w.index, 'the travel ended away from the spot');
+          return;
+        }
+        if (WalkBack.active) WalkBack.tick(); else if (Travel.active) Travel.tick();
+        return;
+      }
+      if (!this.active) return;
+      if (a.walk) {
+        if (a.walk.kind === 'travel' && Travel.active?.phase && Travel.active.phase !== 'walk') { if (WalkBack.active) WalkBack.tick(); else Travel.tick(); return; }
+        this.endWalk(); a.anchor = { ...World.pose() }; a.resumeSpot = true;
+      }
+    }
+    Hunt.tick();
+    if (!this.active || a.goal || Hunt.targetGid || Loot.active || now() - Manual.lastAt < Hunt.cfg().manualPauseS * 1000) return;
+    if (a.resumeSpot) {
+      const spots = this.spots(), spot = a.index >= 0 ? spots[a.index] : a.origin;
+      a.resumeSpot = false;
+      if (spot && dist2D(World.pose(), spot) > UNIQUE_SPOT_REACH) { a.anchor = a.index >= 0 ? { regionId: spot.regionId, x: spot.x, y: spot.y, z: spot.z } : a.origin; return this.go(spot, a.index); }
+      a.waitUntil = Math.max(a.waitUntil, now() + 2000);
+    }
+    if (!a.walk && now() >= a.waitUntil && (this.spots().length || a.index >= 0)) this.next();
+  },
+  mode() { return 'unique hunt'; },
+  status() {
+    const a = this.active;
+    if (!a) return this.message || 'Not running.';
+    if (a.phase === 'collect' && a.kill) return a.kill.name + ' killed; collecting drops.';
+    if (a.away) return WalkBack.active ? WalkBack.status() : Travel.active ? Travel.status() : 'Returning to the patrol.';
+    if (WalkBack.active && !a.walk) return WalkBack.status();
+    if (Town.trip) return Town.status();
+    const goal = a.goal && World.ents.get(a.goal.gid);
+    if (goal) { const pct = this.pct(goal); return 'Going for ' + a.goal.name + (pct === null ? '' : ' (' + pct + '%)') + '.'; }
+    const target = Hunt.targetGid && World.ents.get(Hunt.targetGid);
+    if (target) return 'Fighting ' + (target.name || 'a monster') + ' (hitting you).';
+    const spots = this.spots();
+    if (!spots.length) return 'Waiting at the start point: ' + this.noSpots() + '.';
+    const i = Math.max(0, a.index), spot = spots[i], name = spot?.name ? ' (' + spot.name + ')' : '';
+    const left = Math.max(0, Math.ceil((a.waitUntil - now()) / 1000));
+    if (spot?.nest) return 'Patrolling: ' + (a.walk ? 'walking to ' + spot.name : spot.name + (left ? ', waiting ' + left + ' s' : '')) + '.';
+    if (a.walk) return 'Patrolling: walking to spot ' + (i + 1) + ' of ' + spots.length + name + '.';
+    return 'Patrolling: spot ' + (i + 1) + ' of ' + spots.length + name + (left ? ', waiting ' + left + ' s' : '') + '.';
+  },
+  spotText(s, i) {
+    const d = dist2D(World.pose(), s);
+    return (i + 1) + '. ' + (s.name || 'Unnamed spot') + ' · ' + (Number.isFinite(d) ? Math.round(d / 10) + ' m away' : 'another region');
+  },
+  card() {
+    const status = el('p', this.status(), 'muted');
+    UI.refreshers.push(() => { status.textContent = this.status(); });
+    return UI.group('Unique hunt',
+      el('p', 'Patrols your unique spots and fights only uniques, with your Unique rotation, berserk, buffs and potions. When the unique it went for dies it chimes, collects the drops and stops. Your hunting spot and settings stay as they are.', 'muted'),
+      UI.row(UI.button('Start', () => this.start()), UI.button('Stop', () => { if (!this.stop('stopped by you')) UI.toast('The unique hunt is not running.'); }),
+        UI.button('Settings', () => UI.show('Combat', 'Unique hunt'))),
+      status);
+  },
+  draw(host) {
+    const U = () => this.cfg();
+    let name = '';
+    const list = el('div', null, 'sx-rows');
+    const fill = () => list.replaceChildren(...(U().spots.length ? U().spots.map((s, i) => {
+      const row = el('div', null, 'row');
+      row.append(el('span', this.spotText(s, i)), UI.button('Up', () => { this.moveSpot(i, -1); fill(); }), UI.button('Down', () => { this.moveSpot(i, 1); fill(); }), UI.button('Remove', () => { this.removeSpot(i); fill(); }));
+      return row;
+    }) : [el('p', 'No patrol spots yet. Stand where a unique appears and press Add this spot.', 'muted')]));
+    fill();
+    const learnedNote = el('p', '', 'muted');
+    const learned = () => { const s = this.seen(); learnedNote.textContent = s.length ? 'Learned: ' + s.slice(0, 12).map(x => x.name + ' ×' + (x.count || 1)).join(', ') + (s.length > 12 ? ' and ' + (s.length - 12) + ' more' : '') + '.' : 'Learned: none yet.'; };
+    learned();
+    host.append(UI.group('Unique hunt',
+      el('p', 'Started from the Unique hunt card on the Setup page. It patrols these spots in order, waits at each, and loops. Distances count from the spot it is at, or from where you started it with no spots; never from the hunting area.', 'muted'),
+      list,
+      UI.text('Spot name (optional)', () => name, v => { name = v; }, 'for example Tiger Girl'),
+      UI.button('Add this spot', () => { if (this.addSpot(name)) fill(); }),
+      UI.number('Wait at each spot (s)', () => U().waitS, v => { U().waitS = v; }, 0, 600, 5),
+      UI.check('Also patrol learned spots', () => U().learned, v => { U().learned = v; }),
+      el('p', 'Every unique the bot sees is remembered with its place, on this computer only. Learned spots come after yours.', 'muted'),
+      learnedNote,
+      UI.button('Clear learned spots', () => { this.clearSeen(); learned(); }),
+      UI.number('Chase distance (m)', () => U().chase / 10, v => { U().chase = v * 10; }, 10, 300),
+      UI.check('Titans too (they use the Unique rotation)', () => U().titans, v => { U().titans = v; }),
+      UI.check('Fight monsters that hit me', () => U().selfDefence, v => { U().selfDefence = v; }),
+      UI.number('Skip a unique others have brought below this % HP', () => U().skipBelow, v => { U().skipBelow = v; }, 0, 100, 5),
+      el('p', 'The drop goes to whoever dealt the most damage. A unique others are fighting is skipped below this HP; during a fight the bot gives up when others clearly out-damage it. A unique that hits you is always fought back, and one nobody else fights is always taken.', 'muted'),
+      UI.number('Stop after (min)', () => U().limitM, v => { U().limitM = v; }, 5, 1440, 5),
+      UI.check('Chime when a unique monster comes into view', () => Settings.profile.sounds.unique, v => { Settings.profile.sounds.unique = v; }),
+      UI.button('Test in-view chime', () => Sound.test('unique')),
+      UI.check('Chime when the hunted unique dies', () => U().chime, v => { U().chime = v; }),
+      UI.button('Test kill chime', () => Sound.test('uniqueKilled'))));
+    UniqueNests.draw(host);
+  },
+};
+{
+  const startBeforeUnique = Hunt.start, stopBeforeUnique = Hunt.stop, chooseBeforeUnique = Hunt.chooseTarget, threatBeforeUnique = Hunt.threat;
+  const cfgBeforeUnique = Hunt.cfg, levelSpotTick = LevelSpot.tick, lureOn = Lure.on, protectPick = Protect.pick;
+  const questBlocked = Quest.blocked, townReason = Town.reason, reconnectBusy = Reconnect.busy, antiStuckTick = AntiStuck.tick, lootChoose = Loot.choose;
+  Hunt.cfg = function () { return UniqueHunt.active ? UniqueHunt.huntCfg() : cfgBeforeUnique.call(this); };
+  Hunt.start = function (...args) {
+    if (UniqueHunt.active) { if (!this.running) UniqueHunt.resume(); return; }
+    return startBeforeUnique.apply(this, args);
+  };
+  Hunt.stop = function (reason) {
+    if (UniqueHunt.active && this.running) {
+      if (reason === 'walking back to the hunting spot') return UniqueHunt.away();
+      return UniqueHunt.stop(reason || 'stopped');
+    }
+    return stopBeforeUnique.apply(this, arguments);
+  };
+  Hunt.chooseTarget = function (...args) { return UniqueHunt.active ? UniqueHunt.chooseTarget() : chooseBeforeUnique.apply(this, args); };
+  Hunt.threat = function (current) {
+    if (!UniqueHunt.active) return threatBeforeUnique.call(this, current);
+    return UniqueHunt.cfg().selfDefence === false ? null : threatBeforeUnique.call(this, current);
+  };
+  LevelSpot.tick = function () { return UniqueHunt.active ? false : levelSpotTick.apply(this, arguments); };
+  Lure.on = function () { return !UniqueHunt.active && lureOn.apply(this, arguments); };
+  Protect.pick = function () { return UniqueHunt.active ? null : protectPick.apply(this, arguments); };
+  Quest.blocked = function () { return UniqueHunt.active ? 'the unique hunt is running' : questBlocked.apply(this, arguments); };
+  Town.reason = function () {
+    const why = townReason.apply(this, arguments);
+    return UniqueHunt.active && /^(no XP|every )/.test(why) ? '' : why;
+  };
+  Reconnect.busy = function () { return UniqueHunt.active ? false : reconnectBusy.apply(this, arguments); };
+  AntiStuck.tick = function () {
+    if (UniqueHunt.active && !Hunt.targetGid) { this.idleMs = 0; this.lastAt = now(); return; }
+    return antiStuckTick.apply(this, arguments);
+  };
+  Loot.choose = function (by = null) {
+    const chosen = lootChoose.call(this, by);
+    if (!UniqueHunt.active?.kill || chosen && UniqueHunt.active.kill.drops.has(chosen.gid)) return chosen;
+    return UniqueHunt.ownDrop(by) || chosen;
+  };
+}
+bus.on('cast', cast => UniqueHunt.onCast(cast));
+bus.on('spawn', e => UniqueHunt.onSpawn(e));
+bus.on('despawn', e => UniqueHunt.onDespawn(e));
+bus.on('death', e => { if (e?.kind === 'monster' && UniqueHunt.tracks.has(e.gid)) UniqueHunt.died(e, 'its death'); });
+bus.on('notice', n => UniqueHunt.notice(n));
+bus.on('reset', () => { UniqueHunt.tracks.clear(); UniqueHunt.hits.clear(); if (UniqueHunt.active) { UniqueHunt.active.goal = null; UniqueHunt.active.kill = null; } });
+
+
+// Sharing settings. A share code or file holds only what differs from the defaults and nothing personal: positions
+// (except the unique hunt's patrol spots, which are world places worth sharing), town and merchant points, walking routes, buff weapon sets, the chosen weapons and shield, the wardrobe and what zero-setup leveling already set up stay out. Importing never runs
 // anything: the text is parsed as data, every field is checked against the defaults, and a preview lists the changes
 // before anything is applied. The previous settings are kept so one press undoes an import.
 const SHARE = { apps: ['osb', 'nixxane-bot', 'sro-bot-lean'], format: 2, maxChars: 300000, maxNodes: 20000,
@@ -13929,7 +14872,7 @@ const Setup = {
       this.previewNote, this.previewList, UI.row(this.apply, this.cancel),
       UI.button('Undo last change', () => { if (ProfileShare.undo()) UI.draw(); }),
       el('p', 'Have settings from someone else? Settings → Share and import settings.', 'muted'));
-    parent.append(hero, Leveling.draw(), list, presets);
+    parent.append(hero, UniqueHunt.card(), Leveling.draw(), list, presets);
     this.render(); this.drawPreview();
     Store.set('setup:seen', true);
   },
@@ -16276,7 +17219,7 @@ const Alchemy = {
 };
 
 
-const RELEASE_NOTES = [{"version": "2.0.5", "title": "The pickup pet keeps collecting while you play by hand, resurrection retry settings", "items": ["New in Loot → Collection: \"Pet keeps collecting while I play by hand\" (on by default). When you walk, attack or use skills yourself, the pickup pet now keeps collecting, with the bot running or stopped. Only the pet moves; your character's own pickups and hunting still pause after manual control. Turn it off to have the pet wait as before.", "Your own inventory use goes first. A pet pickup keeps the game's inventory busy until the pet reaches the drop, and meanwhile the game greys out its inventory and Item Mall buttons and quietly ignores a purchase. Now the pet sends no new pickup for 2.5 s after you use or move an item, pick something up or use a shop, storage, trade, stall or alchemy, and for 60 s after you open or use the Item Mall. It also waits while a trade, stall or alchemy window is open, and leaves a short gap after each pickup so your clicks get through. The bot's own item drops, pet-to-bag moves and Item Mall buying wait the same way. The bot never repeats a command of yours, so a purchase is never sent twice.", "A drop the pet cannot reach is now given up after a few tries instead of being tried again and again.", "The pet status line shows how much of the last minute pet pickups kept the inventory busy. With detailed capture on, the Activity log shows how long each pet pickup took. These numbers stay on your computer.", "New on the Party page: \"Wait between resurrection attempts (s)\" (31 s by default, the game's 30 s answer window plus one tick; 31 to 300) and \"Max resurrection attempts per player (0 = no limit)\". After the last attempt the bot stops offering Rebirth to that player and says so once; it starts counting again when the player is alive again, leaves the party or the list, or when you press Start."]}, {"version": "2.0.4", "title": "Resurrection from anyone, resurrecting helpers outside the party, zero-setup leveling", "items": ["New on the Party page: \"Accept resurrection from any player\" (off by default). When you are dead, the bot also answers Yes to a Rebirth from a player outside your party. The log names who resurrected you. With it on, any living player in view counts as a helper for \"Wait for a party resurrection\".", "New on the Party page: \"Also resurrect these players (not in the party)\". Enter up to 20 character names, for example a lure character helping a full party from outside it. A listed player who is dead, in view and within the maximum distance is resurrected like a party member, during hunting and while stopped. Nobody else outside the party is targeted. If the game refuses Rebirth on one of them, the bot says so once and skips that player for 10 minutes.", "\"Max every skill\" (Settings, Auto mastery) is now a switch. While it is on, it spends new skill points as you get them. Off by default.", "New on the Setup page: zero-setup leveling, \"Level up by itself\" (off by default). The bot picks a hunting spot for your level from built-in game data, buys the next tier of NPC weapon, armour and accessories on town trips, and can raise your weapon's mastery, learn its skills and spend stat points. Seal and rare gear, +4 and higher, and anything you protect are never replaced, and a gold reserve is never spent.", "Auto mastery has a new choice under \"Skills to upgrade\": \"Every skill of my chosen masteries\", which also learns new skills.", "The Update button can be clicked again in the compact window, the classic window keeps one size on every tab, and the wide window splits its boxes evenly."]}, {"version": "2.0.3", "title": "Fewer silent stops, town trips that retry, pet loot to your bag", "items": ["A monster the bot cannot reach no longer stops hunting when the game does not confirm that it was released. The bot asks again once, then leaves that monster alone for a minute and hunts on. Protect party members follows the same rule.", "Every stop now says why in the log, for example \"Hunting stopped: stopped by you (F8)\". A stop you make (F8, Start / stop, Stop all, or a stop from OSB Manager) is never undone; a stop the bot makes by itself is started again after 2 minutes when \"Start again when the bot stops by itself\" is on.", "Auto-start no longer gives up when the page was reloaded or the connection came back: it waits for the reconnect.", "The same game refusal and the same missing skill icon appear at most once a minute, with a count.", "Town trips no longer stop when the warehouse, a merchant or the world statue does not open, for example while the town is still loading. The bot waits, walks back and tries again, three tries per service.", "New option under Loot, Bag and pet space: \"Move pet loot to my bag when the pet is nearly full\". The loot is stored or sold on the next town trip like pet loot.", "Reverse Return Scrolls have one switch on the Town page: \"Buy Reverse Return Scrolls from the Item mall (silk)\". No merchant sells them for gold, so the merchant switch is gone; if it was on, the Item mall switch is turned on. Nothing is bought while the silk budget is 0.", "Item mall \"low stock ≤\" now includes the number itself, so a low mark of 0 buys when the item runs out."]}, {"version": "2.0.2", "title": "Attack rotations for every monster class", "items": ["Combat > Skills has one attack rotation per monster class: Normal, Champion, Party, Giant, Party champion, Party giant, Elite and Unique.", "An empty rotation uses the next filled class below it in that order, down to Normal, and its tab says which one, for example \"Empty: uses Party giant\".", "Your existing rotations stay. Party champions and party giants start with a copy of your Party rotation, so they fight as before.", "The SoX chime and notice now have one switch per seal: Star, Moon and Sun. If the chime was on, all three are ticked; if it was off, none are."]}, {"version": "2.0.1", "title": "Protect your party members", "items": ["New on the Party page: Protect party members. When a monster hits a member you ticked, the bot attacks that monster.", "Tick single members or All party members. Members who left stay in the list, greyed out.", "It works within a distance you choose (40 m by default) and inside your hunting area, and never attacks players.", "Your potions, death and return rules and town trips come first. Monsters in Skip these mobs and monsters other players fight are left alone.", "With Also with Attack monsters off, a support character protects the party too."]}, {"version": "2.0.0", "title": "OSB 2.0.0", "items": ["Based on version 1.2.224 of the previous bot. Your settings, share codes and backups carry over.", "Bug reports no longer go to the previous bot's server. Preview the report, then copy it or save it as a file and attach it to a GitHub issue, or press Send and confirm to send it to the OSB team at api.osb.lol. You choose bug report or feature request, you can add a screenshot of a tab you pick, and you get a report code. Nothing is sent before you confirm.", "New: Settings → Privacy. \"Share usage statistics\" is off by default; when you turn it on, OSB sends a short status report about every 10 minutes to api.osb.lol, linked to a random install ID. \"Show my characters in the OSB dashboard\" is a second, separate switch. You can see what is sent, download your data, or delete it. Turning the statistics off deletes your data from the server. With both switches off, OSB sends nothing to api.osb.lol. The same section has \"Check GitHub for OSB updates\" (on by default): the update check carries no data about you, and switching it off stops every update request.", "New from the upstream work up to 1.2.221, all off by default unless said otherwise: wear better gear you carry on town trips, move hunting to the next level spot when a spot gives no XP, a choice of how long to wait for a party resurrection, alert chimes (another player near, death, level up, a unique in view), and a choice of which monsters to avoid when another player is fighting them.", "Item names now show even when the game's data files are not served, and pet loot sells again on town trips. Town trips no longer stop at the smith after a skipped supply. With bag selling on, the weapon merchant now sells the character bag first and the pet loot after it, so a full bag no longer leaves pet loot unsold.", "Reliability fixes from upstream 1.2.222 to 1.2.224: a town trip stops cleanly when the game never settles before the return scroll, an unanswered rebirth is asked again every 10 seconds, combat gear left half swapped by a death or world change is restored quietly while hunting, quest data that fails to load is retried after 10 minutes, the pet-bag-full warning shows with the chime off, Max every skill stops when you leave the world, and settings are saved when you close the page.", "Heads up: the new option to spare giant and party monsters below an HP cutoff is set to 50. It only applies when \"Avoided monsters\" is \"Normal & champion only\", which is not the default.", "Town page: picking a town now sets up the town trip by itself (arrival point, warehouse, potion merchant, repair merchant, world statue), and switching the town trip on fills anything still missing. The separate \"Set up this town\" button is gone and the hand-saving buttons moved under \"Adjust by hand (optional)\".", "Wear better gear now runs before anything is sold. With bag selling on and a full bag, the weapon merchant no longer sells a piece the warehouse visit would wear.", "Wear better gear no longer compares a necklace, earring or ring with the wrong worn piece. A carried necklace was measured against the weakest worn accessory, even a ring, and the game refused the move (\"Inventory rejected: 14\"). Every piece now competes only for its own slot, and the plus level counts.", "When the game refuses to wear a piece, or does not confirm it, the bot logs one line, keeps the piece in your bag and does not sell it or try it again this session.", "Loot page: \"Pick up drops\" is now the first checkbox of the Collection group, in place of the old \"Collect drops\" further down. It is the same setting as the Turn on button on the Setup page, which still works.", "Gear that asks for a mastery level (for example Lynx Gale Glove or Hydra Gale Breast Mail) is now read correctly: wear better gear considers it when your mastery is high enough, and \"Also deposit gear requiring level\" now deposits it too, so gear it never matched before may now go to the warehouse.", "Only tested in simulation (a fake server and a virtual clock), not on the live server or against the real api.osb.lol. The game tick was measured with and without a server that never answers."]}, {"version": "1.2.224", "title": "Reliability fixes for death, rebirth and quests", "items": ["If you die or change world while a buff-gear swap is pending, hunting can now start anyway. The gear is restored quietly once it is safe, not during town trips or open trade, stall or shop windows.", "Rebirth is now re-sent every 10 seconds while your character is still dead.", "Quest data that fails to load is retried after 10 minutes instead of on every tick.", "The reconnect message no longer includes your character's name, so it stays out of reports.", "Smaller fixes: the pet-bag-full toast works with the chime off, Max skills stops when you leave the world, and settings are saved when you close the page. The town tier is reset when you switch character.", "No new option."], "note": "Contributed by duan78 (#96). Tested in simulation only, not in a live game."}, {"version": "1.2.223", "title": "Town trips no longer hang before the return scroll", "items": ["If the game keeps showing a pending inventory or an open cast when the bot is about to read the return scroll, the town trip used to wait forever. It now shows \"Waiting for the game to settle before the return scroll.\"", "After a full minute of that, the trip stops cleanly and hunting stays off. The bot never sends the scroll twice. Reload the game and check your character.", "If the game refuses the return scroll three times without giving a reason, the message now says the game itself may be refusing it and suggests using the scroll by hand.", "No new option."], "note": "Contributed by duan78 (#95). Tested in simulation only, not in a live game."}];
+const RELEASE_NOTES = [{"version": "2.0.6", "title": "Unique hunt, buff weapon changes that wait for the pet, fewer repeated warnings", "items": ["New Unique hunt on the Setup page. Start it and the bot patrols for uniques, fights only uniques with your Unique rotation, berserk, buffs and potions, collects the unique's drops first and then stops. Your hunting spot, monster classes and rotations stay as they are; Combat → Unique hunt has all the settings.", "The patrol walks your own named spots, and with \"Patrol the game's unique nests\" also the places where the uniques you tick spawn, read from the game's own data, nearest first and within a distance you choose (1000 m by default). The bot can also remember where it saw uniques. When the game announces that a unique appeared, the patrol goes to its spots first, and the map rings the chosen nests.", "When the unique it went for dies, a new \"Unique killed\" chime plays (on by default, with a Test button), and the log and Session stats count it. The bot leaves a unique alone when other players have already brought it below 75% HP (you can change this), and gives up when others clearly out-damage you. A unique that hits you is always fought back.", "A buff weapon change no longer stops hunting with \"Equipment move unconfirmed\" while the pickup pet or another action keeps the game's inventory busy. A weapon change does not start while a pet pickup is on its way, and the pet waits while a weapon change runs. When the game refuses a weapon move and nothing moved, the bot sends it once more; if it is refused again, the log says so and hunting goes on unless no weapon is worn.", "A drop the game refuses to give your pet twice is given up until it disappears.", "\"Manual control: resurrection travel cancelled.\" is logged only when a walk to a corpse is really cancelled, and the Activity log notes which game command started a manual-control pause."]}, {"version": "2.0.5", "title": "The pickup pet keeps collecting while you play by hand, resurrection retry settings", "items": ["New in Loot → Collection: \"Pet keeps collecting while I play by hand\" (on by default). When you walk, attack or use skills yourself, the pickup pet now keeps collecting, with the bot running or stopped. Only the pet moves; your character's own pickups and hunting still pause after manual control. Turn it off to have the pet wait as before.", "Your own inventory use goes first. A pet pickup keeps the game's inventory busy until the pet reaches the drop, and meanwhile the game greys out its inventory and Item Mall buttons and quietly ignores a purchase. Now the pet sends no new pickup for 2.5 s after you use or move an item, pick something up or use a shop, storage, trade, stall or alchemy, and for 60 s after you open or use the Item Mall. It also waits while a trade, stall or alchemy window is open, and leaves a short gap after each pickup so your clicks get through. The bot's own item drops, pet-to-bag moves and Item Mall buying wait the same way. The bot never repeats a command of yours, so a purchase is never sent twice.", "A drop the pet cannot reach is now given up after a few tries instead of being tried again and again.", "The pet status line shows how much of the last minute pet pickups kept the inventory busy. With detailed capture on, the Activity log shows how long each pet pickup took. These numbers stay on your computer.", "New on the Party page: \"Wait between resurrection attempts (s)\" (31 s by default, the game's 30 s answer window plus one tick; 31 to 300) and \"Max resurrection attempts per player (0 = no limit)\". After the last attempt the bot stops offering Rebirth to that player and says so once; it starts counting again when the player is alive again, leaves the party or the list, or when you press Start."]}, {"version": "2.0.4", "title": "Resurrection from anyone, resurrecting helpers outside the party, zero-setup leveling", "items": ["New on the Party page: \"Accept resurrection from any player\" (off by default). When you are dead, the bot also answers Yes to a Rebirth from a player outside your party. The log names who resurrected you. With it on, any living player in view counts as a helper for \"Wait for a party resurrection\".", "New on the Party page: \"Also resurrect these players (not in the party)\". Enter up to 20 character names, for example a lure character helping a full party from outside it. A listed player who is dead, in view and within the maximum distance is resurrected like a party member, during hunting and while stopped. Nobody else outside the party is targeted. If the game refuses Rebirth on one of them, the bot says so once and skips that player for 10 minutes.", "\"Max every skill\" (Settings, Auto mastery) is now a switch. While it is on, it spends new skill points as you get them. Off by default.", "New on the Setup page: zero-setup leveling, \"Level up by itself\" (off by default). The bot picks a hunting spot for your level from built-in game data, buys the next tier of NPC weapon, armour and accessories on town trips, and can raise your weapon's mastery, learn its skills and spend stat points. Seal and rare gear, +4 and higher, and anything you protect are never replaced, and a gold reserve is never spent.", "Auto mastery has a new choice under \"Skills to upgrade\": \"Every skill of my chosen masteries\", which also learns new skills.", "The Update button can be clicked again in the compact window, the classic window keeps one size on every tab, and the wide window splits its boxes evenly."]}, {"version": "2.0.3", "title": "Fewer silent stops, town trips that retry, pet loot to your bag", "items": ["A monster the bot cannot reach no longer stops hunting when the game does not confirm that it was released. The bot asks again once, then leaves that monster alone for a minute and hunts on. Protect party members follows the same rule.", "Every stop now says why in the log, for example \"Hunting stopped: stopped by you (F8)\". A stop you make (F8, Start / stop, Stop all, or a stop from OSB Manager) is never undone; a stop the bot makes by itself is started again after 2 minutes when \"Start again when the bot stops by itself\" is on.", "Auto-start no longer gives up when the page was reloaded or the connection came back: it waits for the reconnect.", "The same game refusal and the same missing skill icon appear at most once a minute, with a count.", "Town trips no longer stop when the warehouse, a merchant or the world statue does not open, for example while the town is still loading. The bot waits, walks back and tries again, three tries per service.", "New option under Loot, Bag and pet space: \"Move pet loot to my bag when the pet is nearly full\". The loot is stored or sold on the next town trip like pet loot.", "Reverse Return Scrolls have one switch on the Town page: \"Buy Reverse Return Scrolls from the Item mall (silk)\". No merchant sells them for gold, so the merchant switch is gone; if it was on, the Item mall switch is turned on. Nothing is bought while the silk budget is 0.", "Item mall \"low stock ≤\" now includes the number itself, so a low mark of 0 buys when the item runs out."]}, {"version": "2.0.2", "title": "Attack rotations for every monster class", "items": ["Combat > Skills has one attack rotation per monster class: Normal, Champion, Party, Giant, Party champion, Party giant, Elite and Unique.", "An empty rotation uses the next filled class below it in that order, down to Normal, and its tab says which one, for example \"Empty: uses Party giant\".", "Your existing rotations stay. Party champions and party giants start with a copy of your Party rotation, so they fight as before.", "The SoX chime and notice now have one switch per seal: Star, Moon and Sun. If the chime was on, all three are ticked; if it was off, none are."]}, {"version": "2.0.1", "title": "Protect your party members", "items": ["New on the Party page: Protect party members. When a monster hits a member you ticked, the bot attacks that monster.", "Tick single members or All party members. Members who left stay in the list, greyed out.", "It works within a distance you choose (40 m by default) and inside your hunting area, and never attacks players.", "Your potions, death and return rules and town trips come first. Monsters in Skip these mobs and monsters other players fight are left alone.", "With Also with Attack monsters off, a support character protects the party too."]}, {"version": "2.0.0", "title": "OSB 2.0.0", "items": ["Based on version 1.2.224 of the previous bot. Your settings, share codes and backups carry over.", "Bug reports no longer go to the previous bot's server. Preview the report, then copy it or save it as a file and attach it to a GitHub issue, or press Send and confirm to send it to the OSB team at api.osb.lol. You choose bug report or feature request, you can add a screenshot of a tab you pick, and you get a report code. Nothing is sent before you confirm.", "New: Settings → Privacy. \"Share usage statistics\" is off by default; when you turn it on, OSB sends a short status report about every 10 minutes to api.osb.lol, linked to a random install ID. \"Show my characters in the OSB dashboard\" is a second, separate switch. You can see what is sent, download your data, or delete it. Turning the statistics off deletes your data from the server. With both switches off, OSB sends nothing to api.osb.lol. The same section has \"Check GitHub for OSB updates\" (on by default): the update check carries no data about you, and switching it off stops every update request.", "New from the upstream work up to 1.2.221, all off by default unless said otherwise: wear better gear you carry on town trips, move hunting to the next level spot when a spot gives no XP, a choice of how long to wait for a party resurrection, alert chimes (another player near, death, level up, a unique in view), and a choice of which monsters to avoid when another player is fighting them.", "Item names now show even when the game's data files are not served, and pet loot sells again on town trips. Town trips no longer stop at the smith after a skipped supply. With bag selling on, the weapon merchant now sells the character bag first and the pet loot after it, so a full bag no longer leaves pet loot unsold.", "Reliability fixes from upstream 1.2.222 to 1.2.224: a town trip stops cleanly when the game never settles before the return scroll, an unanswered rebirth is asked again every 10 seconds, combat gear left half swapped by a death or world change is restored quietly while hunting, quest data that fails to load is retried after 10 minutes, the pet-bag-full warning shows with the chime off, Max every skill stops when you leave the world, and settings are saved when you close the page.", "Heads up: the new option to spare giant and party monsters below an HP cutoff is set to 50. It only applies when \"Avoided monsters\" is \"Normal & champion only\", which is not the default.", "Town page: picking a town now sets up the town trip by itself (arrival point, warehouse, potion merchant, repair merchant, world statue), and switching the town trip on fills anything still missing. The separate \"Set up this town\" button is gone and the hand-saving buttons moved under \"Adjust by hand (optional)\".", "Wear better gear now runs before anything is sold. With bag selling on and a full bag, the weapon merchant no longer sells a piece the warehouse visit would wear.", "Wear better gear no longer compares a necklace, earring or ring with the wrong worn piece. A carried necklace was measured against the weakest worn accessory, even a ring, and the game refused the move (\"Inventory rejected: 14\"). Every piece now competes only for its own slot, and the plus level counts.", "When the game refuses to wear a piece, or does not confirm it, the bot logs one line, keeps the piece in your bag and does not sell it or try it again this session.", "Loot page: \"Pick up drops\" is now the first checkbox of the Collection group, in place of the old \"Collect drops\" further down. It is the same setting as the Turn on button on the Setup page, which still works.", "Gear that asks for a mastery level (for example Lynx Gale Glove or Hydra Gale Breast Mail) is now read correctly: wear better gear considers it when your mastery is high enough, and \"Also deposit gear requiring level\" now deposits it too, so gear it never matched before may now go to the warehouse.", "Only tested in simulation (a fake server and a virtual clock), not on the live server or against the real api.osb.lol. The game tick was measured with and without a server that never answers."]}, {"version": "1.2.224", "title": "Reliability fixes for death, rebirth and quests", "items": ["If you die or change world while a buff-gear swap is pending, hunting can now start anyway. The gear is restored quietly once it is safe, not during town trips or open trade, stall or shop windows.", "Rebirth is now re-sent every 10 seconds while your character is still dead.", "Quest data that fails to load is retried after 10 minutes instead of on every tick.", "The reconnect message no longer includes your character's name, so it stays out of reports.", "Smaller fixes: the pet-bag-full toast works with the chime off, Max skills stops when you leave the world, and settings are saved when you close the page. The town tier is reset when you switch character.", "No new option."], "note": "Contributed by duan78 (#96). Tested in simulation only, not in a live game."}];
 
 // Check trusted repository metadata; never execute downloaded update code. The check sends no user data and is on by default;
 // the player can switch it off (Settings, Privacy), and then this module makes no request at all.
@@ -18090,6 +19033,12 @@ const LeanMap = {
       ctx.fillStyle = '#ffd65a'; ctx.fillRect(cx - 2.5, cy - 2.5, 5, 5);
       ctx.restore();
     }
+    for (const nest of UniqueHunt.mapNests()) {
+      const s = this.space(nest);
+      if (!s) continue;
+      ctx.strokeStyle = MAP_CLASS_COLOR.unique; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(sx(s.X), sy(s.Z), 6, 0, Math.PI * 2); ctx.stroke();
+    }
     // Entities in view. Party members are drawn from the party list too, so ones out of sight still show.
     const social = World.gp?.social, party = new Set((social?.members || []).map(m => m?.name).filter(Boolean));
     const target = World.gp?.target, local = World.localGid(), drawn = new Set();
@@ -18471,11 +19420,11 @@ const UI = {
     const dead = World.inWorld() && World.isDead(), mode = Controller.mode, error = mode === 'error';
     // Busy comes from the live trips, not from Controller.mode: that label lags a tick behind (it still says
     // "returning" for up to 100 ms after Stop all ended a walk-back).
-    const busy = Town.trip ? 'Town trip' : WalkBack.active ? 'Returning' : Reconnect.active() ? 'Reconnecting' : Restock.trip ? 'Shopping'
+    const busy = UniqueHunt.active ? 'Unique hunt' : Town.trip ? 'Town trip' : WalkBack.active ? 'Returning' : Reconnect.active() ? 'Reconnecting' : Restock.trip ? 'Shopping'
       : Resurrect.trip ? 'Resurrecting' : BuffGear.run ? 'Buff gear' : Trade.run ? 'Trading' : Alchemy.run || Alchemy.pending ? 'Alchemy' : Stall.run ? 'Stall' : SellStar.run ? 'Sell Star' : '';
     const label = dead ? 'Dead' : error ? 'Error' : busy || (Hunt.running ? 'Hunting' : 'Stopped');
     // `note` is what only the state can say; the icon falls back to the first wait reason, which the wide window shows below the strip.
-    const note = Town.trip ? Town.status() : Travel.active ? Travel.status() : WalkBack.active ? WalkBack.status() : Reconnect.active() && Reconnect.message ? Reconnect.message
+    const note = UniqueHunt.active ? UniqueHunt.status() : Town.trip ? Town.status() : Travel.active ? Travel.status() : WalkBack.active ? WalkBack.status() : Reconnect.active() && Reconnect.message ? Reconnect.message
       : Restock.recording ? 'Recording route: ' + Restock.draft.route.length + ' points' : '';
     const reason = note || (this.waitNote?.textContent || '').split('\n')[0];
     return { key: dead || error ? 'stop' : busy ? 'busy' : Hunt.running ? 'ok' : 'stop', label, dead, note, reason };
@@ -18781,7 +19730,7 @@ const UI = {
     const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();
     if (this.current === 'Combat') {
       const subtabs = el('div', null, 'subtabs');
-      for (const name of ['Skills', 'Buffs & imbue', 'Hunt area']) {
+      for (const name of ['Skills', 'Buffs & imbue', 'Hunt area', 'Unique hunt']) {
         const tab = this.button(name, () => { this.combatTab = name; this.draw(); });
         tab.setAttribute('aria-selected', String(name === this.combatTab)); subtabs.append(tab);
       }
@@ -18789,6 +19738,7 @@ const UI = {
       if (this.combatTab === 'Hunt area') this.sections('combatHuntArea', 'combatMonsters', 'combatLure', 'combatPet');
       if (this.combatTab === 'Skills') this.sections('combatRotation', 'combatOptions', 'combatBerserk');
       if (this.combatTab === 'Buffs & imbue') this.sections('combatGear', 'combatBuffs', 'combatImbue');
+      if (this.combatTab === 'Unique hunt') this.sections('combatUnique');
     } else if (this.current === 'Loot') {
       this.sections('lootCollection', 'lootWho', 'lootBalance');
     } else if (this.current === 'Supplies') {
@@ -18834,7 +19784,7 @@ const UI = {
         ['combatRotation'], ['combatOptions'], ['combatGear'], ['combatBuffs'], ['combatImbue']] },
       { name: 'Items/Storage', icon: 'action\\cos_cmd_inventory', pages: ['Items', 'Town'], draw() {
         this.drawItems(); this.sections('townTrip', 'townCycle', 'townAmmo'); } },
-      { name: 'Training place', icon: 'action\\icon_cha_camp', pages: ['Combat', 'Party'], sections: [['combatHuntArea', 'Training place'], ['partyTrace'], ['combatLure'], ['combatPet']] },
+      { name: 'Training place', icon: 'action\\icon_cha_camp', pages: ['Combat', 'Party'], sections: [['combatHuntArea', 'Training place'], ['partyTrace'], ['combatLure'], ['combatPet'], ['combatUnique']] },
       { name: 'Party/Autores', icon: 'action\\icon_cha_party', pages: ['Party'], sections: [
         ['partyMembers', 'Current party'], ['partyParty', 'Party settings'], ['partyHeal'], ['partyProtect']] },
       { name: 'Player buffing', icon: 'action\\icon_cha_party', pages: ['Party'], sections: [['partyBuffs', 'Player buffing']] },
@@ -18851,7 +19801,7 @@ const UI = {
   },
   // The classic tab that holds a compact page (so Setup and the checklist can open the right place).
   tabFor(page, combatTab) {
-    if (page === 'Combat') return combatTab === 'Hunt area' ? 'Training place' : 'Skills';
+    if (page === 'Combat') return combatTab === 'Hunt area' || combatTab === 'Unique hunt' ? 'Training place' : 'Skills';
     return { Loot: 'Settings', Supplies: 'Settings', Town: 'Items/Storage', Quest: 'Quest', Party: 'Party/Autores', Items: 'Items/Storage', Alchemy: 'Auto alchemy', Trade: 'Auto trade', Settings: 'Extra' }[page] || page;
   },
   // Is this compact page (and optional Combat sub-tab) what the window shows right now, in either layout?
@@ -19463,6 +20413,7 @@ const UI = {
         el('p', 'Works during hunting and while stopped. Walks into skill range for visible dead members within the maximum radius, casts Rebirth, then returns. During hunting the radius is measured from the saved hunt spot; while stopped it uses your starting position. Collision data is required for walking. Travel stops after 30 seconds or 12 seconds without progress per leg. The member must accept the revival. Rebirth is offered again after the wait (31 s by default: the game’s 30 s answer window plus one tick) for as long as they stay dead, up to the maximum attempts per player (0 = no limit). The count starts again when they are alive, leave the party or the list, or you press Start. Travel, shopping and manual control take priority.', 'muted')));
   },
   section_combatLure(host) { Lure.draw(host); },
+  section_combatUnique(host) { UniqueHunt.draw(host); },
   section_combatPet(host) {
     const P = () => Settings.profile.pet.attack;
     host.append(this.group('Attack pet',
@@ -20191,6 +21142,19 @@ bus.on( "character", name => {
 	Activity.contexts = {};
 	Activity.emit( { category: "session", code: "character-boundary", text: "Character loaded; subsequent activity belongs to this character." } );
 } );
+Activity.worldAt = -Infinity;
+Activity.manualSeenAt = Manual.lastAt;
+bus.on( "phase", phase => { if ( phase === "world" ) Activity.worldAt = now(); } );
+Hook.observers.push( command => {
+	if ( command?.kind !== "gameplay" || Manual.lastAt === Activity.manualSeenAt ) return;
+	const previous = Activity.manualSeenAt, pauseS = Hunt.cfg().manualPauseS;
+	Activity.manualSeenAt = Manual.lastAt;
+	if ( Manual.lastAt - previous < pauseS * 1000 ) return;
+	const kind = String( Manual.kind || "unknown" ), sinceEntryMs = Math.round( Manual.lastAt - Activity.worldAt ), early = sinceEntryMs >= 0 && sinceEntryMs < 30000;
+	const target = Number.isInteger( command.command?.gid ) && command.command.gid > 0 ? " with a target" : "";
+	const text = "Manual control seen: game command " + kind + target + (early ? ", " + (sinceEntryMs / 1000).toFixed( 1 ) + " s after entering the game" : "") + "; the bot pauses for " + pauseS + " s.";
+	Activity.emit( { category: "session", code: "manual-control", level: early ? "info" : "cmd", text, userText: text } );
+} );
 Activity.wrap( Alchemy, "note", function( result, text ) {
 	Activity.emit( { category: "alchemy", code: "alchemy-result", text,
 		level: /destroyed/i.test( text ) ? "error" : "info", outcome: /^(Success:|Failed at|Destroyed at)|stone (failed|fused)|→/.test( text ) ? "confirmed" : null } );
@@ -20409,7 +21373,7 @@ Activity.safeFailure = function( value ) {
 		nativeErrorCode: Number.isInteger( value.nativeErrorCode ) ? value.nativeErrorCode : null,
 		correlation: "recent-commands-only-not-a-request-match",
 		recentCommands: (value.recentCommands || []).slice( -3 ).map( command => ( {
-			kind: [ "skill", "attack", "cos-attack", "item-use", "shop-buy", "shop-sell", "storage-move", "inventory-move", "travel-gate" ].includes( command.kind ) ? command.kind : "other",
+			kind: [ "skill", "attack", "cos-attack", "item-use", "shop-buy", "shop-sell", "storage-move", "inventory-move", "travel-gate", "pickup", "cos-pickup", "cos-transfer", "item-drop", "cos-drop" ].includes( command.kind ) ? command.kind : "other",
 			ageMs: numeric( command.ageMs ), skillId: numeric( command.skillId ), monsterId: numeric( command.monsterId ),
 			localCooldownMs: numeric( command.localCooldownMs )
 		} ) ),
@@ -20595,7 +21559,7 @@ function boot() {
   if (Setup.isNew()) UI.current = 'Setup';
   UI.mount(); Stats.init(); Sound.init(); Updates.start(); Diagnostics.start(); Telemetry.start();
   const unlockSound = e => {
-    if (e.isTrusted && (Settings.profile.hunt.pickup.petFullSound || Sound.soxOn() || Sound.anyOn())) Sound.unlock();
+    if (e.isTrusted && (Settings.profile.hunt.pickup.petFullSound || Sound.soxOn() || Sound.anyOn() || UniqueHunt.active)) Sound.unlock();
   };
   W.addEventListener('pointerdown', unlockSound, true);
   W.addEventListener('keydown', unlockSound, true);

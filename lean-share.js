@@ -1,5 +1,5 @@
-// Sharing settings. A share code or file holds only what differs from the defaults and nothing personal: positions,
-// town and merchant points, walking routes, buff weapon sets, the chosen weapons and shield, the wardrobe and what zero-setup leveling already set up stay out. Importing never runs
+// Sharing settings. A share code or file holds only what differs from the defaults and nothing personal: positions
+// (except the unique hunt's patrol spots, which are world places worth sharing), town and merchant points, walking routes, buff weapon sets, the chosen weapons and shield, the wardrobe and what zero-setup leveling already set up stay out. Importing never runs
 // anything: the text is parsed as data, every field is checked against the defaults, and a preview lists the changes
 // before anything is applied. The previous settings are kept so one press undoes an import.
 const SHARE = { apps: ['osb', 'nixxane-bot', 'sro-bot-lean'], format: 2, maxChars: 300000, maxNodes: 20000,

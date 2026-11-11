@@ -34,7 +34,7 @@ Activity.safeFailure = function( value ) {
 		nativeErrorCode: Number.isInteger( value.nativeErrorCode ) ? value.nativeErrorCode : null,
 		correlation: "recent-commands-only-not-a-request-match",
 		recentCommands: (value.recentCommands || []).slice( -3 ).map( command => ( {
-			kind: [ "skill", "attack", "cos-attack", "item-use", "shop-buy", "shop-sell", "storage-move", "inventory-move", "travel-gate" ].includes( command.kind ) ? command.kind : "other",
+			kind: [ "skill", "attack", "cos-attack", "item-use", "shop-buy", "shop-sell", "storage-move", "inventory-move", "travel-gate", "pickup", "cos-pickup", "cos-transfer", "item-drop", "cos-drop" ].includes( command.kind ) ? command.kind : "other",
 			ageMs: numeric( command.ageMs ), skillId: numeric( command.skillId ), monsterId: numeric( command.monsterId ),
 			localCooldownMs: numeric( command.localCooldownMs )
 		} ) ),
