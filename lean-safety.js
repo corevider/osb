@@ -78,7 +78,7 @@ const Safety = {
   },
   uniqueText(meters) {
     const pose = World.pose();
-    if (!pose || UniqueHunt.active || Settings.profile.hunt.classes.unique) return '';
+    if (!pose || UniqueHunt.active || Settings.profile.hunt.classModes.unique !== 'avoid') return '';
     for (const e of World.ents.values()) {
       if (e.kind !== 'monster' || monsterClass(e) !== 'unique' || !World.isAlive(e) || dist2D(pose, e) > meters * 10) continue;
       return `a unique${e.name ? ' (' + e.name + ')' : ''} is within ${meters} m`;

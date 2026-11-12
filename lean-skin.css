@@ -42,6 +42,7 @@ nav button[aria-selected=true],.subtabs button[aria-selected=true]{color:#fff;bo
 .subtabs button{font-size:11px;min-width:48px;border-image-source:var(--s-stab_off)}
 .subtabs button[aria-selected=true]{border-image-source:var(--s-stab_on)}
 .class-tabs{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:3px;margin-bottom:7px}.class-tabs button{font-size:11px;gap:4px;min-width:0;height:auto;min-height:24px;white-space:normal;line-height:1.1;text-align:center}.class-tabs i{flex:none}.class-tabs button[aria-selected=true]{color:#ffe08a}.class-tabs button.unset:not([aria-selected=true]){color:#a09b8c}.class-tabs i+i{margin-left:-2px}.rotation-hint{margin:0 0 6px}.class-tabs i{display:inline-block;width:16px;height:16px;flex:0 0 16px;background-size:16px 16px}
+.class-mode{display:grid;grid-template-columns:minmax(0,1fr) repeat(3,54px);align-items:center;gap:2px;min-height:24px}.class-mode-name{display:flex;align-items:center;gap:4px;min-width:0}.class-mode-name i{display:inline-block;width:16px;height:16px;flex:0 0 16px;background-size:16px 16px}.class-mode-name i+i{margin-left:-2px}.class-mode button.cell{min-width:0;width:100%;height:22px;padding:0;font-size:11px}.class-mode button.cell.on{color:#ffd65a}
 .pane,.dialog-body{padding-top:9px;overflow:auto;overflow-x:hidden;overscroll-behavior:contain;scrollbar-gutter:stable;scrollbar-color:#796a48 #171711}
 .pane{flex:1 1 auto;min-height:150px}
 .pane::-webkit-scrollbar,.dialog-body::-webkit-scrollbar{width:16px}.pane::-webkit-scrollbar-track,.dialog-body::-webkit-scrollbar-track{background-image:var(--s-scr_bar)}.pane::-webkit-scrollbar-thumb,.dialog-body::-webkit-scrollbar-thumb{background:var(--s-scr_btn) center/16px 100% no-repeat;min-height:16px}.pane::-webkit-scrollbar-thumb:hover,.dialog-body::-webkit-scrollbar-thumb:hover{background-image:var(--s-scr_btn_f)}
@@ -282,6 +283,7 @@ fieldset>input[type=search]{width:100%;margin:2px 0 6px}
 :host(.classic) .row{gap:6px}
 :host(.classic) .subtabs button,:host(.classic) .class-tabs button{border-image:none;border:1px solid var(--c-line);background:#000;color:#fff}
 :host(.classic) .subtabs button[aria-selected=true],:host(.classic) .class-tabs button[aria-selected=true]{background:var(--c-chip)}
+:host(.classic) .class-mode button.cell.on{background:var(--c-chip);color:#fff}
 :host(.classic) .feedback{grid-area:fb;padding:4px 2px 0;min-height:18px}
 :host(.classic) .side{grid-area:side;padding-right:6px;display:flex;flex-direction:column;gap:6px;align-self:stretch}
 :host(.classic) .side fieldset{margin:0}

@@ -23,7 +23,7 @@ const UniqueHunt = {
     const cfg = Object.create(base), chase = this.chase();
     Object.assign(cfg, {
       center: anchor ? { regionId: anchor.regionId, x: anchor.x, y: anchor.y, z: anchor.z } : null, radius: chase, chase,
-      classes: { normal: false, champion: false, giant: false, party: false, elite: false, unique: true, titan: U.titans === true },
+      ...MonsterClasses.sync({ classModes: { normal: 'avoid', champion: 'avoid', party: 'avoid', giant: 'avoid', partyChampion: 'avoid', partyGiant: 'avoid', elite: 'avoid', unique: 'prefer', titan: U.titans === true ? 'prefer' : 'avoid' } }),
       levelMin: 0, levelMax: 0, include: '', exclude: '', avoidKs: false, priority: 'attackers', returnToCenter: false, attack: true,
       levelSpots: { on: false, list: [] }, polygon: { on: false, corners: [] }, playerAlert: { ...base.playerAlert, pause: false }, onDeath: 'stop',
     });

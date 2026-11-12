@@ -25,10 +25,12 @@ const Lure = {
   ready(id) { return !!id && !Combat.blocked(id) && Cmd.canCast(id) && Combat.mpOk(id, World.me()); },
   // The living monster closest to `from` within the search radius.
   nearest(from) {
-    let best = null, bestD = Infinity;
+    let best = null, bestRank = Infinity;
     for (const e of this.mobsNear(from)) {
-      const d = dist2D(from, e);
-      if (d < bestD) { best = e; bestD = d; }
+      const mode = Hunt.classMode(e);
+      if (mode === 'avoid') continue;
+      const rank = dist2D(from, e) + (mode === 'prefer' ? 0 : CLASS_TIER);
+      if (rank < bestRank) { best = e; bestRank = rank; }
     }
     return best;
   },

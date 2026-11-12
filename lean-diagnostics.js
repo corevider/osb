@@ -130,7 +130,7 @@ const Diagnostics = {
     }
     if (!seen) return 'No monsters in view. Move to a place with monsters and press "Set hunting spot here".';
     const parts = [
-      [why.kind, 'monster type is switched off (Combat > Hunt area > Monster classes)'],
+      [why.kind, 'monster type is avoided (Combat > Hunt area > Monster classes)'],
       [why.level, 'level is outside your minimum or maximum level'],
       [why.name, 'name is not in "Only these mobs" or is in "Skip these mobs"'],
       [why.far, 'too far (outside the hunting area or beyond Chase distance)'],

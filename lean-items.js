@@ -54,7 +54,7 @@ const ItemRules = {
     if (!ITEM_GEAR_SLOTS.includes(slot)) return;
     (this.cfg().gear ||= {})[slot] = key || null;
     delete this.gearSlots[slot];
-    if (key) BuffGear.bad.delete(key); // picked again: the game may take it now (a level up)
+    if (key) { BuffGear.bad.delete(key); BuffGear.strikes.delete(key); } // picked again: the game may take it now (a level up)
     Settings.saveProfile();
   },
   // Chosen gear is followed by its slot: wearing it keeps its key, and when alchemy changes its plus or stones the item

@@ -3,6 +3,61 @@ const NOTES_URL = 'https://github.com/corevider/osb/releases';
 const CLASS_KEYS = ['normal', 'champion', 'party', 'giant', 'partyChampion', 'partyGiant', 'elite', 'unique'];
 const ROTATION_LABELS = { normal: 'Normal', champion: 'Champion', party: 'Party', giant: 'Giant', partyChampion: 'Party champion', partyGiant: 'Party giant', elite: 'Elite', unique: 'Unique' };
 const ROTATION_ICONS = { normal: ['tw_normal'], champion: ['tw_champion'], party: ['tw_party'], giant: ['tw_giant'], partyChampion: ['tw_party', 'tw_champion'], partyGiant: ['tw_party', 'tw_giant'], elite: ['tw_elite'], unique: ['tw_unique'] };
+const MONSTER_CLASS_KEYS = [...CLASS_KEYS, 'titan'], PARTY_CLASS_KEYS = ['party', 'partyChampion', 'partyGiant'], CLASS_MODES = ['prefer', 'ignore', 'avoid'];
+const MONSTER_CLASS_LABELS = { ...ROTATION_LABELS, party: 'Party normal', titan: 'Titan' };
+const MONSTER_CLASS_ICONS = { ...ROTATION_ICONS, titan: ['tw_titan'] };
+const CLASS_MODE_NAMES = { prefer: 'Prefer', ignore: 'Ignore', avoid: 'Avoid' };
+const CLASS_MODE_TIPS = {
+  prefer: 'Fought before any monster of an Ignore class. Monsters hitting you and the Preferred monsters list still come first.',
+  ignore: 'The usual order: fought when no monster of a Prefer class is available.',
+  avoid: 'Never gone for. Fought only while it is attacking you.',
+};
+const MonsterClasses = {
+  of(e) { return monsterClass(e) === 'titan' ? 'titan' : Rotations.classOf(e); },
+  oldKey(key) { return PARTY_CLASS_KEYS.includes(key) ? 'party' : key; },
+  mode(e, hunt) {
+    const key = this.of(e), mode = hunt?.classModes?.[key];
+    if (CLASS_MODES.includes(mode)) return mode;
+    return hunt?.classes?.[this.oldKey(key)] ? 'ignore' : 'avoid';
+  },
+  fromOld(classes) {
+    if (!classes || typeof classes !== 'object') return null;
+    const out = {};
+    for (const key of MONSTER_CLASS_KEYS) {
+      const old = classes[this.oldKey(key)];
+      if (typeof old === 'boolean') out[key] = old ? 'ignore' : 'avoid';
+    }
+    return out;
+  },
+  clean(modes) {
+    const out = {};
+    for (const key of MONSTER_CLASS_KEYS) out[key] = CLASS_MODES.includes(modes?.[key]) ? modes[key] : DEFAULT_PROFILE.hunt.classModes[key];
+    return out;
+  },
+  classes(modes) {
+    const out = {};
+    for (const key of MONSTER_CLASS_KEYS) if (!PARTY_CLASS_KEYS.includes(key)) out[key] = modes[key] !== 'avoid';
+    out.party = PARTY_CLASS_KEYS.some(key => modes[key] !== 'avoid');
+    return out;
+  },
+  sync(hunt) {
+    hunt.classModes = this.clean(hunt.classModes);
+    hunt.classes = this.classes(hunt.classModes);
+    return hunt;
+  },
+  set(hunt, key, mode) {
+    if (!MONSTER_CLASS_KEYS.includes(key) || !CLASS_MODES.includes(mode)) return false;
+    hunt.classModes = { ...this.clean(hunt.classModes), [key]: mode };
+    this.sync(hunt);
+    return true;
+  },
+};
+function upgradeClassModes(input) {
+  const hunt = input?.hunt;
+  if (!hunt || typeof hunt !== 'object' || hunt.classModes && typeof hunt.classModes === 'object') return input;
+  const modes = MonsterClasses.fromOld(hunt.classes);
+  return modes ? { ...input, hunt: { ...hunt, classModes: modes } } : input;
+}
 const Rotations = {
   classOf(e) {
     const cls = rotationKey(monsterClass(e));
@@ -55,7 +110,7 @@ function huntPolygon(value) {
   const corners = (Array.isArray(source.corners) ? source.corners : []).map(huntCorner).filter(Boolean).slice(0, HUNT_POLYGON_MAX);
   return { on: source.on === true, corners };
 }
-function upgradeProfile(input) { return upgradeSoxSound(Rotations.upgrade(input)); }
+function upgradeProfile(input) { return upgradeClassModes(upgradeSoxSound(Rotations.upgrade(input))); }
 const DEFAULT_PROFILE = {
   items: { rules: {}, balance: false, petToBag: false, autoEquip: false, gear: { primaryWeapon: null, secondaryWeapon: null, shield: null } },
   sounds: { player: false, died: false, levelUp: false, unique: false },
@@ -116,6 +171,7 @@ const DEFAULT_PROFILE = {
     center: null, radius: 400, chase: 700, returnToCenter: true, travel: true, attack: true,
     polygon: { on: false, corners: [] },
     classes: { normal: true, champion: true, giant: true, party: false, elite: false, unique: false, titan: false },
+    classModes: { normal: 'ignore', champion: 'ignore', party: 'avoid', giant: 'ignore', partyChampion: 'avoid', partyGiant: 'avoid', elite: 'avoid', unique: 'avoid', titan: 'avoid' },
     levelMin: 0, levelMax: 0, include: '', exclude: '', preferred: [], priority: 'attackers', avoidKs: true, avoidKsScope: 'all', avoidKsBelow: 50,
     targetTimeoutS: 25,
     pickup: { enabled: true, soxOnly: false, skipStar: false, gold: true, potions: true, equipment: true, elixirs: true, powders: true, magicStones: true, attrStones: true, alchemy: true, others: true,
@@ -158,6 +214,7 @@ function botProfile(input) {
   result.hunt.pickup.soxSeals = Object.fromEntries(SOX_SEALS.map(seal => [seal, result.hunt.pickup.soxSeals?.[seal] === true]));
   delete result.hunt.pickup.soxSound;
   result.hunt.preferred = cleanPreferred(result.hunt.preferred);
+  MonsterClasses.sync(result.hunt);
   // Migrate the old separate town stack targets once. Preserve the active
   // return mode's target; walking-only profiles retain their refill quantities.
   const restock = input.potion?.restock;

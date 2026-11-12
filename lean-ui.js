@@ -789,9 +789,26 @@ const UI = {
   },
   section_combatMonsters(host) {
     const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();
-      const classes = this.group('Monster classes');
-      for (const key of Object.keys(H().classes)) classes.append(this.check(key === 'titan' ? 'titan (uses Unique rotation)' : key, () => H().classes[key], v => H().classes[key] = v));
+      const classes = this.group('Monster classes', this.tipped(el('p', 'Prefer is fought first, Ignore when no preferred class is in reach, Avoid only while it attacks you.', 'muted'),
+        'Monsters hitting you come first (order Attackers), then the Preferred monsters list, then the class choice here, then the usual order (nearest, low HP, small first). Your other filters still apply.'));
+      for (const key of MONSTER_CLASS_KEYS) classes.append(this.classModeRow(key, H));
       host.append(classes);
+  },
+  classModeRow(key, H) {
+    const label = MONSTER_CLASS_LABELS[key], row = el('div', null, 'class-mode'), name = el('span', null, 'class-mode-name');
+    row.setAttribute('role', 'group'); row.setAttribute('aria-label', label);
+    for (const icon of MONSTER_CLASS_ICONS[key]) { const i = el('i'); i.style.backgroundImage = `var(--s-${icon})`; name.append(i); }
+    name.append(el('span', label));
+    if (key === 'titan') name.title = 'Titan has its own choice here and uses the Unique attack rotation.';
+    const buttons = CLASS_MODES.map(mode => {
+      const b = this.button(CLASS_MODE_NAMES[mode], () => { if (MonsterClasses.set(H(), key, mode)) { Settings.saveProfile(); paint(); } });
+      b.className = 'cell'; b.title = CLASS_MODE_TIPS[mode]; b.setAttribute('aria-label', CLASS_MODE_NAMES[mode] + ' ' + label);
+      return b;
+    });
+    const paint = () => buttons.forEach((b, i) => { const on = H().classModes[key] === CLASS_MODES[i]; b.className = on ? 'cell on' : 'cell'; b.setAttribute('aria-pressed', String(on)); });
+    paint(); this.refreshers.push(paint);
+    row.append(name, ...buttons);
+    return row;
   },
   section_combatRotation(host) {
     const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();
@@ -1396,7 +1413,7 @@ const UI = {
       tip(this.select('Party too small: action', actions, () => S().party.action, v => S().party.action = v), 'What to do when the party gets too small.'),
       tip(this.check('When a player attacks the character', () => S().player.on, v => S().player.on = v), 'A hit or a damaging skill from another player. Party members, your own pets and monsters never count.'),
       tip(this.select('Player attack: action', actions, () => S().player.action, v => S().player.action = v), 'What to do when a player attacks you.'),
-      tip(this.check('When a unique appears nearby', () => S().unique.on, v => S().unique.on = v), 'Never while the Unique hunt runs, and never when Unique is ticked in the monster classes, because then you hunt uniques.'),
+      tip(this.check('When a unique appears nearby', () => S().unique.on, v => S().unique.on = v), 'Never while the Unique hunt runs, and never when Unique is set to Prefer or Ignore in the monster classes, because then you hunt uniques.'),
       tip(this.number('Unique distance (m)', () => S().unique.meters, v => S().unique.meters = v, 5, 200), 'How close a living unique must be.'),
       tip(this.select('Unique nearby: action', actions, () => S().unique.action, v => S().unique.action = v), 'What to do when a unique is close.')));
   },

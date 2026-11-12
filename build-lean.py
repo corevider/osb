@@ -206,7 +206,7 @@ hunt = hunt.replace(ks_method_old, """  ksAvoids(e, sim = World.simNow() ?? 0) {
   chooseTarget() {""")
 score_old = "      if (score < bestScore) {\n"
 assert hunt.count(score_old) == 1
-hunt = hunt.replace(score_old, "      score += this.preferredOffset(e, attacking);\n      if (score < bestScore) {\n")
+hunt = hunt.replace(score_old, "      score += this.preferredOffset(e, attacking) + this.classOffset(e, attacking);\n      if (score < bestScore) {\n")
 restock = (base / 'restock.js').read_text(encoding='utf-8').split('  build() {')[0] + '};'
 restock = restock.replace("    if (distance < t.best - 3) { t.best = distance; t.progressAt = now(); }", "    if (!t.lastPose || dist2D(t.lastPose, World.pose()) > 3) { t.lastPose = { ...World.pose() }; t.progressAt = now(); }")
 restock = restock.replace("    if (World.isSitting()) {", "    const move = Navigation.next(t, dest, true);\n    if (move.error && !move.waiting) return this.fail(move.error);\n    if (move.waiting) return false;\n    if (World.isSitting()) {")
@@ -259,7 +259,7 @@ skin_keys = ['f_lu','f_mu','f_ru','f_ls','f_rs','f_ld','f_md','f_rd',
              'tile_a','btn','btn_f','btn_p','btn_d','tab_on','tab_off','stab_on','stab_off',
              'chk_on','chk_off','scr_bar','scr_btn','scr_btn_f','close','close_f',
              'bar','bar_l','bar_r','bars','bars_l','bars_r','tw_normal','tw_champion',
-             'tw_giant','tw_party','tw_elite','tw_unique','ic_attack','ic_recovery','ic_sit','ic_autoget']
+             'tw_giant','tw_party','tw_elite','tw_unique','tw_titan','ic_attack','ic_recovery','ic_sit','ic_autoget']
 seal_svg = (base / 'docs' / 'brand' / 'osb-mark-small.svg').read_bytes()
 seal_uri = 'data:image/svg+xml;base64,' + __import__('base64').b64encode(seal_svg).decode('ascii')
 skin = {k: skin[k] for k in skin_keys} | {'seal': seal_uri}
@@ -268,7 +268,7 @@ skin += '\nconst LEAN_CSS = ' + __import__('json').dumps((base / 'lean-skin.css'
 header = '''// ==UserScript==
 // @name         OSB
 // @namespace    https://github.com/corevider/osb
-// @version      2.0.12
+// @version      2.0.13
 // @homepageURL  https://github.com/corevider/osb
 // @supportURL   https://github.com/corevider/osb/issues
 // @updateURL    https://raw.githubusercontent.com/corevider/osb/main/osb.meta.js
@@ -292,7 +292,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[OSB] Another SRO assistant is active. Disable it and reload to use OSB.');
   return;
 }
-const VERSION = '2.0.12';
+const VERSION = '2.0.13';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });

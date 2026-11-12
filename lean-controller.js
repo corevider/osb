@@ -2,7 +2,7 @@
 const startHunting = Hunt.start;
 Hunt.start = function (...args) {
   // A swap cut short by death or a world change restores itself during hunting; only a review the player must do blocks the start.
-  if (BuffGear.run || BuffGear.recovery && !BuffGear.autoRestore) return UI.toast('Restore or review combat gear before hunting.', 'warn');
+  if (BuffGear.run && !BuffGear.run.restoring || BuffGear.recovery && !BuffGear.autoRestore) return UI.toast('Restore or review combat gear before hunting.', 'warn');
   if (Alchemy.run || Alchemy.pending) return UI.toast('Stop alchemy and wait for its result before hunting.', 'warn');
   if (Trade.run) return UI.toast('Stop auto trade before hunting.', 'warn');
   if (Stall.run) return UI.toast('Stop the stall session before hunting.', 'warn');
@@ -42,6 +42,13 @@ Hunt.threat = function (current) {
   return best;
 };
 Hunt.chooseLoot = () => Loot.choose();
+const CLASS_TIER = 3e5;
+Hunt.classMode = function (e) { return MonsterClasses.mode(e, this.cfg()); };
+Hunt.classAllowed = function (e) { return this.classMode(e) !== 'avoid'; };
+Hunt.classOffset = function (e, attacking) {
+  if (attacking && this.cfg().priority === 'attackers') return 0;
+  return this.classMode(e) === 'prefer' ? 0 : CLASS_TIER;
+};
 Hunt.eligible = function (e, pose, sim, inc, exc) {
   const H = this.cfg();
   if (!this.classAllowed(e) || !this.inArea(e) || dist2D(pose, e) > H.chase) return false;

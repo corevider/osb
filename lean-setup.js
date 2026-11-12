@@ -4,10 +4,10 @@
 // first and undoable like an import.
 const SETUP_PRESETS = {
   levelup: { name: 'Level up', text: 'Kills normal, champion and giant monsters, picks up gold, gear and elixirs only.',
-    settings: { hunt: { radius: 400, classes: { normal: true, champion: true, giant: true, party: false, elite: false, unique: false, titan: false },
+    settings: { hunt: { radius: 400, classModes: { normal: 'ignore', champion: 'ignore', party: 'avoid', giant: 'ignore', partyChampion: 'avoid', partyGiant: 'avoid', elite: 'avoid', unique: 'avoid', titan: 'avoid' },
       pickup: { enabled: true, gold: true, potions: false, equipment: true, elixirs: true, powders: false, magicStones: false, attrStones: false, alchemy: false, others: false } } } },
   drops: { name: 'Farm drops', text: 'Also fights elite monsters, roams wider and picks up everything.',
-    settings: { hunt: { radius: 600, classes: { normal: true, champion: true, giant: true, party: false, elite: true, unique: false, titan: false },
+    settings: { hunt: { radius: 600, classModes: { normal: 'ignore', champion: 'ignore', party: 'avoid', giant: 'ignore', partyChampion: 'avoid', partyGiant: 'avoid', elite: 'ignore', unique: 'avoid', titan: 'avoid' },
       pickup: { enabled: true, gold: true, potions: true, equipment: true, elixirs: true, powders: true, magicStones: true, attrStones: true, alchemy: true, others: true } } } },
   safe: { name: 'Safe AFK', text: 'Stops on death, a full bag or no potions, warns about other players and rests earlier.',
     settings: { hunt: { onDeath: 'stop', stopNoHpPotion: true, stopInvFull: true, playerAlert: { enabled: true, radius: 250, pause: true },

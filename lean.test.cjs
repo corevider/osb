@@ -3,7 +3,7 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const source = fs.readFileSync(__dirname + '/osb.user.js', 'utf8');
 const isolated = source.slice(0, source.lastIndexOf('installWorkerHook();')) +
-  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Assets, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Protect, Town, Travel, Quest, QuestData, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, SellStar, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, Equip, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, LevelSpot, ScrollBuff, boot, Ticker, Sound, LeanMap, Telemetry, Rotations, Leveling, UniqueHunt, UniqueNests, SpawnData, UniqueState, UniqueTracker, UniqueList, Emergency, Safety, HuntArea};\n})();';
+  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Assets, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Protect, Town, Travel, Quest, QuestData, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, SellStar, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, Equip, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, LevelSpot, ScrollBuff, boot, Ticker, Sound, LeanMap, Telemetry, Rotations, Leveling, UniqueHunt, UniqueNests, SpawnData, UniqueState, UniqueTracker, UniqueList, Emergency, Safety, HuntArea, MonsterClasses};\n})();';
 function fixture(document, sharedStorage) {
   let time = 100000;
   const storage = sharedStorage || new Map(), commands = [], notices = [], intervals = [], timers = [];
@@ -6452,7 +6452,7 @@ test('protect party members: several attackers, the lowest-HP member first, then
   g.f.Controller.tick(); assert.equal(g.f.Hunt.targetGid, 32, 'equal HP: the nearest');
   g.f.World.gp.target = 32; g.f.World.gp.vitals = [{ gid: 5, hp: 10, maxHp: 100 }, { gid: 6, hp: 50, maxHp: 100 }];
   g.f.advance(300); g.f.Controller.tick(); assert.equal(g.f.Hunt.targetGid, 32, 'no flip-flop while the current attacker still hits a member');
-  g.f.Settings.profile.hunt.classes.normal = false; g.f.World.ents.delete(31); g.f.Protect.hits.delete(31);
+  g.f.Settings.profile.hunt.classModes.normal = 'avoid'; g.f.World.ents.delete(31); g.f.Protect.hits.delete(31);
   g.f.advance(7000); g.f.Controller.tick();
   assert.equal(g.f.Hunt.targetGid, 0, 'nobody is attacked any more: back to normal targeting');
   assert.equal(g.f.Protect.gid, 0);
@@ -6511,7 +6511,7 @@ test('protect party members: the Party page lists members, keeps those who left 
 });
 test('the anti-KS scope can spare every monster but normal and champion', () => {
   const f = fixture();
-  f.Settings.profile.hunt.classes.party = true; f.Settings.profile.hunt.classes.elite = true;
+  Object.assign(f.Settings.profile.hunt.classModes, { party: 'ignore', partyChampion: 'ignore', partyGiant: 'ignore', elite: 'ignore' });
   const mob = (gid, rarity, aux = 0) => f.World.ents.set(gid, { gid, kind: 'monster', name: 'Mob' + gid, regionId: 1, x: 100 + gid, y: 0, z: 100, rarity, rarityAuxIcon: aux, level: 5, attackFlags: 16, appearanceState: [0] }).get(gid);
   mob(30, 0); mob(31, 1); mob(32, 4); mob(33, 0, 1); mob(34, 6);
   for (const gid of [30, 31, 32, 33, 34]) f.World.hitByOthers.set(gid, f.World.simNow());
@@ -6531,7 +6531,7 @@ test('the anti-KS scope can spare every monster but normal and champion', () => 
 });
 test('giant and party monsters stay fair game unless the kill can no longer be won', () => {
   const f = fixture(), H = f.Settings.profile.hunt;
-  H.classes.party = true; H.classes.elite = true; H.avoidKsScope = 'minor';
+  Object.assign(H.classModes, { party: 'ignore', partyChampion: 'ignore', partyGiant: 'ignore', elite: 'ignore' }); H.avoidKsScope = 'minor';
   const mob = (gid, rarity, aux = 0) => f.World.ents.set(gid, { gid, kind: 'monster', name: 'Mob' + gid, regionId: 1, x: 100 + gid, y: 0, z: 100, rarity, rarityAuxIcon: aux, level: 5, attackFlags: 16, appearanceState: [0] }).get(gid);
   mob(30, 4); mob(31, 0, 1); mob(32, 6); mob(33, 0);
   for (const gid of [30, 31, 32, 33]) f.World.hitByOthers.set(gid, f.World.simNow());
@@ -6646,7 +6646,7 @@ test('the searching status says why no monster is eligible', () => {
   f.Hunt.running = true; f.Hunt.state = 'search';
   assert.match(f.Diagnostics.main(), /searching for an eligible target\. No monsters in view/);
   mob(30, { rarity: 1 }); mob(31, { x: 5000 }); mob(32, { level: 5 });
-  f.Settings.profile.hunt.classes.champion = false; f.Settings.profile.hunt.levelMin = 20;
+  f.Settings.profile.hunt.classModes.champion = 'avoid'; f.Settings.profile.hunt.levelMin = 20;
   const text = f.Diagnostics.main();
   assert.match(text, /Monsters in view: 3\./); assert.match(text, /1: level is outside/); assert.match(text, /1: too far/);
   mob(33, { name: 'Boar' }); f.Settings.profile.hunt.exclude = 'boar';
@@ -9842,6 +9842,13 @@ test('a primary weapon the game refuses is left alone without stopping hunting',
   assert.equal(f.BuffGear.run.pending.source, 15, 'the primary is sent to the weapon slot');
   for (let n = 0; n < 20 && f.BuffGear.run; n++) { f.advance(300); f.BuffGear.tick(); }
   assert.equal(f.BuffGear.run, null); assert.equal(f.Hunt.running, true, 'hunting goes on');
+  assert.match(f.BuffGear.message, /did not equip .*tried again in 30 s/, 'refused once: it waits and tries again');
+  assert.equal(f.BuffGear.bad.has(harp), false); const sent = f.commands.length;
+  f.advance(1000); f.BuffGear.tick(); assert.equal(f.commands.length, sent, 'not right away');
+  f.advance(30000); f.BuffGear.tick(); f.BuffGear.tick();
+  assert.equal(f.BuffGear.run?.pending?.source, 15, 'tried again after 30 s');
+  for (let n = 0; n < 20 && f.BuffGear.run; n++) { f.advance(300); f.BuffGear.tick(); }
+  assert.equal(f.BuffGear.run, null); assert.equal(f.Hunt.running, true, 'hunting goes on');
   assert.match(f.BuffGear.message, /would not equip .*until you pick it again/);
   assert.equal(f.BuffGear.bad.has(harp), true); assert.equal(f.BuffGear.combat(), null, 'what is worn is the combat gear again');
   const n = f.commands.length; f.advance(1000); f.BuffGear.tick(); assert.equal(f.commands.length, n, 'no retry');
@@ -9885,14 +9892,19 @@ test('a chosen shield the game refuses is skipped and the shield worn before goe
   const key = s => f.BuffGear.key(gp.inventory.find(i => i.slot === s)), refusedShield = key(14);
   f.Settings.profile.macro.buffs = [];
   f.ItemRules.setGear('primaryWeapon', key(13)); f.ItemRules.setGear('shield', refusedShield);
-  f.BuffGear.tick();
-  for (let n = 0; n < 60 && f.BuffGear.run; n++) {
+  const attempt = () => {
     f.BuffGear.tick();
-    const p = f.BuffGear.run?.pending;
-    if (p && !(p.destination === 7 && p.from === refusedShield)) f.confirmMove(); else f.advance(300);
-  }
-  assert.equal(f.BuffGear.run, null); assert.equal(f.Hunt.running, true, 'hunting goes on');
-  assert.deepEqual([at(6), at(7)], [200, 101], 'the primary with the shield worn before, not an empty off-hand');
+    for (let n = 0; n < 60 && f.BuffGear.run; n++) {
+      f.BuffGear.tick();
+      const p = f.BuffGear.run?.pending;
+      if (p && !(p.destination === 7 && p.from === refusedShield)) f.confirmMove(); else f.advance(300);
+    }
+    assert.equal(f.BuffGear.run, null); assert.equal(f.Hunt.running, true, 'hunting goes on');
+    assert.deepEqual([at(6), at(7)], [200, 101], 'the primary with the shield worn before, not an empty off-hand');
+  };
+  attempt();
+  assert.equal(f.BuffGear.bad.has(refusedShield), false); assert.match(f.BuffGear.message, /did not equip .*tried again in 30 s/);
+  f.advance(30000); attempt();
   assert.equal(f.BuffGear.bad.has(refusedShield), true); assert.match(f.BuffGear.message, /would not equip/);
   const n = f.commands.length; f.advance(1000); f.BuffGear.tick(); assert.equal(f.commands.length, n, 'settled: nothing more to wear');
 });
@@ -9904,6 +9916,7 @@ test('a buff assigned to the secondary weapon or the shield wears it, then the p
   const casts = [], cast = f.Combat.cast.bind(f.Combat);
   f.Combat.cast = (id, ...a) => { casts.push([id, at(6), at(7)]); return cast(id, ...a); };
   assert.equal(f.BuffGear.tick(), true); f.drive();
+  assert.deepEqual([casts, at(6), at(7)], [[], 200, 201], 'the combat gear goes on first'); f.drive();
   assert.deepEqual(casts, [[30, 300, undefined]], 'cast with the secondary harp');
   assert.deepEqual([at(6), at(7)], [200, 201], 'then the primary staff and the shield, not what was worn before');
   assert.match(f.BuffGear.status(), /Bard buff: active/);
@@ -9925,6 +9938,179 @@ test('automatic buff swaps try the secondary weapon, then the primary, then the 
   assert.equal(f.BuffGear.pick([14]).slot, 16, 'the highest plus without a choice');
   f.ItemRules.setGear('primaryWeapon', f.BuffGear.key(other)); assert.equal(f.BuffGear.pick([14]).slot, 17, 'the primary');
   f.ItemRules.setGear('secondaryWeapon', f.BuffGear.key(harp)); assert.equal(f.BuffGear.pick([14]).slot, 15, 'the secondary first');
+});
+const T073_GEAR = {
+  staff: { weapon: [200, 15], shield: true }, sword: { weapon: [100, 8] }, harp: { weapon: [300, 14] },
+  crossbow: { weapon: [400, 12], ammo: [10376, 2] }, bow: { weapon: [401, 6], ammo: [62, 1] },
+};
+const T073_PAIRS = [['staff', 'harp'], ['sword', 'staff'], ['crossbow', 'staff'], ['staff', 'bow'], ['bow', 'sword']];
+function secondaryWornFixture(primary, secondary, { auto = false, chooseShield = true } = {}) {
+  const f = buffGearFixture(), gp = f.World.gp, P = T073_GEAR[primary], S = T073_GEAR[secondary];
+  const weapon = (slot, [ref, kind]) => ({ slot, refObjId: ref, typeFlags: (kind << 11) | (6 << 7) | 44, plus: 0, variance: '1', durability: 100 });
+  const shield = slot => ({ slot, refObjId: 201, typeFlags: (1 << 11) | (4 << 7) | 44, plus: 0 });
+  const ammo = (slot, [ref, kind]) => ({ slot, refObjId: ref, typeFlags: 108 | (4 << 7) | (kind << 11), quantity: 500 });
+  gp.inventory = [weapon(6, S.weapon), weapon(13, P.weapon)];
+  let slot = 14;
+  if (S.ammo) gp.inventory.push(ammo(7, S.ammo)); else if (S.shield) gp.inventory.push(shield(7));
+  if (P.ammo) gp.inventory.push(ammo(slot++, P.ammo));
+  if (P.shield && !S.shield) gp.inventory.push(shield(slot++));
+  const key = ref => f.BuffGear.key(gp.inventory.find(i => i.refObjId === ref));
+  f.ItemRules.setGear('primaryWeapon', key(P.weapon[0])); f.ItemRules.setGear('secondaryWeapon', key(S.weapon[0]));
+  if (chooseShield && (P.shield || S.shield)) f.ItemRules.setGear('shield', key(201));
+  f.Settings.profile.macro.buffSets = [];
+  if (auto) {
+    f.World.catalog.set(30, { ...f.World.catalog.get(30), admit: { weaponKinds: [S.weapon[1], 255] } });
+    f.Settings.profile.macro.buffAuto = true;
+    f.Settings.profile.macro.buffs = [{ id: 30, group: 30, gearSet: 0, enabled: true, mode: 'hunt' }];
+  } else f.Settings.profile.macro.buffs = [{ id: 30, group: 30, gearSet: 'secondary', enabled: true, mode: 'hunt' }];
+  f.Hunt.running = false;
+  const at = s => gp.inventory.find(i => i.slot === s)?.refObjId, events = [];
+  const cast = f.Combat.cast.bind(f.Combat);
+  f.Combat.cast = (id, ...a) => { events.push('cast ' + id + ' with ' + at(6)); return cast(id, ...a); };
+  const offhand = P.ammo ? P.ammo[0] : P.shield && chooseShield ? 201 : undefined;
+  f.t073 = { P, S, at, events, home: [P.weapon[0], offhand], primaryOn: () => at(6) === P.weapon[0] };
+  f.enter = () => f.bus.emit('phase', 'world', 'entering-world', false);
+  f.play = (ms, take = () => true) => {
+    for (const end = f.World.simNow() + ms; f.World.simNow() < end;) {
+      f.Controller.tick();
+      const r = f.BuffGear.run, p = r?.pending;
+      if (p && !p.done && take(p)) {
+        const from = gp.inventory.find(i => i.slot === p.source), to = gp.inventory.find(i => i.slot === p.destination);
+        from.slot = p.destination; if (to) to.slot = p.source; p.done = true;
+      }
+      if (r?.cast) f.confirmBuff(r.cast.id);
+      if (f.t073.primaryOn() && !events.includes('primary on')) events.push('primary on');
+      f.advance(100);
+    }
+  };
+  return f;
+}
+function combatGearFirst(f, label) {
+  const { events, at, home, S } = f.t073, buff = events.findIndex(e => e.startsWith('cast 30'));
+  assert.ok(buff >= 0, label + ': the buff is cast');
+  assert.ok(events.indexOf('primary on') >= 0 && events.indexOf('primary on') < buff, label + ': the combat gear goes on before the buff swap: ' + events.join(', '));
+  assert.ok(events.includes('cast 30 with ' + S.weapon[0]), label + ': the buff is cast with the secondary weapon: ' + events.join(', '));
+  assert.deepEqual([at(6), at(7)], home, label + ': then the combat gear is worn');
+  assert.equal(f.Hunt.running, true, label + ': hunting goes on');
+}
+test('starting with the secondary weapon worn puts the combat gear on first, then buffs and hunts as usual', () => {
+  for (const [primary, secondary] of T073_PAIRS) for (const auto of [false, true]) {
+    const f = secondaryWornFixture(primary, secondary, { auto }), label = `${primary}/${secondary}${auto ? ' auto' : ''}`;
+    f.enter(); f.advance(6000); f.Hunt.start(); f.play(40000);
+    combatGearFirst(f, label);
+    assert.equal(f.BuffGear.bad.size, 0, label);
+  }
+});
+test('a weapon move the game does not take right after entering the world is tried again, never given up for good', () => {
+  for (const [primary, secondary] of T073_PAIRS) for (const auto of [false, true]) {
+    const f = secondaryWornFixture(primary, secondary, { auto }), label = `${primary}/${secondary}${auto ? ' auto' : ''}`;
+    const start = f.World.simNow();
+    f.enter(); f.Hunt.start(); f.play(80000, () => f.World.simNow() - start > 20000);
+    assert.equal(f.BuffGear.bad.size, 0, label + ': nothing is given up for good');
+    assert.deepEqual([f.t073.at(6), f.t073.at(7)], f.t073.home, label + ': the combat gear is worn in the end');
+    assert.equal(f.Hunt.running, true, label + ': hunting went on');
+    assert.ok(f.t073.events.includes('cast 30 with ' + f.t073.S.weapon[0]), label);
+    const lines = f.Log.lines.filter(l => /did not equip .*tried again in 30 s\.$/.test(l.text));
+    assert.ok(lines.length <= 1, label + ': at most one line for the wait');
+  }
+});
+test('the game\'s own command right after entering the world does not stop the first weapon change', () => {
+  for (const auto of [false, true]) {
+    const f = secondaryWornFixture('staff', 'harp', { auto });
+    f.enter(); f.Hunt.start(); f.play(2000);
+    f.Hook.observers.forEach(fn => fn({ kind: 'gameplay', command: { kind: 'select', gid: 0 } }));
+    f.play(40000);
+    assert.ok(!f.notices.some(n => /Manual control interrupted/.test(n)), f.notices.join(' | '));
+    if (!auto) combatGearFirst(f, 'secondary');
+    assert.deepEqual([f.t073.at(6), f.t073.at(7)], f.t073.home); assert.equal(f.Hunt.running, true);
+  }
+});
+test('arrows and bolts are never taken for a shield: a one-handed primary takes them off', () => {
+  for (const auto of [false, true]) {
+    const f = secondaryWornFixture('staff', 'bow', { auto, chooseShield: false }), gp = f.World.gp;
+    gp.inventory = gp.inventory.filter(i => i.refObjId !== 201);
+    assert.equal(f.BuffGear.shield(gp.inventory.find(i => i.refObjId === 62)), false);
+    f.enter(); f.advance(6000); f.Hunt.start(); f.play(40000);
+    assert.deepEqual([f.t073.at(6), f.t073.at(7)], [200, undefined], 'the staff without the arrows');
+    assert.ok(gp.inventory.some(i => i.refObjId === 62 && i.slot >= 13), 'the arrows go to the bag');
+    assert.ok(f.t073.events.includes('cast 30 with 401'), 'the bow buff still goes out');
+    assert.equal(f.BuffGear.pickShield(), null, 'a stack of arrows is no shield for a shield skill');
+    assert.equal(f.Hunt.running, true);
+  }
+});
+test('a primary weapon missing from the bag stops hunting with what to do; one still arriving does not', () => {
+  const f = secondaryWornFixture('staff', 'harp'), gp = f.World.gp, staff = gp.inventory.find(i => i.refObjId === 200);
+  gp.inventory = gp.inventory.filter(i => i !== staff);
+  f.enter(); f.Hunt.start(); f.play(9000);
+  assert.equal(f.Hunt.running, true, 'the inventory may still be arriving');
+  gp.inventory.push(staff); f.play(30000);
+  assert.equal(f.Hunt.running, true); assert.equal(f.t073.at(6), 200, 'it arrived: the combat gear goes on');
+  const g = secondaryWornFixture('staff', 'harp'), gg = g.World.gp;
+  gg.inventory = gg.inventory.filter(i => i.refObjId !== 200);
+  g.enter(); g.Hunt.start(); g.play(20000);
+  assert.equal(g.Hunt.running, false, 'still missing: hunting stops');
+  assert.match(g.BuffGear.message, /Your primary weapon \(.+\) is not in your bag\. Put it in your bag, or choose another primary weapon/);
+  assert.ok(g.notices.some(n => /primary weapon .* is not in your bag/.test(n)));
+  assert.equal(g.t073.at(6), 300, 'nothing was moved');
+  const h = secondaryWornFixture('staff', 'harp'); h.ItemRules.setGear('primaryWeapon', null);
+  h.enter(); h.Hunt.start(); h.play(20000);
+  assert.equal(h.Hunt.running, true, 'without a primary weapon chosen, what is worn is home');
+  assert.equal(h.t073.at(6), 300); assert.ok(h.t073.events.includes('cast 30 with 300'));
+});
+test('the inventory arriving in pieces after entering the world does not swap from the secondary weapon first', () => {
+  for (const auto of [false, true]) {
+    const f = secondaryWornFixture('staff', 'harp', { auto }), gp = f.World.gp, bag = gp.inventory.filter(i => i.slot >= 13);
+    gp.inventory = gp.inventory.filter(i => i.slot < 13); gp.inventoryPending = true;
+    f.enter(); f.Hunt.start(); f.play(800);
+    gp.inventoryPending = false; f.play(700);
+    gp.inventory = [...gp.inventory, ...bag]; f.play(40000);
+    assert.ok(!f.notices.some(n => /Required equipment missing/.test(n)));
+    if (!auto) combatGearFirst(f, 'secondary');
+    const first = f.commands.findIndex(c => c.kind === 'inventory-move');
+    assert.ok(first >= 0 && f.commands[first].source === 13, (auto ? 'auto' : 'secondary') + ': the first move puts the primary on');
+    assert.deepEqual([f.t073.at(6), f.t073.at(7)], f.t073.home); assert.equal(f.Hunt.running, true);
+  }
+});
+test('a weapon change that keeps coming undone runs at most twice a minute and is logged once', () => {
+  const f = secondaryWornFixture('staff', 'harp'), gp = f.World.gp;
+  f.Settings.profile.macro.buffs = [];
+  const undo = () => { const worn = gp.inventory.filter(i => i.slot === 6 || i.slot === 7), bag = gp.inventory.filter(i => [300].includes(i.refObjId)); if (f.t073.primaryOn() && !f.BuffGear.run) { for (const i of worn) i.slot = i.refObjId === 200 ? 13 : 14; for (const i of bag) i.slot = 6; } };
+  f.enter(); f.advance(6000); f.Hunt.start();
+  for (let n = 0; n < 50; n++) { f.play(1000); undo(); }
+  const wears = f.commands.filter(c => c.kind === 'inventory-move' && c.destination === 6).length;
+  assert.ok(wears <= 2, 'the combat gear went on ' + wears + ' times in 50 s');
+  assert.equal(f.Log.lines.filter(l => /already ran twice within a minute/.test(l.text)).length, 1, 'one line');
+  assert.equal(f.Hunt.running, true);
+  f.play(20000); undo(); f.play(5000);
+  assert.ok(f.commands.filter(c => c.kind === 'inventory-move' && c.destination === 6).length > wears, 'tried again once the minute is over');
+});
+test('every start path wears the combat gear first: Start, auto-start, a reconnect and a revival', () => {
+  const f = secondaryWornFixture('staff', 'harp');
+  f.enter(); f.advance(6000); f.toggleBot(); f.play(40000);
+  combatGearFirst(f, 'Start');
+  const a = secondaryWornFixture('staff', 'harp'); a.Settings.profile.hunt.autoStart = true;
+  a.enter(); a.play(50000);
+  assert.match(a.AutoStart.message, /hunting started/); combatGearFirst(a, 'auto-start');
+  const r = secondaryWornFixture('staff', 'harp'), gp = r.World.gp, post = r.Hook.post; r.World.charName = 'Tester';
+  r.Hook.post = msg => { if (msg.kind !== 'session') post(msg); };
+  r.enter(); r.advance(6000); r.Hunt.start(); r.play(40000); r.Combat.buffCastAt.clear(); gp.buffSlots = [];
+  for (let n = 0; n < 100 && !r.BuffGear.run?.cast; n++) r.play(100);
+  assert.equal(r.t073.at(6), 300, 'the secondary is on when the connection drops');
+  r.BuffGear.interrupt('World transition interrupted buff swaps.', true);
+  r.World.phase = 'disconnected'; r.bus.emit('phase', 'disconnected', 'world', true); r.stopAll(); r.World.gp = null;
+  r.advance(2000); r.Controller.tick();
+  r.World.phase = 'world'; r.World.gp = gp; r.enter();
+  r.play(20000, p => (p.wait = (p.wait || 0) + 1) > 15);
+  assert.equal(r.Hunt.running, true, 'the reconnect resumed hunting: ' + r.notices.slice(-3).join(' | '));
+  assert.deepEqual([r.t073.at(6), r.t073.at(7)], r.t073.home, 'the combat gear is back after the reconnect');
+  const v = secondaryWornFixture('staff', 'harp'), vg = v.World.gp; v.Hunt.cfg().onDeath = 'revive';
+  v.enter(); v.advance(6000); v.Hunt.start(); v.play(40000); v.Combat.buffCastAt.clear(); vg.buffSlots = [];
+  v.BuffGear.recovery = v.BuffGear.home(); v.BuffGear.autoRestore = true; v.BuffGear.restoreAt = v.World.simNow() + 300000;
+  for (const i of vg.inventory) if (i.refObjId === 300) i.slot = 6; else if (i.refObjId === 200) i.slot = 13; else if (i.refObjId === 201) i.slot = 14;
+  v.World.isDead = () => true; v.play(1000); v.World.isDead = () => false;
+  vg.pose = { ...vg.pose, x: 3000 }; v.enter(); v.play(8000);
+  assert.ok(!v.notices.some(n => /Restore or review combat gear before travelling/.test(n)), v.notices.join(' | '));
+  assert.ok(v.WalkBack.active || v.Hunt.running, 'the revival walks back to the hunting spot');
 });
 test('a share keeps buffs assigned to the primary or secondary weapon or the shield', () => {
   const f = shareFixture(); f.Settings.profile.macro.buffs = [{ id: 20, group: 20, gearSet: 'secondary', enabled: true }];
@@ -10259,9 +10445,9 @@ test('preferred monsters: with the Attackers order the monster hitting you still
 test('preferred monsters: a listed monster that a filter excludes is never chosen', () => {
   const { f, mob } = preferredFixture(['wolf']);
   mob(31, 'Boar', 130); const wolf = mob(32, 'Wolf', 200, { rarity: 1 });
-  f.Settings.profile.hunt.classes.champion = false;
+  f.Settings.profile.hunt.classModes.champion = 'avoid';
   assert.equal(f.Hunt.chooseTarget()?.gid, 31, 'class off');
-  f.Settings.profile.hunt.classes.champion = true;
+  f.Settings.profile.hunt.classModes.champion = 'ignore';
   assert.equal(f.Hunt.chooseTarget()?.gid, 32);
   f.Settings.profile.hunt.exclude = 'wolf';
   assert.equal(f.Hunt.chooseTarget()?.gid, 31, 'skip name');
@@ -10297,9 +10483,9 @@ test('preferred monsters: no switch for one row, for a target that hits you, or 
   mob(40, 'C-mob', 130); fight(40);
   mob(41, 'B-mob', 200);
   f.Hunt.tick(); assert.deepEqual(selected(), [], 'one row higher is not enough');
-  mob(42, 'A-mob', 210, { rarity: 1 }); f.Settings.profile.hunt.classes.champion = false;
+  mob(42, 'A-mob', 210, { rarity: 1 }); f.Settings.profile.hunt.classModes.champion = 'avoid';
   f.Hunt.tick(); assert.deepEqual(selected(), [], 'a filtered monster never pulls the bot');
-  f.Settings.profile.hunt.classes.champion = true; f.World.attackers.set(40, f.World.simNow());
+  f.Settings.profile.hunt.classModes.champion = 'ignore'; f.World.attackers.set(40, f.World.simNow());
   f.Hunt.tick(); assert.deepEqual(selected(), [], 'a target that hits you is kept');
   f.World.attackers.clear(); f.World.ents.get(42).x = 2000;
   f.Hunt.tick(); assert.deepEqual(selected(), [], 'outside the area and the chase distance');
@@ -10354,6 +10540,151 @@ test('preferred monsters: the Combat page lists the rows, moves them and offers 
   f.Settings.profile.hunt.preferred = Array.from({ length: 10 }, (_, i) => 'Mob' + i);
   assert.equal(f.Hunt.addPreferred('Extra'), false, 'ten rows at most');
   assert.ok(drawn >= 3);
+});
+test('monster classes: a Prefer class beats a nearer Ignore class, and the Ignore class is taken when none is in view', () => {
+  const { f, mob } = preferredFixture([]), M = f.Settings.profile.hunt.classModes;
+  M.champion = 'prefer'; M.normal = 'ignore';
+  mob(31, 'Boar', 130); mob(32, 'Wolf', 400, { rarity: 1 });
+  assert.equal(f.Hunt.chooseTarget()?.gid, 32, 'the farther champion first');
+  f.World.ents.delete(32);
+  assert.equal(f.Hunt.chooseTarget()?.gid, 31, 'no champion in view: the normal');
+  M.champion = 'ignore'; mob(32, 'Wolf', 400, { rarity: 1 });
+  assert.equal(f.Hunt.chooseTarget()?.gid, 31, 'both Ignore: nearest first as before');
+  f.Settings.profile.hunt.priority = 'lowhp';
+  M.champion = 'prefer'; f.World.gp.vitals.push({ gid: 31, hp: 1, maxHp: 100 });
+  assert.equal(f.Hunt.chooseTarget()?.gid, 32, 'the class goes before low HP');
+});
+test('monster classes: an Avoid class is never gone for, but fought while it attacks the character', () => {
+  const { f, mob } = preferredFixture([]);
+  f.Settings.profile.hunt.classModes.giant = 'avoid';
+  mob(33, 'Big Boar', 150, { rarity: 4 });
+  assert.equal(f.Hunt.chooseTarget(), null, 'nothing else in view: nothing chosen');
+  assert.match(f.Diagnostics.noTarget(), /1: monster type is avoided \(Combat > Hunt area > Monster classes\)/);
+  f.World.attackers.set(33, f.World.simNow());
+  assert.equal(f.Hunt.chooseTarget()?.gid, 33, 'it hits the character: it is fought');
+  f.Settings.profile.hunt.priority = 'nearest';
+  assert.equal(f.Hunt.chooseTarget()?.gid, 33, 'with another order too');
+});
+test('monster classes: an Avoid class that attacks beats a Prefer class that does not', () => {
+  const { f, mob } = preferredFixture([]), M = f.Settings.profile.hunt.classModes;
+  M.giant = 'avoid'; M.champion = 'prefer';
+  mob(33, 'Big Boar', 500, { rarity: 4 }); mob(32, 'Wolf', 130, { rarity: 1 });
+  f.World.attackers.set(33, f.World.simNow());
+  assert.equal(f.Hunt.chooseTarget()?.gid, 33);
+});
+test('monster classes: the preferred monsters list goes before the class choice', () => {
+  const { f, mob } = preferredFixture(['boar']), M = f.Settings.profile.hunt.classModes;
+  M.normal = 'ignore'; M.champion = 'prefer';
+  mob(31, 'Boar', 400); mob(32, 'Wolf', 130, { rarity: 1 }); mob(34, 'Hare', 120);
+  assert.equal(f.Hunt.chooseTarget()?.gid, 31, 'a listed Ignore monster beats an unlisted Prefer one');
+  f.World.ents.delete(31);
+  assert.equal(f.Hunt.chooseTarget()?.gid, 32, 'among the unlisted, the Prefer class first');
+});
+test('monster classes: party normal, party champion and party giant are classes of their own', () => {
+  const { f, mob } = preferredFixture([]), M = f.Settings.profile.hunt.classModes;
+  const partyNormal = mob(41, 'Pack', 140, { rarityAuxIcon: 1 }), partyChampion = mob(42, 'Pack', 120, { rarity: 1, rarityAuxIcon: 1 }), partyGiant = mob(43, 'Pack', 450, { rarity: 4, rarityAuxIcon: 1 });
+  assert.deepEqual([partyNormal, partyChampion, partyGiant].map(e => f.MonsterClasses.of(e)), ['party', 'partyChampion', 'partyGiant']);
+  Object.assign(M, { party: 'ignore', partyChampion: 'avoid', partyGiant: 'prefer' });
+  assert.equal(f.Hunt.chooseTarget()?.gid, 43, 'the Prefer party giant, though farthest');
+  f.World.ents.delete(43);
+  assert.equal(f.Hunt.chooseTarget()?.gid, 41, 'the Avoid party champion is skipped though nearer');
+  M.party = 'avoid';
+  assert.equal(f.Hunt.chooseTarget(), null);
+  M.partyChampion = 'ignore';
+  assert.equal(f.Hunt.chooseTarget()?.gid, 42);
+  assert.equal(f.MonsterClasses.classes(M).party, true, 'the old party switch is on while any party class is not Avoid');
+});
+test('monster classes: titan follows its own choice and keeps the Unique rotation', () => {
+  const { f, mob } = preferredFixture([]), M = f.Settings.profile.hunt.classModes;
+  const titan = mob(44, 'Titan Boar', 400, { rarity: 5 }); mob(45, 'Boss', 140, { rarity: 3 });
+  assert.equal(f.MonsterClasses.of(titan), 'titan'); assert.equal(f.Rotations.classOf(titan), 'unique');
+  assert.equal(f.Hunt.chooseTarget(), null, 'both Avoid by default');
+  M.titan = 'prefer'; M.unique = 'ignore';
+  assert.equal(f.Hunt.chooseTarget()?.gid, 44);
+  M.titan = 'avoid';
+  assert.equal(f.Hunt.chooseTarget()?.gid, 45, 'the unique has its own choice');
+  M.titan = 'ignore'; M.unique = 'avoid';
+  assert.equal(f.Hunt.chooseTarget()?.gid, 44);
+});
+test('monster classes: old settings become Ignore and Avoid, never Prefer, and damaged values fall back', () => {
+  const f = fixture();
+  const modes = h => plain(f.botProfile({ hunt: h }).hunt.classModes);
+  assert.deepEqual(modes({ classes: { normal: true, party: false, unique: false } }),
+    { normal: 'ignore', champion: 'ignore', party: 'avoid', giant: 'ignore', partyChampion: 'avoid', partyGiant: 'avoid', elite: 'avoid', unique: 'avoid', titan: 'avoid' });
+  assert.deepEqual(modes({ classes: { normal: false, champion: false, giant: false, party: true, elite: true, unique: true, titan: true } }),
+    { normal: 'avoid', champion: 'avoid', party: 'ignore', giant: 'avoid', partyChampion: 'ignore', partyGiant: 'ignore', elite: 'ignore', unique: 'ignore', titan: 'ignore' });
+  assert.deepEqual(modes({ radius: 300 }), plain(f.DEFAULT_PROFILE.hunt.classModes), 'no classes at all: the defaults');
+  const loaded = f.botProfile({ hunt: { classes: { normal: true }, classModes: { normal: 'prefer', giant: 'bogus', extra: 'avoid' } } }).hunt;
+  assert.equal(loaded.classModes.normal, 'prefer', 'saved modes win over the old switches');
+  assert.equal(loaded.classModes.giant, 'ignore', 'a damaged value is the default'); assert.equal('extra' in loaded.classModes, false);
+  assert.deepEqual(plain(loaded.classes), { normal: true, champion: true, giant: true, party: false, elite: false, unique: false, titan: false }, 'the old switches follow the modes');
+  f.storage.set('sroBotLean:v1:backup:profile:default', JSON.stringify({ at: 1, profile: { hunt: { classes: { party: true, normal: false } } } }));
+  assert.equal(f.ProfileShare.undo(), true);
+  assert.deepEqual([f.Settings.profile.hunt.classModes.normal, f.Settings.profile.hunt.classModes.partyGiant], ['avoid', 'ignore'], 'an old backup');
+});
+test('monster classes: share codes and backups carry the modes, and old shares migrate', async () => {
+  const f = fixture(), H = f.Settings.profile.hunt;
+  f.MonsterClasses.set(H, 'champion', 'prefer'); f.MonsterClasses.set(H, 'partyGiant', 'ignore'); f.MonsterClasses.set(H, 'normal', 'avoid');
+  const g = fixture(); g.ProfileShare.pending = await g.ProfileShare.preview(await f.ProfileShare.encode(f.ProfileShare.text(true)));
+  assert.equal(g.ProfileShare.apply(), true);
+  assert.deepEqual(plain(g.Settings.profile.hunt.classModes), plain(H.classModes), 'share round trip');
+  assert.equal(g.Settings.profile.hunt.classes.party, true); assert.equal(g.Settings.profile.hunt.classes.normal, false);
+  const backup = JSON.parse(f.ProfileShare.text(false)).profile.hunt;
+  assert.equal(backup.classModes.champion, 'prefer', 'the backup holds the modes'); assert.equal(backup.classes.party, true, 'and the old switches');
+  assert.deepEqual(plain(f.botProfile(JSON.parse(f.ProfileShare.text(false)).profile).hunt.classModes), plain(H.classModes), 'and loads them back');
+  const old = JSON.stringify({ app: 'nixxane-bot', version: '1.2.212', profile: { hunt: { classes: { party: true, elite: true, normal: false } } } });
+  const next = (await fixture().ProfileShare.preview(old)).next.hunt.classModes;
+  assert.deepEqual([next.normal, next.party, next.partyChampion, next.partyGiant, next.elite, next.champion], ['avoid', 'ignore', 'ignore', 'ignore', 'ignore', 'ignore'], 'an old share');
+  assert.equal(Object.values(next).includes('prefer'), false);
+});
+test('monster classes: the Combat page lists the nine classes in order and keeps the old switches in sync', () => {
+  const document = { createElement(tag) {
+    const events = {};
+    return { tag, children: [], className: '', value: '', dataset: {}, style: {}, attributes: {},
+      setAttribute(k, v) { this.attributes[k] = v; }, append(...children) { this.children.push(...children); }, replaceChildren(...children) { this.children = children; },
+      addEventListener(name, fn) { events[name] = fn; }, fire(name, arg) { events[name]?.(arg); }, querySelectorAll() { return []; } };
+  } };
+  const f = fixture(document); f.UI.refreshers = [];
+  const host = document.createElement('div'); f.UI.section_combatMonsters(host);
+  const box = host.children[0], rows = box.children.filter(n => n.className === 'class-mode');
+  assert.equal(box.children[0].textContent, 'Monster classes');
+  assert.deepEqual(rows.map(r => r.attributes['aria-label']), ['Normal', 'Champion', 'Party normal', 'Giant', 'Party champion', 'Party giant', 'Elite', 'Unique', 'Titan']);
+  assert.deepEqual(rows[5].children[0].children.slice(0, 2).map(i => i.style.backgroundImage), ['var(--s-tw_party)', 'var(--s-tw_giant)'], 'icons as on the rotation tabs');
+  assert.equal(rows[8].children[0].children[0].style.backgroundImage, 'var(--s-tw_titan)');
+  const buttons = row => row.children.slice(1);
+  assert.deepEqual(buttons(rows[0]).map(b => b.textContent), ['Prefer', 'Ignore', 'Avoid']);
+  assert.ok(buttons(rows[0]).every(b => b.title), 'every choice has a tooltip');
+  assert.deepEqual(buttons(rows[0]).map(b => b.attributes['aria-pressed']), ['false', 'true', 'false']);
+  const H = f.Settings.profile.hunt;
+  buttons(rows[3])[0].fire('click');
+  assert.equal(H.classModes.giant, 'prefer'); assert.equal(H.classes.giant, true); assert.equal(buttons(rows[3])[0].className, 'cell on');
+  buttons(rows[3])[2].fire('click');
+  assert.equal(H.classModes.giant, 'avoid'); assert.equal(H.classes.giant, false, 'Avoid turns the old switch off');
+  buttons(rows[5])[1].fire('click');
+  assert.equal(H.classModes.partyGiant, 'ignore'); assert.equal(H.classes.party, true, 'any party class not Avoid turns the old party switch on');
+  buttons(rows[5])[2].fire('click'); assert.equal(H.classes.party, false);
+  buttons(rows[8])[0].fire('click'); assert.equal(H.classModes.titan, 'prefer'); assert.equal(H.classes.titan, true);
+  f.Settings.profile = f.botProfile({ hunt: { classModes: { normal: 'avoid' } } }); f.UI.refreshers.forEach(r => r());
+  assert.equal(buttons(rows[0])[2].attributes['aria-pressed'], 'true', 'redrawn from the loaded profile');
+});
+test('monster classes: the Setup presets set the modes', () => {
+  const f = fixture(); f.Settings.profile.hunt.classModes.champion = 'prefer';
+  f.Setup.choose('drops'); f.ProfileShare.apply();
+  const M = f.Settings.profile.hunt.classModes;
+  assert.deepEqual([M.normal, M.champion, M.giant, M.elite, M.party, M.unique], ['ignore', 'ignore', 'ignore', 'ignore', 'avoid', 'avoid']);
+  assert.equal(f.Settings.profile.hunt.classes.elite, true);
+});
+test('monster classes: the lure taunts a Prefer class first and never an Avoid class', () => {
+  const f = fixture(), M = f.Settings.profile.hunt.classModes, point = { regionId: 1, x: 1000, y: 0, z: 1000 };
+  f.Settings.profile.lure.radius = 30;
+  const mob = (gid, x, more = {}) => f.World.ents.set(gid, { gid, kind: 'monster', name: 'Mob' + gid, rarity: 0, level: 5, regionId: 1, x, y: 0, z: 1000, attackFlags: 16, appearanceState: [0], ...more });
+  mob(51, 1010); mob(52, 1100, { rarity: 1 }); mob(53, 1005, { rarity: 4 });
+  M.giant = 'avoid';
+  assert.equal(f.Lure.nearest(point)?.gid, 51, 'the Avoid giant is skipped though nearest');
+  M.champion = 'prefer';
+  assert.equal(f.Lure.nearest(point)?.gid, 52, 'the Prefer champion first');
+  M.champion = 'avoid'; M.normal = 'avoid';
+  assert.equal(f.Lure.nearest(point), null, 'only Avoid classes: nothing to pull');
 });
 async function updateTests() {
   async function check(name, fn) { await fn(); passed++; console.log('PASS ' + name); }

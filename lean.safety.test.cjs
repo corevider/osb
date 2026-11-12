@@ -84,10 +84,19 @@ module.exports = function safetyTests({ test, fixture, townFixture }) {
     unique(f, 390); f.Controller.tick(); assert.equal(f.Hunt.running, false, '29 m away'); assert.match(lastStop(f), /^safety: a unique \(Boss\) is within 30 m/);
     const g = safetyFixture({ unique: { on: true, meters: 30 } }); g.UniqueHunt.active = { phase: 'patrol' }; unique(g, 200); g.Controller.tick();
     assert.equal(g.Hunt.running, true, 'never while the unique hunt runs');
-    const h = safetyFixture({ unique: { on: true, meters: 30 } }); h.Settings.profile.hunt.classes.unique = true; unique(h, 200); h.Controller.tick();
+    const h = safetyFixture({ unique: { on: true, meters: 30 } }); h.Settings.profile.hunt.classModes.unique = 'ignore'; unique(h, 200); h.Controller.tick();
     assert.equal(h.Hunt.running, true, 'never when the unique class is ticked');
     const i = safetyFixture({ unique: { on: false, meters: 30 } }); unique(i, 200); i.Controller.tick();
     assert.equal(i.Hunt.running, true, 'off by default');
+  });
+  test('safety: the unique trigger follows the Unique class choice', () => {
+    const unique = f => f.World.ents.set(80, { gid: 80, kind: 'monster', name: 'Boss', rarity: 3, regionId: 1, x: 200, y: 0, z: 100, appearanceState: [0] });
+    for (const mode of ['prefer', 'ignore']) {
+      const f = safetyFixture({ unique: { on: true, meters: 30 } }); f.Settings.profile.hunt.classModes.unique = mode; unique(f); f.Controller.tick();
+      assert.equal(f.Hunt.running, true, mode + ': you hunt uniques');
+    }
+    const g = safetyFixture({ unique: { on: true, meters: 30 } }); g.Settings.profile.hunt.classModes.unique = 'avoid'; unique(g); g.Controller.tick();
+    assert.equal(g.Hunt.running, false, 'avoid: the trigger fires');
   });
   test('safety: go to town and stop starts the trip with the safety reason and stops the bot in town', () => {
     const f = townFixture(); f.World.charName = 'Hero';

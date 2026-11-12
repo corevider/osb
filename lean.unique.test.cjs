@@ -103,6 +103,23 @@ module.exports = function uniqueTests( { test, fixture } ) {
 		assert.equal( f.Hunt.cfg(), H ); assert.equal( f.Hunt.running, false );
 		assert.equal( f.Hunt.inArea( f.World.ents.get( 40 ) ), false );
 	} );
+	test( "unique hunt: while it runs uniques are preferred and the other classes avoided; after it the player's own choices are back", () => {
+		const f = setup(), H = f.Settings.profile.hunt;
+		Object.assign( H.classModes, { normal: "prefer", champion: "ignore", unique: "avoid", titan: "ignore" } );
+		const before = JSON.stringify( H.classModes );
+		f.UniqueHunt.start(); unique( f, 40, { x: 400 } ); mob( f, 30, { x: 130 } );
+		const M = f.Hunt.cfg().classModes;
+		assert.equal( M.unique, "prefer" ); assert.equal( M.titan, "avoid", "titans only when the unique hunt takes them" );
+		assert.ok( [ "normal", "champion", "party", "giant", "partyChampion", "partyGiant", "elite" ].every( k => M[ k ] === "avoid" ) );
+		assert.equal( f.Hunt.cfg().classes.unique, true ); assert.equal( f.Hunt.cfg().classes.normal, false, "the old switches match" );
+		assert.equal( f.Hunt.classAllowed( f.World.ents.get( 30 ) ), false ); assert.equal( f.Hunt.classAllowed( f.World.ents.get( 40 ) ), true );
+		f.UniqueHunt.stop( "stopped by you" );
+		f.Settings.profile.unique.titans = true; f.UniqueHunt.start();
+		assert.equal( f.Hunt.cfg().classModes.titan, "prefer", "titans taken" );
+		f.UniqueHunt.stop( "stopped by you" );
+		assert.equal( f.Hunt.cfg(), H ); assert.equal( JSON.stringify( H.classModes ), before );
+		assert.equal( f.Hunt.classMode( f.World.ents.get( 30 ) ), "prefer" ); assert.equal( f.Hunt.classAllowed( f.World.ents.get( 40 ) ), false );
+	} );
 	test( "unique hunt: a unique others brought below the threshold is skipped; one nobody fights is taken", () => {
 		let f = setup(); f.UniqueHunt.start();
 		unique( f, 40, { hp: 500 } ); f.World.hitByOthers.set( 40, f.World.simNow() );
