@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         OSB
 // @namespace    https://github.com/corevider/osb
-// @version      2.0.13
+// @version      2.0.14
 // @homepageURL  https://github.com/corevider/osb
 // @supportURL   https://github.com/corevider/osb/issues
 // @updateURL    https://raw.githubusercontent.com/corevider/osb/main/osb.meta.js
@@ -25,7 +25,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[OSB] Another SRO assistant is active. Disable it and reload to use OSB.');
   return;
 }
-const VERSION = '2.0.13';
+const VERSION = '2.0.14';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });
@@ -818,7 +818,8 @@ function onSimulationMessage(e) {
       bus.emit('failure', World.failure);
     }
   } catch (err) {
-    Log.error('Could not process data: ' + (err && err.message ? err.message : err));
+    Diag.error('simulation', err, 'data');
+    Diag.silently(() => Log.error('Could not process data: ' + (err && err.message ? err.message : err)));
   }
 }
 
@@ -11924,6 +11925,7 @@ Hunt.tick = function () {
 // Stops everything, for the player and for the bot itself. A pending auto-start survives it: only the player's own
 // Stop (userStop) cancels that.
 function stopAll(reason = 'all activities stopped') {
+  Diag.stop('stop_all', reason);
   Town.record('stop');
   UniqueHunt.stop(reason);
   Alchemy.stop();
@@ -12015,7 +12017,8 @@ const Controller = {
   // Optional features must never stop hunting: an error in one is logged (at most every 5 s) and skipped.
   guard(name, fn) {
     try { return fn(); } catch (e) {
-      if (now() - (this.guardAt[name] ?? -Infinity) > 5000) { this.guardAt[name] = now(); Log.error(name + ' error: ' + (e?.message || e)); }
+      Diag.error(name, e, 'guard');
+      if (now() - (this.guardAt[name] ?? -Infinity) > 5000) { this.guardAt[name] = now(); Diag.silently(() => Log.error(name + ' error: ' + (e?.message || e))); }
       return false;
     }
   },
@@ -12132,8 +12135,9 @@ const Controller = {
       else if (Hunt.running) { if (!Trace.tick()) Hunt.tick(); this.mode = Restock.trip ? 'shopping' : Hunt.state; }
       else { this.guard('Idle pet pickup', () => Loot.idleTick()); this.mode = 'idle'; }
     } catch (e) {
+      Diag.error('controller', e, 'tick');
       stopAll('internal error');
-      if (now() - this.lastErrorAt > 5000) { this.lastErrorAt = now(); Log.error(e.message || String(e)); UI.toast('Bot stopped: ' + e.message, 'warn'); }
+      if (now() - this.lastErrorAt > 5000) { this.lastErrorAt = now(); Diag.silently(() => Log.error(e.message || String(e))); UI.toast('Bot stopped: ' + e.message, 'warn'); }
       this.mode = 'error';
     } finally {
       Town.record();
@@ -12245,7 +12249,7 @@ const petAttackHuntTick = Hunt.tick;
 Hunt.tick = function () {
   const out = petAttackHuntTick.apply(this, arguments);
   if (this.running && !Town.trip && !Restock.trip && !WalkBack.active && !Resurrect.trip && !Travel.active && !World.gp?.storage) {
-    try { PetAttack.tick(); } catch (e) { Log.error('Pet attack: ' + (e?.message || e)); }
+    try { PetAttack.tick(); } catch (e) { Diag.error('pet-attack', e, 'guard'); Diag.silently(() => Log.error('Pet attack: ' + (e?.message || e))); }
   }
   return out;
 };
@@ -17700,7 +17704,8 @@ function wdSafe(what, fn) {
   try {
     return fn();
   } catch (e) {
-    Log.warn('Wardrobe (' + what + '): ' + ((e && e.message) || e));
+    Diag.error('wardrobe', e, 'guard');
+    Diag.silently(() => Log.warn('Wardrobe (' + what + '): ' + ((e && e.message) || e)));
     return undefined;
   }
 }
@@ -19298,7 +19303,7 @@ const Alchemy = {
 };
 
 
-const RELEASE_NOTES = [{"version": "2.0.13", "title": "Monster classes with Prefer, Ignore or Avoid, and a safe start with the secondary weapon worn", "items": ["Monster classes: Combat → Hunt area → Monster classes now lists nine classes, from the weakest to the strongest: Normal, Champion, Party normal, Giant, Party champion, Party giant, Elite, Unique and Titan. Titan has its own choice and still uses the Unique rotation.", "Each class has three choices. Prefer: the bot takes it before any monster of an Ignore class. Ignore: the usual order; the bot takes it when no preferred class is available. Avoid: the bot never goes for it, and fights it only while it attacks you.", "The order: monsters hitting you come first (order Attackers), whatever their class; then your Preferred monsters list; then Prefer before Ignore; then the usual order. The bot never leaves a fight for a preferred class, and your other filters still apply. The lure's taunt follows the choices too.", "Your old settings carry over: a ticked class becomes Ignore and an unticked one Avoid, and the old Party switch sets all three party classes. Share codes and backups carry the choices.", "A character that enters the game holding its secondary weapon now puts the primary weapon on first, then buffs and hunts as usual, instead of stopping. The bot waits about 5 s after entering the game before it changes weapons, and a weapon change the game does not take is tried again after 30 s while hunting goes on with what is worn.", "Arrows and bolts no longer count as a shield, a reconnect or a revival is no longer refused while the combat gear goes back on, and the same weapon change runs at most twice a minute.", "With the chosen primary weapon neither worn nor in the bag (for example in the warehouse or the pet), hunting now stops after about 10 s and says what to do: put it in the bag, or choose another primary weapon (or None) under Combat."]}, {"version": "2.0.12", "title": "Emergency skills, safety triggers, a polygon hunting area and preferred monsters", "items": ["Emergency skills: Combat → Skills has up to 6 emergency skills. Pick a learned skill and a trigger: HP below a level, MP below a level, or at least N monsters attacking you. When the trigger holds and the skill is ready, it is cast before your attack rotation and buffs, while hunting, luring, in the unique hunt and walking back. Off and empty by default.", "Safety triggers: the new Safety settings can stop the bot, or send it to town and stop it there, when it dies too many times, the party gets too small, another player hurts your character, or a unique appears close by. All are off by default. A safety stop is final: auto-start, \"Start again when the bot stops by itself\" and a reconnect do not start the bot again.", "Polygon hunting area: on the Map page, draw the area as 3 to 32 corners with \"Add corner here\" at your position or by clicking the map, then tick \"Use a polygon area\" (off by default). The bot then attacks, protects, loots and returns only for what is inside it, so it keeps off cliffs, rivers and a neighbouring spawn that a circle would include. \"Chase distance\" still limits how far it follows.", "A polygon with fewer than 3 corners or crossing edges is shown in red, and the hunt radius is used. Spot by level, leveling spots, following a party member and the unique hunt keep the circle. The hunting spot is still where the bot walks back to. The corners are saved with your hunting spot: they are in the full settings file, not in share codes.", "Preferred monsters: Combat → Hunt area has a new list for quest monsters and drop farming. Add up to 10 monsters, best first, from the ones in view or seen this session, or type part of a name. A listed monster is fought before one that is not listed, and a higher row before a lower one. Monsters hitting you still come first, and your filters (classes, level range, names, hunting area, other players' targets) still apply.", "While fighting, the bot switches to a listed monster at least 2 rows higher than your target, at most once every 5 seconds, and never leaves a target that is hitting you. The list is empty by default and is part of share codes and backups."]}, {"version": "2.0.11", "title": "Town trips skip the potion merchant when the supplies are full", "items": ["The bot remembers, for each character and potion merchant, which HP and MP potion size the merchant sells and which HGP potions and pet kits it does not sell. This stays in your browser after a reload and is never put in your profile, share codes or backups.", "With full supplies, the town trip now skips the potion merchant also on the first trip after a reload, and the log says \"Town: nothing to do at the potion merchant; skipped.\" Before, the bot counted X-Large potions after a reload, so it walked to the merchant for nothing and could even start a town trip for potions it already had.", "A potion merchant the bot has not visited yet is visited once to learn what it sells. Saving the potion merchant again, or the automatic town setup, forgets what was learned about it. With fewer than 2 return scrolls in the bag, the trip still visits the merchant."]}, {"version": "2.0.10", "title": "The lure casts its taunts at your pull points", "items": ["The lure now casts both taunts at each pull point you saved: the area taunt first, then the single-target taunt on the monster nearest the point. The area taunt is no longer cast on the way to the point, on the way back or at the training spot.", "If a taunt is still cooling down when the character arrives, it waits at the point for up to 10 s; when the area taunt is still not ready after that, the single-target taunt goes out without it. A point with no monster sends the lure straight back.", "On the way back, the single-target taunt is cast again on a monster pulled at this point that falls more than 10 m behind and is within the skill's range, at most once per 10 s for each monster, and never when hurrying back on low HP. The lure never turns round for it."]}, {"version": "2.0.9", "title": "Smarter town trips, zero-setup leveling with character builds, auto party invite and your own SoX sound", "items": ["Town trips walk only to the services that have something to do. A trip with only gear to buy no longer visits the warehouse, and a trip with nothing left goes straight back.", "A merchant whose saved standing spot is blocked (inside a forge, behind a fence) is reached from another spot beside it, and the spot that works is saved.", "A completely full bag no longer stops the trip when the bag holds something for the warehouse: the warehouse goes first and makes room.", "With \"Walking back may use teleports and ferries (beta; pays their fee)\" on, walking back across a river takes the ferry when the walk would go the long way round, or has no way at all.", "\"Wear better gear\" now swaps a weapon only for one of the same type.", "Zero-setup leveling picks spots for new characters and skips spots it cannot reach, buys gear for your own race and sex (a whole tier in one trip once all of it is open), replaces weak Seal gear but keeps it in the bag, keeps the weapon type you started with, always walks back and never buys reverse scrolls, and lets a summoned pickup pet collect the drops. When a town's gear runs out it moves on to the next town (Jangan, then Donwhang, then Hotan) and makes that town's statue your return point.", "New on the Setup page: \"Character build\". Leave it on Auto, or pick Glaive nuker, Blade tank, Bow nuker, Wizard, Cleric and more. Leveling never uses skills that root your character, such as Crystal Wall and Fire Wall.", "New on the Party page, off by default: \"Auto-invite players\". List the characters to invite and the bot invites them while they are in view; \"Also invite anyone nearby\" invites everyone within a radius you set. Only the party leader invites, never into a full party, never while the character is dead, and never on an account that joins a party leader. A player who does not answer is asked again after 30 seconds, then 1, 2, 4 minutes and so on, up to 10 minutes.", "Your own sound for SoX drops: \"Choose SoX sound…\" on the Loot page takes an audio file of up to 1 MB. It stays in this browser only and is never sent anywhere. \"Clear SoX sound\" brings back the built-in chime. The Star, Moon and Sun switches still decide which drops play it."]}, {"version": "2.0.8", "title": "OSB works again after the game's 2026-11-11 update", "items": ["Since the game's 2026-11-11 update, the bot stayed on \"Waiting for game world\" and did not start. The game now sends most of its updates as only the parts that changed, and OSB read each one as the whole game state. OSB now adds each update to the state it already has, so it enters the world and works as before."]}, {"version": "2.0.7", "title": "The pickup pet leaves you room, the Unique hunt knows which uniques are alive, live uniques on Setup", "items": ["With the bot stopped, the pickup pet no longer keeps your inventory locked. It waits 3 s after any click, key or scroll in the game (not in the OSB window), takes only drops within 25 m of it, keeps at most about a third of any 10 seconds for itself, and waits until a return scroll, reverse return scroll or teleport has finished. Your scrolls, potions and Item Mall work again while it collects in your pauses. New in Loot → Collection: \"Pet collects while the bot is stopped\" (on), \"Pet waits after your clicks and keys (s)\" (3) and \"Pet reach while the bot is stopped (m)\" (25).", "The Unique hunt now stops after killing its unique even when the game did not show the death in the usual way: a unique shown dead, announced as killed, or disappearing at low HP right after your hits counts as your kill. Your own hits during manual control count too.", "The bot remembers which uniques are alive or dead, from the game's announcements, what it sees and its kills. The hunt skips uniques known to be dead; when all chosen uniques are dead it stays where it is (\"Waiting: Tiger Girl was killed 12 min ago.\") and goes on when one appears again. \"Trust a unique's death for (min)\" (30) is in Combat → Unique hunt.", "At the game's unique nests the bot now looks around for about 2 seconds and moves on when no unique is there. \"Wait at each spot\" is for your own spots only and is 0 by default; settings that saved a wait keep it.", "New on the Setup page, under the Unique hunt card: the Uniques list, ordered by level, lowest first, with each state as a coloured pill (Alive green, Slain red, Not up amber, Unknown dim), the map and the nest count. The Hunt ticks choose which uniques the Unique hunt looks for, and ticking one turns on \"Patrol the game's unique nests\". Click a unique for a small map of its nests and how far the nearest one is.", "The list shows each unique once. OSB knows the 13 uniques by the game's own monster numbers, so a second monster with the same name (Cerberus, Captin Ivy) no longer adds a row or sends the patrol to the wrong spawn points; old ticks and states saved under such a copy move to the real unique. The levels of all 13 are built in, and Lord Yarkan has one more nest, from a player's report.", "New switch, off by default: \"Check the game site's unique tracker\". When you turn it on, OSB reads opensro.online/uniques at most every 2 minutes while the Setup page is open or the Unique hunt runs, without cookies and without any data about you. Only each unique's state, level and map are read, never who killed it. Until you turn it on, OSB makes no request to the game site for it."]}, {"version": "2.0.6", "title": "Unique hunt, buff weapon changes that wait for the pet, fewer repeated warnings", "items": ["New Unique hunt on the Setup page. Start it and the bot patrols for uniques, fights only uniques with your Unique rotation, berserk, buffs and potions, collects the unique's drops first and then stops. Your hunting spot, monster classes and rotations stay as they are; Combat → Unique hunt has all the settings.", "The patrol walks your own named spots, and with \"Patrol the game's unique nests\" also the places where the uniques you tick spawn, read from the game's own data, nearest first and within a distance you choose (1000 m by default). The bot can also remember where it saw uniques. When the game announces that a unique appeared, the patrol goes to its spots first, and the map rings the chosen nests.", "When the unique it went for dies, a new \"Unique killed\" chime plays (on by default, with a Test button), and the log and Session stats count it. The bot leaves a unique alone when other players have already brought it below 75% HP (you can change this), and gives up when others clearly out-damage you. A unique that hits you is always fought back.", "A buff weapon change no longer stops hunting with \"Equipment move unconfirmed\" while the pickup pet or another action keeps the game's inventory busy. A weapon change does not start while a pet pickup is on its way, and the pet waits while a weapon change runs. When the game refuses a weapon move and nothing moved, the bot sends it once more; if it is refused again, the log says so and hunting goes on unless no weapon is worn.", "A drop the game refuses to give your pet twice is given up until it disappears.", "\"Manual control: resurrection travel cancelled.\" is logged only when a walk to a corpse is really cancelled, and the Activity log notes which game command started a manual-control pause."]}];
+const RELEASE_NOTES = [{"version": "2.0.14", "title": "Error reports and performance data under one privacy switch", "items": ["Privacy: Settings → Privacy → **Share usage statistics, error reports and performance data** (off by default) is now one switch for usage statistics, error reports and performance data.", "Error reports: when the switch is on and the OSB server asks for them, OSB sends which part of OSB failed and how (the error type, a fixed message and the place in OSB's code), why the bot stopped by itself, the game phase and what the bot did just before, all as fixed codes. It never sends the text of your log, names, chat or positions.", "Performance data: with the switch on and the server asking for it, OSB sends one entry about every 30 minutes: how long the bot's steps and the pauses between them took, the number and total time of browser freezes, and the page's memory use, with the OSB version. Nothing is timed while sharing is off.", "Settings → Privacy → **Show what is sent** shows the next error report and the next performance entry.", "If you shared usage statistics before, the text of the switch changed, so sharing is now off. Tick it again if you want to keep sharing.", "Inside OSB Manager, the Manager's own switch decides, and the Manager sends OSB's reports together with its own.", "The report window's text changed: your description and details are never copied into a public GitHub issue."]}, {"version": "2.0.13", "title": "Monster classes with Prefer, Ignore or Avoid, and a safe start with the secondary weapon worn", "items": ["Monster classes: Combat → Hunt area → Monster classes now lists nine classes, from the weakest to the strongest: Normal, Champion, Party normal, Giant, Party champion, Party giant, Elite, Unique and Titan. Titan has its own choice and still uses the Unique rotation.", "Each class has three choices. Prefer: the bot takes it before any monster of an Ignore class. Ignore: the usual order; the bot takes it when no preferred class is available. Avoid: the bot never goes for it, and fights it only while it attacks you.", "The order: monsters hitting you come first (order Attackers), whatever their class; then your Preferred monsters list; then Prefer before Ignore; then the usual order. The bot never leaves a fight for a preferred class, and your other filters still apply. The lure's taunt follows the choices too.", "Your old settings carry over: a ticked class becomes Ignore and an unticked one Avoid, and the old Party switch sets all three party classes. Share codes and backups carry the choices.", "A character that enters the game holding its secondary weapon now puts the primary weapon on first, then buffs and hunts as usual, instead of stopping. The bot waits about 5 s after entering the game before it changes weapons, and a weapon change the game does not take is tried again after 30 s while hunting goes on with what is worn.", "Arrows and bolts no longer count as a shield, a reconnect or a revival is no longer refused while the combat gear goes back on, and the same weapon change runs at most twice a minute.", "With the chosen primary weapon neither worn nor in the bag (for example in the warehouse or the pet), hunting now stops after about 10 s and says what to do: put it in the bag, or choose another primary weapon (or None) under Combat."]}, {"version": "2.0.12", "title": "Emergency skills, safety triggers, a polygon hunting area and preferred monsters", "items": ["Emergency skills: Combat → Skills has up to 6 emergency skills. Pick a learned skill and a trigger: HP below a level, MP below a level, or at least N monsters attacking you. When the trigger holds and the skill is ready, it is cast before your attack rotation and buffs, while hunting, luring, in the unique hunt and walking back. Off and empty by default.", "Safety triggers: the new Safety settings can stop the bot, or send it to town and stop it there, when it dies too many times, the party gets too small, another player hurts your character, or a unique appears close by. All are off by default. A safety stop is final: auto-start, \"Start again when the bot stops by itself\" and a reconnect do not start the bot again.", "Polygon hunting area: on the Map page, draw the area as 3 to 32 corners with \"Add corner here\" at your position or by clicking the map, then tick \"Use a polygon area\" (off by default). The bot then attacks, protects, loots and returns only for what is inside it, so it keeps off cliffs, rivers and a neighbouring spawn that a circle would include. \"Chase distance\" still limits how far it follows.", "A polygon with fewer than 3 corners or crossing edges is shown in red, and the hunt radius is used. Spot by level, leveling spots, following a party member and the unique hunt keep the circle. The hunting spot is still where the bot walks back to. The corners are saved with your hunting spot: they are in the full settings file, not in share codes.", "Preferred monsters: Combat → Hunt area has a new list for quest monsters and drop farming. Add up to 10 monsters, best first, from the ones in view or seen this session, or type part of a name. A listed monster is fought before one that is not listed, and a higher row before a lower one. Monsters hitting you still come first, and your filters (classes, level range, names, hunting area, other players' targets) still apply.", "While fighting, the bot switches to a listed monster at least 2 rows higher than your target, at most once every 5 seconds, and never leaves a target that is hitting you. The list is empty by default and is part of share codes and backups."]}, {"version": "2.0.11", "title": "Town trips skip the potion merchant when the supplies are full", "items": ["The bot remembers, for each character and potion merchant, which HP and MP potion size the merchant sells and which HGP potions and pet kits it does not sell. This stays in your browser after a reload and is never put in your profile, share codes or backups.", "With full supplies, the town trip now skips the potion merchant also on the first trip after a reload, and the log says \"Town: nothing to do at the potion merchant; skipped.\" Before, the bot counted X-Large potions after a reload, so it walked to the merchant for nothing and could even start a town trip for potions it already had.", "A potion merchant the bot has not visited yet is visited once to learn what it sells. Saving the potion merchant again, or the automatic town setup, forgets what was learned about it. With fewer than 2 return scrolls in the bag, the trip still visits the merchant."]}, {"version": "2.0.10", "title": "The lure casts its taunts at your pull points", "items": ["The lure now casts both taunts at each pull point you saved: the area taunt first, then the single-target taunt on the monster nearest the point. The area taunt is no longer cast on the way to the point, on the way back or at the training spot.", "If a taunt is still cooling down when the character arrives, it waits at the point for up to 10 s; when the area taunt is still not ready after that, the single-target taunt goes out without it. A point with no monster sends the lure straight back.", "On the way back, the single-target taunt is cast again on a monster pulled at this point that falls more than 10 m behind and is within the skill's range, at most once per 10 s for each monster, and never when hurrying back on low HP. The lure never turns round for it."]}, {"version": "2.0.9", "title": "Smarter town trips, zero-setup leveling with character builds, auto party invite and your own SoX sound", "items": ["Town trips walk only to the services that have something to do. A trip with only gear to buy no longer visits the warehouse, and a trip with nothing left goes straight back.", "A merchant whose saved standing spot is blocked (inside a forge, behind a fence) is reached from another spot beside it, and the spot that works is saved.", "A completely full bag no longer stops the trip when the bag holds something for the warehouse: the warehouse goes first and makes room.", "With \"Walking back may use teleports and ferries (beta; pays their fee)\" on, walking back across a river takes the ferry when the walk would go the long way round, or has no way at all.", "\"Wear better gear\" now swaps a weapon only for one of the same type.", "Zero-setup leveling picks spots for new characters and skips spots it cannot reach, buys gear for your own race and sex (a whole tier in one trip once all of it is open), replaces weak Seal gear but keeps it in the bag, keeps the weapon type you started with, always walks back and never buys reverse scrolls, and lets a summoned pickup pet collect the drops. When a town's gear runs out it moves on to the next town (Jangan, then Donwhang, then Hotan) and makes that town's statue your return point.", "New on the Setup page: \"Character build\". Leave it on Auto, or pick Glaive nuker, Blade tank, Bow nuker, Wizard, Cleric and more. Leveling never uses skills that root your character, such as Crystal Wall and Fire Wall.", "New on the Party page, off by default: \"Auto-invite players\". List the characters to invite and the bot invites them while they are in view; \"Also invite anyone nearby\" invites everyone within a radius you set. Only the party leader invites, never into a full party, never while the character is dead, and never on an account that joins a party leader. A player who does not answer is asked again after 30 seconds, then 1, 2, 4 minutes and so on, up to 10 minutes.", "Your own sound for SoX drops: \"Choose SoX sound…\" on the Loot page takes an audio file of up to 1 MB. It stays in this browser only and is never sent anywhere. \"Clear SoX sound\" brings back the built-in chime. The Star, Moon and Sun switches still decide which drops play it."]}, {"version": "2.0.8", "title": "OSB works again after the game's 2026-11-11 update", "items": ["Since the game's 2026-11-11 update, the bot stayed on \"Waiting for game world\" and did not start. The game now sends most of its updates as only the parts that changed, and OSB read each one as the whole game state. OSB now adds each update to the state it already has, so it enters the world and works as before."]}, {"version": "2.0.7", "title": "The pickup pet leaves you room, the Unique hunt knows which uniques are alive, live uniques on Setup", "items": ["With the bot stopped, the pickup pet no longer keeps your inventory locked. It waits 3 s after any click, key or scroll in the game (not in the OSB window), takes only drops within 25 m of it, keeps at most about a third of any 10 seconds for itself, and waits until a return scroll, reverse return scroll or teleport has finished. Your scrolls, potions and Item Mall work again while it collects in your pauses. New in Loot → Collection: \"Pet collects while the bot is stopped\" (on), \"Pet waits after your clicks and keys (s)\" (3) and \"Pet reach while the bot is stopped (m)\" (25).", "The Unique hunt now stops after killing its unique even when the game did not show the death in the usual way: a unique shown dead, announced as killed, or disappearing at low HP right after your hits counts as your kill. Your own hits during manual control count too.", "The bot remembers which uniques are alive or dead, from the game's announcements, what it sees and its kills. The hunt skips uniques known to be dead; when all chosen uniques are dead it stays where it is (\"Waiting: Tiger Girl was killed 12 min ago.\") and goes on when one appears again. \"Trust a unique's death for (min)\" (30) is in Combat → Unique hunt.", "At the game's unique nests the bot now looks around for about 2 seconds and moves on when no unique is there. \"Wait at each spot\" is for your own spots only and is 0 by default; settings that saved a wait keep it.", "New on the Setup page, under the Unique hunt card: the Uniques list, ordered by level, lowest first, with each state as a coloured pill (Alive green, Slain red, Not up amber, Unknown dim), the map and the nest count. The Hunt ticks choose which uniques the Unique hunt looks for, and ticking one turns on \"Patrol the game's unique nests\". Click a unique for a small map of its nests and how far the nearest one is.", "The list shows each unique once. OSB knows the 13 uniques by the game's own monster numbers, so a second monster with the same name (Cerberus, Captin Ivy) no longer adds a row or sends the patrol to the wrong spawn points; old ticks and states saved under such a copy move to the real unique. The levels of all 13 are built in, and Lord Yarkan has one more nest, from a player's report.", "New switch, off by default: \"Check the game site's unique tracker\". When you turn it on, OSB reads opensro.online/uniques at most every 2 minutes while the Setup page is open or the Unique hunt runs, without cookies and without any data about you. Only each unique's state, level and map are read, never who killed it. Until you turn it on, OSB makes no request to the game site for it."]}];
 
 // Check trusted repository metadata; never execute downloaded update code. The check sends no user data and is on by default;
 // the player can switch it off (Settings, Privacy), and then this module makes no request at all.
@@ -19402,6 +19407,7 @@ const Updates = {
 
 
 // Explicit report fields only: never export raw logs, profiles or game snapshots.
+const TOWN_PHASES = ['recall', 'recall-wait', 'revive-arrival', 'walk-arrival', 'service-wait', 'walk-storage', 'open-storage', 'store', 'close-storage', 'walk-vendor', 'open-vendor', 'buy', 'close-vendor', 'walk-smith', 'open-smith', 'sell', 'gear', 'repair', 'close-smith', 'walk-armor', 'open-armor', 'close-armor', 'walk-accessory', 'open-accessory', 'close-accessory', 'walk-gate', 'open-gate', 'mall-reverse', 'reverse', 'reverse-wait', 'leave', 'settle'];
 const Diagnostics = {
   history: [], errors: [], stops: [], last: '', started: false,
   number(value) { return Number.isFinite(value) ? value : null; },
@@ -19424,6 +19430,7 @@ const Diagnostics = {
   noteStop(source, reason) {
     const text = String(reason || '').slice(0, 160);
     this.stops.push({ at: now(), source, reason: text || 'no reason given' });
+    Diag.stop(source, text);
     if (this.stops.length > 8) this.stops.shift();
   },
   start() {
@@ -19605,7 +19612,7 @@ const Diagnostics = {
       requestRemainingMs: Number.isFinite(World.simNow()) && Number.isFinite(matching?.request?.expires) ? Math.max(0, matching.request.expires - World.simNow()) : null,
       townActive: !!Town.trip,
       levelingOn: !!c.leveling?.on, levelingMove: ['walk', 'select', 'menu', 'appoint'].includes(Leveling.move?.phase) ? Leveling.move.phase : null, levelingBuild: Leveling.build()?.key || null,
-      townPhase: ['recall', 'recall-wait', 'revive-arrival', 'walk-arrival', 'service-wait', 'walk-storage', 'open-storage', 'store', 'close-storage', 'walk-vendor', 'open-vendor', 'buy', 'close-vendor', 'walk-smith', 'open-smith', 'sell', 'gear', 'repair', 'close-smith', 'walk-armor', 'open-armor', 'close-armor', 'walk-accessory', 'open-accessory', 'close-accessory', 'walk-gate', 'open-gate', 'mall-reverse', 'reverse', 'reverse-wait', 'leave', 'settle'].includes(Town.trip?.phase) ? Town.trip.phase : null,
+      townPhase: TOWN_PHASES.includes(Town.trip?.phase) ? Town.trip.phase : null,
       scrollAttempts: this.number(Town.trip?.scrollAttempts), scrollAccepted: !!Town.trip?.scrollRequest?.accepted,
       returnScroll: !!Town.scroll(0x09ec), reverseScroll: !!Town.scroll(0x19ec),
       settings: { autoRecruit: !!c.party.autoRecruit, autoAccept: !!c.party.autoAcceptMatching,
@@ -19658,22 +19665,25 @@ const Diagnostics = {
 // Opt-in usage statistics and report delivery to api.osb.lol (protocol: docs/telemetry.md).
 // Nothing here runs in Controller.tick or the 100 ms Ticker. A setTimeout chain wakes it, the payload is copied when the
 // browser is idle, and every request is one at a time, uncredentialed, unredirected and aborted after 15 s.
-const CONSENT_VERSION = 1;
-const CONSENT_TEXT_VERSION = '2026-11-04.1';
+const CONSENT_VERSION = 2;
+const CONSENT_TEXT_VERSION = '2026-11-12.1';
 const PRIVACY_URL = 'https://osb.lol/en/privacy/';
+const KVKK_NOTICE_URL = 'https://osb.lol/kvkk/aydinlatma-metni/';
+const KVKK_CONSENT_URL = 'https://osb.lol/kvkk/acik-riza-metni/';
 const PRIVACY_CONTACT = 'privacy@osb.lol';
 const LONG_MAX = 9223372036854775807n;
 const Telemetry = {
   base: 'https://api.osb.lol/v1',
   timing: { startDelayMs: [60000, 180000], timeoutMs: 15000, minWaitMs: 60000, backoffBaseMs: 60000, backoffCapMs: 6 * 3600000, retryAfterMaxMs: 86400000,
     configEveryMs: 6 * 3600000, configStaleMs: 24 * 3600000, pauseMs: 24 * 3600000, resendMs: 3600000, disabledRecheckMs: 3600000,
-    minIntervalS: 300, maxIntervalS: 86400, defaultIntervalS: 600, cutBytes: 60 * 1024 },
+    minIntervalS: 300, maxIntervalS: 86400, defaultIntervalS: 600, cutBytes: 60 * 1024,
+    diagnostics: { minIntervalS: 600, maxIntervalS: 86400, defaultIntervalS: 600, minPerfIntervalS: 1800, maxPerfIntervalS: 86400, defaultPerfIntervalS: 1800 } },
   data: null, knownId: '', timer: 0, inFlight: false, lane: Promise.resolve(), gen: 0, failures: 0, errors: 0, off: false, halted: false,
   pausedUntil: 0, waitingForConfig: false, configDueAt: 0, configRetryAt: 0, reregistered: false, nextAfterS: 0,
-  slots: new Map(), sessions: new Map(), sentSignature: '', sentSession: '', pendingDelete: null, view: null,
+  slots: new Map(), sessions: new Map(), sentSignature: '', sentSession: '', pendingDelete: null, view: null, usageDueAt: 0, current: null, changedNow: false,
   now() { return Date.now(); },
   random() { return Math.random(); },
-  blank() { return { usage: 0, usageAt: 0, usageText: '', characters: false, charactersAt: 0, id: '', key: '', registered: false, attempted: false, synced: false, config: null, sentAt: 0, result: '' }; },
+  blank() { return { usage: 0, usageAt: 0, usageText: '', characters: false, charactersAt: 0, id: '', key: '', registered: false, attempted: false, synced: false, syncedUsage: 0, changedSeen: false, config: null, sentAt: 0, result: '' }; },
   load() {
     const saved = Store.get('telemetry', null), s = saved && typeof saved === 'object' ? saved : {}, d = this.blank();
     d.usage = Number.isInteger(s.usage) && s.usage > 0 ? s.usage : 0;
@@ -19682,22 +19692,27 @@ const Telemetry = {
     if (!d.id || !d.key) { d.id = ''; d.key = ''; d.usage = 0; }
     d.usageAt = d.usage > 0 && Number.isFinite(s.usageAt) ? s.usageAt : 0;
     d.usageText = d.usage > 0 && typeof s.usageText === 'string' ? s.usageText.slice(0, 32) : '';
-    d.characters = d.usage > 0 && s.characters === true;
+    d.characters = d.usage >= CONSENT_VERSION && s.characters === true;
     d.charactersAt = d.characters && Number.isFinite(s.charactersAt) ? s.charactersAt : 0;
     d.registered = d.usage > 0 && s.registered === true;
     d.attempted = d.usage > 0 && s.attempted === true;
     d.synced = d.registered && s.synced === true;
+    d.syncedUsage = d.registered ? Number.isInteger(s.syncedUsage) && s.syncedUsage > 0 ? s.syncedUsage : 1 : 0;
+    d.changedSeen = d.usage > 0 && s.changedSeen === true;
     d.sentAt = Number.isFinite(s.sentAt) ? s.sentAt : 0;
     d.result = ['ok', 'unreachable', 'rejected', 'paused', 'disabled'].includes(s.result) ? s.result : '';
     d.config = this.storedConfig(s.config);
     this.knownId = d.id;
-    return this.data = d;
+    this.data = d;
+    Diag.sync();
+    return d;
   },
   storedConfig(c) {
     const v = c?.value, t = this.timing;
     if (!c || !Number.isFinite(c.at) || !v?.telemetry || typeof v.telemetry.enabled !== 'boolean' || !Number.isFinite(v.telemetry.interval_s) || !v.reports || typeof v.reports.enabled !== 'boolean' || typeof v.reports.screenshots !== 'boolean') return null;
     return { at: c.at, value: { telemetry: { enabled: v.telemetry.enabled, interval_s: clamp(Math.round(v.telemetry.interval_s), t.minIntervalS, t.maxIntervalS) },
-      reports: { enabled: v.reports.enabled, screenshots: v.reports.screenshots }, client_ok: v.client_ok === true, message: typeof v.message === 'string' ? v.message.slice(0, 200) : null } };
+      reports: { enabled: v.reports.enabled, screenshots: v.reports.screenshots }, diagnostics: this.diagnosticsBlock(v.diagnostics, v.client_ok === true),
+      client_ok: v.client_ok === true, message: typeof v.message === 'string' ? v.message.slice(0, 200) : null } };
   },
   get() { return this.data || this.load(); },
   write() {
@@ -19716,6 +19731,8 @@ const Telemetry = {
   hosted() { return !!W.chrome?.webview; },
   supported() { return !!(W.crypto?.subtle && W.crypto.getRandomValues && W.fetch); },
   consented() { return this.get().usage >= CONSENT_VERSION; },
+  outdated() { const usage = this.get().usage; return usage > 0 && usage < CONSENT_VERSION; },
+  diagnosticsConfig() { const value = this.configUsable(); return value?.diagnostics?.enabled ? value.diagnostics : null; },
   active() { return this.consented() && !this.hosted() && !this.off && !this.halted && this.supported(); },
   os() {
     const platform = String(W.navigator?.userAgentData?.platform || W.navigator?.platform || '').toLowerCase();
@@ -19737,19 +19754,19 @@ const Telemetry = {
   newIdentity() {
     const d = this.get();
     d.id = this.uuid(); d.key = this.base64url(this.bytes(32));
-    d.registered = false; d.attempted = false; d.synced = false;
+    d.registered = false; d.attempted = false; d.synced = false; d.syncedUsage = 0;
     this.slots.clear();
   },
   resetRun() {
     this.failures = 0; this.halted = false; this.pausedUntil = 0; this.waitingForConfig = false; this.configDueAt = 0; this.configRetryAt = 0;
-    this.reregistered = false; this.nextAfterS = 0; this.sentSignature = ''; this.sentSession = ''; this.sessions.clear(); this.slots.clear();
+    this.reregistered = false; this.nextAfterS = 0; this.sentSignature = ''; this.sentSession = ''; this.sessions.clear(); this.slots.clear(); this.usageDueAt = 0;
   },
   // ---- Fail-safe: a bug here is counted, three of them switch the module off for this page, and the bot never notices.
   fault() {
     this.errors++;
     if (this.errors < 3 || this.off) return;
     this.off = true; this.cancel();
-    Log.warn('Usage statistics stopped for this page after repeated errors. Reload the game to try again.');
+    Diag.silently(() => Log.warn('Usage statistics stopped for this page after repeated errors. Reload the game to try again.'));
   },
   guard(fn, fallback) { try { return fn(); } catch { this.fault(); return fallback; } },
   async guardAsync(fn, fallback) { try { return await fn(); } catch { this.fault(); return fallback; } },
@@ -19767,10 +19784,11 @@ const Telemetry = {
   },
   enable() {
     if (!this.supported() || this.hosted() || this.consented()) return false;
-    const d = this.get();
-    this.gen++; this.cancel(); this.resetRun();
+    const d = this.get(), reuse = this.outdated() && !!d.id && !!d.key;
+    this.gen++; this.cancel(); this.abortBackground(); this.resetRun(); Diag.reset();
     d.usage = CONSENT_VERSION; d.usageAt = this.now(); d.usageText = CONSENT_TEXT_VERSION; d.characters = false; d.charactersAt = 0; d.sentAt = 0; d.result = ''; this.pendingDelete = null;
-    this.newIdentity(); this.write();
+    if (reuse) this.slots.clear(); else this.newIdentity();
+    this.write(); Diag.sync();
     this.schedule(this.startDelay());
     return true;
   },
@@ -19783,7 +19801,9 @@ const Telemetry = {
       return true;
     }, false);
   },
-  auth() { const d = this.get(); return !this.hosted() && d.registered && d.id && d.key ? `Bearer osb1.${d.id}.${d.key}` : ''; },
+  credential() { const d = this.get(); return !this.hosted() && d.id && d.key ? `Bearer osb1.${d.id}.${d.key}` : ''; },
+  auth() { return this.consented() && this.get().registered ? this.credential() : ''; },
+  abortBackground() { this.current?.abort(); },
   // ---- Network: one request at a time, never throws.
   request(options) {
     const run = () => this.send(options);
@@ -19791,9 +19811,9 @@ const Telemetry = {
     this.lane = next.then(() => {}, () => {});
     return next;
   },
-  async send({ path, method = 'GET', body, auth = '' }) {
+  async send({ path, method = 'GET', body, auth = '', background = false }) {
     const abort = new AbortController(), timer = setTimeout(() => abort.abort(), this.timing.timeoutMs);
-    this.inFlight = true;
+    this.inFlight = true; this.current = background ? abort : null;
     try {
       const init = { method, credentials: 'omit', referrerPolicy: 'no-referrer', redirect: 'error', cache: 'no-store', signal: abort.signal };
       const headers = {};
@@ -19813,7 +19833,7 @@ const Telemetry = {
     } catch {
       return { ok: false, status: 0, network: true };
     } finally {
-      clearTimeout(timer); this.inFlight = false;
+      clearTimeout(timer); this.inFlight = false; this.current = null;
     }
   },
   // ---- Scheduling
@@ -19860,17 +19880,25 @@ const Telemetry = {
     if (!this.active()) return;
     if (this.inFlight) return this.schedule(this.timing.minWaitMs);
     const gen = this.gen;
-    let wait;
     try {
       this.load();
       if (!this.active()) return;
-      wait = await this.step(gen);
+      if (this.now() >= this.usageDueAt) {
+        const wait = await this.step(gen);
+        if (gen !== this.gen) return;
+        this.usageDueAt = this.now() + wait;
+      }
+      if (this.active() && this.now() >= Diag.job.dueAt) {
+        const wait = await this.diagStep(gen);
+        if (gen !== this.gen) return;
+        Diag.job.dueAt = this.now() + wait;
+      }
     } catch {
-      this.fault(); wait = this.backoff();
+      this.fault(); this.usageDueAt = this.now() + this.backoff();
     }
     if (gen !== this.gen || !this.active()) return;
     this.persist();
-    this.schedule(wait);
+    this.schedule(Math.min(this.usageDueAt, Diag.job.dueAt) - this.now());
   },
   // One pass: config, registration, consent sync, then one snapshot. Returns the wait before the next pass.
   async step(gen) {
@@ -19893,15 +19921,15 @@ const Telemetry = {
       if (gen !== this.gen) return 0;
       if (!r.ok) return this.registrationFailed(r);
     }
-    if (this.get().synced !== this.get().characters) {
+    if (this.unsynced()) {
       const r = await this.syncConsent(gen);
       if (gen !== this.gen) return 0;
-      if (!r.ok) return r.status === 401 ? this.unauthorised() : this.failureWait(r);
+      if (!r.ok) return r.status === 401 || r.status === 404 ? this.unauthorised() : this.failureWait(r);
     }
     const built = await this.compose();
     if (gen !== this.gen) return 0;
     if (!built) return this.interval();
-    const r = await this.request({ path: '/telemetry', method: 'POST', body: built.text, auth: this.auth() });
+    const r = await this.request({ path: '/telemetry', method: 'POST', body: built.text, auth: this.auth(), background: true });
     if (gen !== this.gen) return 0;
     if (r.ok) return this.delivered(built, r);
     if (r.status === 401) return this.unauthorised();
@@ -19917,6 +19945,15 @@ const Telemetry = {
     const c = this.get().config;
     return c && this.now() - c.at < this.timing.configStaleMs ? c.value : null;
   },
+  diagnosticsBlock(block, clientOk) {
+    const t = this.timing.diagnostics, b = block && typeof block === 'object' ? block : null;
+    const seconds = (value, low, high, fallback) => Number.isFinite(value) ? clamp(Math.round(value), low, high) : fallback;
+    if (!b || typeof b.enabled !== 'boolean') return { enabled: false, perf: false, interval_s: t.defaultIntervalS, perf_interval_s: t.defaultPerfIntervalS, sample_pct: 100 };
+    return { enabled: b.enabled && clientOk, perf: b.enabled && clientOk && b.perf === true,
+      interval_s: seconds(b.interval_s, t.minIntervalS, t.maxIntervalS, t.defaultIntervalS),
+      perf_interval_s: seconds(b.perf_interval_s, t.minPerfIntervalS, t.maxPerfIntervalS, t.defaultPerfIntervalS),
+      sample_pct: Number.isFinite(b.sample_pct) ? clamp(Math.round(b.sample_pct), 0, 100) : 100 };
+  },
   parseConfig(body) {
     if (!body || typeof body !== 'object' || body.schema !== 1) return null;
     const t = body.telemetry, r = body.reports;
@@ -19924,14 +19961,16 @@ const Telemetry = {
     const seconds = Number.isFinite(t.interval_s) ? Math.round(t.interval_s) : this.timing.defaultIntervalS;
     const message = typeof body.message === 'string' ? Array.from(body.message).filter(c => { const n = c.codePointAt(0); return n >= 32 && n !== 127 && !(n >= 128 && n < 160); }).slice(0, 200).join('').trim() : '';
     return { telemetry: { enabled: t.enabled && body.client_ok, interval_s: clamp(seconds, this.timing.minIntervalS, this.timing.maxIntervalS) },
-      reports: { enabled: r.enabled && body.client_ok, screenshots: r.enabled && body.client_ok && r.screenshots === true }, client_ok: body.client_ok, message: message || null };
+      reports: { enabled: r.enabled && body.client_ok, screenshots: r.enabled && body.client_ok && r.screenshots === true },
+      diagnostics: this.diagnosticsBlock(body.diagnostics, body.client_ok), client_ok: body.client_ok, message: message || null };
   },
   async readConfig() {
-    const r = await this.request({ path: '/config?app=osb&version=' + encodeURIComponent(VERSION) });
+    const r = await this.request({ path: '/config?app=osb&version=' + encodeURIComponent(VERSION), background: this.consented() });
     const value = r.ok ? this.parseConfig(r.body) : null;
     if (!value) return r.ok ? { ...r, ok: false, malformed: true } : r;
     this.get().config = { at: this.now(), value };
-    this.waitingForConfig = false; this.configRetryAt = 0;
+    this.waitingForConfig = false; this.configRetryAt = 0; Diag.job.waitingForConfig = false;
+    Diag.sync();
     if (this.consented()) this.persist();
     return { ...r, config: value };
   },
@@ -19947,9 +19986,9 @@ const Telemetry = {
     d.attempted = true; this.persist();
     const body = JSON.stringify({ install_id: d.id, install_key: d.key, app: 'osb', app_version: VERSION, os: this.os(), locale: this.locale(),
       consent: { usage_version: d.usage, characters: d.characters } });
-    const sent = d.characters;
-    const r = await this.request({ path: '/installs', method: 'POST', body });
-    if (r.ok && gen === this.gen) { const now = this.get(); now.registered = true; now.synced = sent; this.failures = 0; this.persist(); }
+    const sent = d.characters, usage = d.usage;
+    const r = await this.request({ path: '/installs', method: 'POST', body, background: true });
+    if (r.ok && gen === this.gen) { const now = this.get(); now.registered = true; now.synced = sent; now.syncedUsage = usage; this.failures = 0; this.persist(); }
     return r;
   },
   registrationFailed(r) {
@@ -19964,12 +20003,13 @@ const Telemetry = {
     this.reregistered = true; d.registered = false;
     return this.jitter(this.timing.minWaitMs);
   },
+  unsynced() { const d = this.get(); return d.synced !== d.characters || d.syncedUsage !== d.usage; },
   async syncConsent(gen) {
     const d = this.get();
-    if (!d.registered || d.synced === d.characters) return { ok: true };
-    const sent = d.characters;
-    const r = await this.request({ path: '/installs/me/consent', method: 'PUT', body: JSON.stringify({ usage_version: d.usage, characters: sent }), auth: this.auth() });
-    if (r.ok && gen === this.gen) { this.get().synced = sent; this.persist(); }
+    if (!d.registered || !this.unsynced()) return { ok: true };
+    const sent = d.characters, usage = d.usage;
+    const r = await this.request({ path: '/installs/me/consent', method: 'PUT', body: JSON.stringify({ usage_version: usage, characters: sent }), auth: this.auth(), background: true });
+    if (r.ok && gen === this.gen) { const now = this.get(); now.synced = sent; now.syncedUsage = usage; this.persist(); }
     return r;
   },
   delivered(built, r) {
@@ -19979,6 +20019,60 @@ const Telemetry = {
     this.failures = 0; this.reregistered = false;
     this.sentSignature = built.signature; this.sentSession = built.sessionSignature;
     return this.interval();
+  },
+  diagInterval(config) {
+    const seconds = Math.max(config?.interval_s ?? this.timing.diagnostics.defaultIntervalS, Diag.job.nextAfterS);
+    return this.jitter(seconds * 1000);
+  },
+  diagBackoff() {
+    const t = this.timing, job = Diag.job;
+    job.failures++;
+    return Math.max(t.minWaitMs, this.random() * Math.min(t.backoffCapMs, t.backoffBaseMs * 2 ** job.failures));
+  },
+  async diagStep(gen) {
+    const t = this.timing, job = Diag.job, d = this.get();
+    if (Diag.off || job.halted) return Infinity;
+    if (this.now() < job.pausedUntil) return job.pausedUntil - this.now();
+    if (job.waitingForConfig) {
+      if (this.now() < job.configDueAt) return job.configDueAt - this.now();
+      const r = await this.readConfig();
+      if (gen !== this.gen) return 0;
+      if (!r.ok) return this.diagBackoff();
+    }
+    const config = this.diagnosticsConfig();
+    if (!config) return this.jitter(Math.max(t.minWaitMs, this.configAge(t.configEveryMs)));
+    if (!d.registered || this.unsynced()) return this.jitter(t.minWaitMs);
+    const built = await Diag.compose(config);
+    if (gen !== this.gen) return 0;
+    if (!built) return this.diagInterval(config);
+    const r = await this.request({ path: '/diagnostics', method: 'POST', body: built.text, auth: this.auth(), background: true });
+    if (gen !== this.gen) return 0;
+    if (r.ok) {
+      const next = Number(r.body?.next_after_s);
+      job.nextAfterS = Number.isFinite(next) ? clamp(next, 0, t.diagnostics.maxIntervalS) : 0;
+      Diag.delivered(built); job.failures = 0; job.sentAt = this.now(); job.result = 'ok';
+      return this.diagInterval(config);
+    }
+    if (r.status === 401) { this.usageDueAt = 0; return this.unauthorised(); }
+    if (r.status === 403 && r.code === 'consent_required') {
+      if (job.consentRetried) { job.halted = true; job.result = 'rejected'; return Infinity; }
+      job.consentRetried = true;
+      d.syncedUsage = 0;
+      const sync = await this.syncConsent(gen);
+      if (gen !== this.gen) return 0;
+      return sync.ok ? this.diagInterval(config) : this.diagBackoff();
+    }
+    if (r.status === 403) { job.result = 'paused'; job.pausedUntil = this.now() + t.pauseMs; return t.pauseMs; }
+    if (r.network || r.status >= 500 && r.status !== 503) { job.result = 'unreachable'; return this.diagBackoff(); }
+    if (r.status === 429) return clamp(r.retryAfterMs ?? this.diagBackoff(), t.minWaitMs, t.retryAfterMaxMs);
+    if (r.status === 503) {
+      const wait = clamp(r.retryAfterMs ?? this.diagBackoff(), t.minWaitMs, t.retryAfterMaxMs);
+      if (r.code !== 'disabled') return wait;
+      job.result = 'disabled'; job.waitingForConfig = true; job.configDueAt = this.now() + Math.max(t.disabledRecheckMs, wait);
+      return job.configDueAt - this.now();
+    }
+    Diag.delivered(built, { remember: false }); job.result = 'rejected';
+    return this.diagInterval(config);
   },
   // ---- Payload
   idle(fn) {
@@ -20075,10 +20169,10 @@ const Telemetry = {
   },
   // ---- Withdrawal and export
   async deleteData() {
-    const d = this.get(), id = d.id, auth = d.registered ? this.auth() : d.attempted && id && d.key ? `Bearer osb1.${id}.${d.key}` : '';
+    const d = this.get(), id = d.id, auth = d.registered || d.attempted ? this.credential() : '';
     const wasOn = d.usage > 0;
-    this.gen++; this.cancel(); this.resetRun();
-    this.data = this.blank(); this.write();
+    this.gen++; this.cancel(); this.abortBackground(); this.resetRun(); Diag.reset();
+    this.data = this.blank(); this.write(); Diag.sync();
     this.pendingDelete = null;
     if (!wasOn || !auth) return true;
     const r = await this.request({ path: '/installs/me', method: 'DELETE', auth });
@@ -20089,14 +20183,14 @@ const Telemetry = {
   async download() {
     const d = this.get();
     if (!d.registered) return { ok: false, text: 'Nothing has been sent from this install, so there is no data to download.' };
-    const r = await this.request({ path: '/installs/me/export', auth: this.auth() });
+    const r = await this.request({ path: '/installs/me/export', auth: this.credential() });
     if (r.ok) return { ok: true, id: d.id, data: r.text };
     return { ok: false, text: r.network ? 'The server could not be reached. Try again later.' : 'The server did not return your data. Try again later, or write to ' + PRIVACY_CONTACT + '.' };
   },
   status() {
     const d = this.get();
-    return { hosted: this.hosted(), supported: this.supported(), usage: this.consented(), characters: d.characters, id: d.id, sentAt: d.sentAt, result: d.result,
-      message: d.config?.value.message || '', off: this.off, halted: this.halted, pendingDelete: this.pendingDelete };
+    return { hosted: this.hosted(), supported: this.supported(), usage: this.consented(), outdated: this.outdated(), characters: d.characters, id: d.id, sentAt: d.sentAt, result: d.result,
+      message: d.config?.value.message || '', off: this.off, halted: this.halted, pendingDelete: this.pendingDelete, diagnostics: Diag.status() };
   },
   // ---- Settings section
   lastSentText() {
@@ -20109,7 +20203,7 @@ const Telemetry = {
     const v = this.view;
     if (!v || !v.box.isConnected) return;
     const s = this.status();
-    v.id.textContent = s.id ? 'Install ID: ' + s.id : 'Install ID: none (nothing is sent while usage statistics are off).';
+    v.id.textContent = s.id ? 'Install ID: ' + s.id : 'Install ID: none (nothing is sent while sharing is off).';
     v.copy.hidden = !s.id;
     v.sent.textContent = s.hosted ? '' : this.lastSentText();
     v.message.textContent = s.message;
@@ -20119,10 +20213,18 @@ const Telemetry = {
     const characters = v.characters.querySelector('input');
     if (characters) characters.disabled = !s.usage;
   },
-  link() {
-    const a = el('a', 'Privacy policy');
-    a.href = PRIVACY_URL; a.target = '_blank'; a.rel = 'noopener noreferrer';
+  link(text = 'Privacy policy', url = PRIVACY_URL) {
+    const a = el('a', text);
+    a.href = url; a.target = '_blank'; a.rel = 'noopener noreferrer';
     return a;
+  },
+  links() { return UI.row(this.link(), this.link('KVKK notice (Turkish)', KVKK_NOTICE_URL), this.link('KVKK explicit consent (Turkish)', KVKK_CONSENT_URL)); },
+  changed() {
+    const d = this.get();
+    if (!this.outdated()) return false;
+    if (d.changedSeen) return this.changedNow;
+    d.changedSeen = true; this.changedNow = true; this.write();
+    return true;
   },
   // A consent can only be given or withdrawn by a real click: a script-made event changes nothing.
   toggle(title, get, set) {
@@ -20141,23 +20243,37 @@ const Telemetry = {
       el('p', 'Only if you turn on "Use the game site\'s unique tracker" (Combat, Unique hunt, or the Setup page\'s Uniques list; it is off by default), OSB reads the game site\'s unique tracker (opensro.online/uniques) while the unique hunt runs or the Setup page is shown, at most every 2 minutes, without cookies and without any data about you. With it off OSB makes no such request.', 'muted'));
     return box;
   },
+  helpText() {
+    const box = el('div', null, 'muted'), list = el('ul');
+    list.append(el('li', 'Usage: the app and bot version, operating system and language, and for each game account the bot state, level, gold, HP and MP percentage, scroll counts and the current session\'s kills, deaths, XP, gold and SoX drops.'),
+      el('li', 'Errors: which part of OSB failed and how (the error type, a fixed message and the place in our code), why the bot stopped by itself, the game phase and what the bot did just before (fixed event codes, never the text of your log).'),
+      el('li', 'Performance: how long the bot\'s steps take and the page\'s memory use, with the OSB version.'));
+    box.append(el('p', 'When this is on, OSB sends data to our server, api.osb.lol, about every 10 minutes, so we can see how OSB is used and find and fix its errors:'), list,
+      el('p', 'Unless you also turn on character names below, it contains no character, player or account names. It never contains chat, positions, passwords, login IDs, file paths, your computer\'s name, hardware IDs or memory dumps. It is kept under a random install ID that is not linked to your name, login ID or computer. We keep usage data for 45 days, error data for 30 days and performance data for 14 days, and the install record for 90 days after it was last seen. Daily totals without the install ID are kept for 13 months. Turn it off at any time; your data on our server is then deleted, except those daily totals, which cannot identify you. Details: osb.lol/privacy'));
+    return box;
+  },
   draw(host) {
     const note = text => el('p', text, 'muted');
     if (this.hosted()) {
-      host.append(UI.group('Privacy', note('Usage statistics are handled by OSB Manager. OSB sends none itself.'), note('A report you send from OSB goes straight to api.osb.lol, and only when you press Send and confirm.'), this.updateSwitch(), this.link()));
+      host.append(UI.group('Privacy', note('Usage statistics, error reports and performance data are handled by OSB Manager. OSB sends none itself.'), note('A report you send from OSB goes straight to api.osb.lol, and only when you press Send and confirm.'), this.updateSwitch(), this.links()));
       return;
     }
     const stop = el('div', null, 'row'); stop.hidden = true;
-    stop.append(el('span', 'Stop sharing and delete your usage data from api.osb.lol? Reports you already sent are deleted too.'),
+    stop.append(el('span', 'Stop sharing usage statistics, error reports and performance data, and delete them from api.osb.lol? Reports you already sent are deleted too.'),
       UI.button('Yes, stop and delete', event => { if (event?.isTrusted !== true) return; stop.hidden = true; void this.setUsage(false); UI.draw(); }),
       UI.button('Cancel', () => { stop.hidden = true; }));
-    const usage = this.toggle('Share usage statistics', () => this.consented(), v => { if (v) { void this.setUsage(true); UI.draw(); } else stop.hidden = false; });
+    const usage = this.toggle('Share usage statistics, error reports and performance data', () => this.consented(), v => { if (v) { void this.setUsage(true); UI.draw(); } else stop.hidden = false; });
+    const changed = el('p', null, 'muted'); changed.hidden = !this.changed();
+    changed.append(el('strong', 'Changed'), el('span', ' The text of this switch changed: it now also covers error reports and performance data. Switch it on again if you want to share.'));
     const characters = this.toggle('Show my characters in the OSB dashboard', () => this.get().characters, v => { this.setCharacters(v); });
     const shown = el('textarea'); shown.readOnly = true; shown.rows = 10; shown.hidden = true; shown.setAttribute('aria-label', 'What is sent');
+    const errors = el('textarea'); errors.readOnly = true; errors.rows = 10; errors.hidden = true; errors.setAttribute('aria-label', 'Error reports waiting to be sent');
     const show = UI.button('Show what is sent', async () => {
-      if (!shown.hidden) { shown.hidden = true; return; }
-      shown.value = (this.consented() ? '' : 'Nothing is sent while usage statistics are off. This is what would be sent (the slot is a placeholder):\n') + await this.preview();
-      shown.hidden = false;
+      if (!shown.hidden) { shown.hidden = true; errors.hidden = true; return; }
+      shown.value = (this.consented() ? '' : 'Nothing is sent while sharing is off. This is what would be sent (the slot is a placeholder):\n') + await this.preview();
+      const batch = await Diag.preview();
+      errors.value = batch || (this.consented() ? 'No error reports are waiting to be sent.' : 'No error reports are recorded while sharing is off.');
+      shown.hidden = false; errors.hidden = false;
     });
     const download = UI.button('Download my data', async () => {
       const r = await this.download();
@@ -20168,7 +20284,7 @@ const Telemetry = {
     });
     const sure = el('div', null, 'row'); sure.hidden = true;
     const ask = UI.button('Delete my data', event => { if (event?.isTrusted === true) sure.hidden = false; });
-    sure.append(el('span', 'Delete all data for this install from api.osb.lol, including reports linked to it? This cannot be undone.'),
+    sure.append(el('span', 'Delete all data for this install from api.osb.lol, including linked reports, error reports and performance data? Sharing is turned off. This cannot be undone.'),
       UI.button('Yes, delete', event => { if (event?.isTrusted !== true) return; sure.hidden = true; void this.setUsage(false); UI.draw(); }),
       UI.button('Cancel', () => { sure.hidden = true; }));
     const id = el('span'), copy = UI.button('Copy install ID', async () => {
@@ -20178,13 +20294,702 @@ const Telemetry = {
     failed.hidden = true;
     const sent = el('p', '', 'muted'), message = el('p', '', 'muted');
     const box = UI.group('Privacy',
-      usage, stop, note('When this is on, OSB sends a short status report about every 10 minutes to our server, api.osb.lol: the app and bot version, operating system, language, and for each game account the bot state, level, gold, HP and MP percentage, scroll counts and the current session’s kills, deaths, XP, gold and SoX drops. It is linked to a random install ID, not to your login ID, password or computer. We use it to see how OSB is used and where it gets stuck, and keep it for 45 days (the install record for 90 days after it was last seen). Turn it off at any time; your data on our server is then deleted. Details: osb.lol/privacy'),
+      usage, changed, stop, this.helpText(), this.links(),
       characters, note('Also sends your character names and server names, so the OSB team can see your characters by name in its private dashboard. Never shown publicly. Turning this off deletes the names at once.'),
-      UI.row(show, download, ask), sure, shown, failed, sent, message, UI.row(id, copy), this.updateSwitch(), this.link());
+      UI.row(show, download, ask), sure, shown, errors, failed, sent, message, UI.row(id, copy), this.updateSwitch());
     this.view = { box, id, copy, sent, message, failed, characters };
     host.append(box);
     UI.refreshers.push(() => this.refreshView());
     this.refreshView();
+  },
+};
+
+
+const DIAG_LIMIT = { inbox: 32, trail: 20, trailMs: 600000, frames: 16, fingerprintFrames: 5, perHour: 30, perDay: 200, batchEvents: 50, perfEntries: 2,
+  eventBytes: 4096, cutBytes: 60 * 1024, maxBytes: 64 * 1024, terms: 2000, termMin: 3, sameFingerprintMs: 3600000, count: 100000, messageChars: 300, templateChars: 160, faults: 3 };
+const DIAG_HOSTED = { events: 10, bytes: 12 * 1024, perfBytes: 2048, everyMs: 60000, batchType: 'osb-diagnostics-batch', perfType: 'osb-diagnostics-perf', switchType: 'osb-diagnostics' };
+const DIAG_CODE = /^[a-z0-9][a-z0-9_.:-]{0,63}$/;
+const DIAG_RESERVED_FP = '0000000000000000';
+const DIAG_WIRE_TEXT = /[\u0000-\u001f\u007f-\u009f\ud800-\udfff]/;
+const DIAG_FRAME = /^[A-Za-z_$<?][A-Za-z0-9_$<>.+-]{0,95}(@[0-9]{1,7}:[0-9]{1,5})?$/;
+const DIAG_ENGINE_ERRORS = new Set(['TypeError', 'RangeError', 'ReferenceError', 'SyntaxError', 'URIError', 'EvalError', 'AggregateError', 'DOMException']);
+const DIAG_ENGINE_WORDS = [
+  'a', 'abort', 'aborted', 'about', 'access', 'accessed', 'accessor', 'accessors', 'activation', 'adapter', 'after', 'aggregateerror', 'all',
+  'allocation', 'allowed', 'already', 'ambiguous', 'an', 'and', 'any', 'apply', 'are', 'argument', 'arguments', 'array', 'arraybuffer', 'arrays',
+  'arrow', 'as', 'assign', 'assigned', 'assignment', 'async', 'at', 'atomics', 'attempt', 'attempting', 'attribute', 'audio', 'await', 'be',
+  'because', 'been', 'before', 'between', 'bigint', 'binary', 'bind', 'binding', 'bindings', 'blocked', 'body', 'boolean', 'bounds', 'brace',
+  'bracket', 'brand', 'break', 'buffer', 'but', 'by', 'byte', 'bytes', 'call', 'callable', 'callback', 'called', 'calling', 'can', 'cannot',
+  'canvas', 'case', 'catch', 'chain', 'chaining', 'channel', 'character', 'characters', 'check', 'child', 'circle', 'circular', 'class', 'classes',
+  'clone', 'cloned', 'closed', 'closes', 'coalescing', 'code', 'codec', 'colon', 'column', 'comma', 'compilation', 'compile', 'computed',
+  'configurable', 'const', 'constant', 'constraint', 'construct', 'constructor', 'constructors', 'context', 'continue', 'conversion', 'conversions',
+  'convert', 'converting', 'could', 'create', 'created', 'cross', 'currency', 'cyclic', 'data', 'database', 'dataview', 'date', 'decimal',
+  'declaration', 'declare', 'declared', 'decode', 'decoding', 'default', 'define', 'defined', 'delete', 'deleted', 'denied', 'derived', 'descriptor',
+  'descriptors', 'deserialize', 'destroyed', 'destructure', 'detached', 'device', 'did', 'different', 'digits', 'do', 'document', 'does',
+  'domexception', 'duplicate', 'dynamic', 'each', 'element', 'elements', 'else', 'empty', 'enclosing', 'encode', 'encoding', 'end', 'enumerable',
+  'enumerate', 'equal', 'error', 'errors', 'escape', 'evalerror', 'every', 'exceeded', 'exception', 'exclusive', 'execute', 'executed', 'expect',
+  'expected', 'expects', 'explicit', 'exponent', 'export', 'exported', 'expression', 'expressions', 'extensible', 'fail', 'failed', 'failure',
+  'false', 'fetch', 'few', 'field', 'fields', 'finally', 'finished', 'finite', 'first', 'flag', 'flags', 'for', 'format', 'found', 'frame', 'freeze',
+  'from', 'frozen', 'fullscreen', 'function', 'functions', 'generator', 'generators', 'gesture', 'get', 'getter', 'global', 'gpu', 'greater',
+  'group', 'had', 'hand', 'handled', 'handler', 'has', 'have', 'hexadecimal', 'hierarchy', 'how', 'identifier', 'if', 'illegal', 'implemented',
+  'import', 'imported', 'in', 'inactive', 'inclusive', 'incompatible', 'index', 'indices', 'indirect', 'infinite', 'infinity', 'initial',
+  'initialization', 'initialized', 'input', 'insecure', 'inside', 'instance', 'instanceof', 'instances', 'integer', 'intl', 'into', 'invalid',
+  'invocation', 'invoke', 'invoked', 'is', 'it', 'iterable', 'iterator', 'iterators', 'its', 'itself', 'json', 'key', 'keys', 'kind', 'know',
+  'label', 'large', 'last', 'left', 'left-hand', 'length', 'less', 'let', 'lexical', 'line', 'link', 'linking', 'list', 'literal', 'literals',
+  'load', 'loaded', 'loading', 'locale', 'lock', 'long', 'lookup', 'loop', 'lost', 'malformed', 'many', 'map', 'math', 'maximum', 'may', 'media',
+  'member', 'memory', 'message', 'method', 'methods', 'minimum', 'missing', 'mix', 'mode', 'module', 'modules', 'more', 'must', 'named', 'namespace',
+  'namespaces', 'nan', 'negative', 'network', 'new', 'new.target', 'newline', 'next', 'no', 'node', 'none', 'not', 'null', 'nullish', 'number',
+  'numbers', 'numeric', 'object', 'objects', 'octal', 'of', 'offset', 'old', 'on', 'one', 'only', 'open', 'opened', 'operand', 'operation',
+  'operations', 'operator', 'option', 'optional', 'options', 'or', 'origin', 'other', 'out', 'outside', 'own', 'parameter', 'parameters', 'parent',
+  'parenthesis', 'parse', 'parsed', 'parsing', 'pass', 'passed', 'paused', 'pending', 'per', 'permission', 'permitted', 'pipeline', 'play', 'point',
+  'pointer', 'port', 'position', 'positive', 'postmessage', 'precision', 'previous', 'primitive', 'private', 'promise', 'promises', 'properties',
+  'property', 'prototype', 'provide', 'provided', 'provides', 'proxy', 'quantifier', 'queue', 'quota', 'quote', 'radix', 'range', 'rangeerror',
+  'read', 'read-only', 'reading', 'readonly', 'received', 'receiver', 'recursion', 'redeclaration', 'redefine', 'reduce', 'referenceerror',
+  'reflect', 'regexp', 'regular', 'reject', 'rejected', 'rejection', 'request', 'requested', 'require', 'requires', 'resolution', 'resolve',
+  'resolved', 'resolver', 'response', 'rest', 'result', 'return', 'revoked', 'right', 'right-hand', 'running', 'runtime', 'same', 'scope', 'sealed',
+  'search', 'secure', 'security', 'selector', 'semicolon', 'separator', 'separators', 'sequence', 'serializable', 'serialize', 'set', 'setter',
+  'setting', 'shader', 'sharedarraybuffer', 'short', 'should', 'side', 'size', 'slash', 'sloppy', 'small', 'so', 'some', 'source', 'spread', 'stack',
+  'star', 'starting', 'state', 'statement', 'statements', 'static', 'storage', 'strict', 'string', 'stringify', 'strings', 'structure', 'submit',
+  'such', 'super', 'supplied', 'supported', 'switch', 'symbol', 'symbols', 'syntax', 'syntaxerror', 'table', 'tagged', 'target', 'template',
+  'texture', 'than', 'that', 'the', 'then', 'there', 'this', 'three', 'throw', 'thrown', 'time', 'timed', 'timeout', 'to', 'token', 'tokens', 'too',
+  'track', 'trailing', 'transaction', 'transfer', 'transferable', 'trap', 'true', 'try', 'two', 'type', 'typedarray', 'typeerror', 'typeof', 'types',
+  'undefined', 'unexpected', 'unhandled', 'uninitialized', 'unit', 'unknown', 'unreachable', 'unsupported', 'unterminated', 'upon', 'uri',
+  'urierror', 'url', 'use', 'user', 'using', 'valid', 'validation', 'value', 'values', 'var', 'variable', 'variables', 'version', 'via', 'video',
+  'was', 'wasm', 'weakmap', 'weakref', 'weakset', 'webassembly', 'webgl', 'webgpu', 'when', 'where', 'which', 'while', 'whitespace', 'whose', 'will',
+  'window', 'with', 'within', 'without', 'worker', 'worklet', 'writable', 'yet', 'yield', 'zero', 'zone'
+];
+const DIAG_ENGINE_WORD_SET = new Set(DIAG_ENGINE_WORDS);
+const DIAG_WORD_LIST = ["$","A","AA","ABNORMAL_NAMES","ACTIVITY_CATEGORIES","ACTIVITY_DETAIL_KEYS","ACTIVITY_LIMIT","ALCHEMY_DATA","ALCHEMY_MAX_ATTEMPTS","APP","ATTRIBUTES","ATTRIBUTE_LABEL","ATTRIBUTE_STEPS","AUTO_START_GIVE_UP_MS","AUTO_START_NAV_MS","AUTO_START_SETTLE_MS","AVOID_AHEAD","AVOID_MS","AVOID_RADIUS","AXE","AbortController","Activity","Alchemy","AntiStuck","Array","ArrayBuffer","Assets","AudioContext","Authorization","AutoMastery","AutoStart","BA","BALANCE_EXACT","BLADE","BONELORD","BOW","BUFF_COMBAT_HOLD_MS","BUFF_COMBAT_RETRY_MS","BUFF_GEAR_KINDS","BUFF_MISSING_MS","BUFF_MOVE_COUNTED_MS","BUFF_MOVE_REFUSED_MS","BUFF_MOVE_TOTAL_MS","BUFF_MOVE_WATCH_MS","BUFF_PAIR_MAX","BUFF_PAIR_WINDOW_MS","BUFF_RUN_BUDGET_MS","BUFF_SETTLE_MS","BUILDS","BUILD_BLOCKED_GROUPS","BUILD_SKILLS","BigInt","Blob","Boolean","BuffGear","C","CA","CAVE_FEATURES","CH","CHASE_LIMIT","CHASE_OBSERVE_MS","CHECK_AROUND","CHECK_CELL","CHECK_LOAD_MS","CHECK_MS","CHECK_NODES","CHECK_REACH","CHECK_REGIONS","CHECK_ROUNDS","CHECK_SLICE_IDLE_MS","CHECK_SLICE_MS","CH_M","CH_W","CLASS_KEYS","CLASS_MODES","CLASS_MODE_NAMES","CLASS_MODE_TIPS","CLASS_TIER","CLIP_CELL","CLIP_CPU_MS","CLIP_FAILED_MS","CLIP_GREED","CLIP_LEVEL","CLIP_MAX_CHORD","CLIP_MAX_NODES","CLIP_PENDING","CLIP_REACHED","CLIP_SLICE_MS","CLOTHES","CONSENT_TEXT_VERSION","CONSENT_VERSION","CROSSBOW","CURABLE_MASK","Chase","ClipRoute","Cmd","Combat","CompressionStream","Controller","DAGGER","DARKSTAFF","DEFAULT_PROFILE","DELAYS","DIAG_CODE","DIAG_DETAIL_FLAGS","DIAG_DETAIL_NUMBERS","DIAG_ENGINE_ERRORS","DIAG_ENGINE_WORDS","DIAG_ENGINE_WORD_SET","DIAG_FRAME","DIAG_HOSTED","DIAG_KNOWN_WORDS","DIAG_LIMIT","DIAG_MODES","DIAG_OUTCOMES","DIAG_PHASES","DIAG_QUIET_STOPS","DIAG_REFUSAL_REASONS","DIAG_REFUSAL_SOURCES","DIAG_RESERVED_FP","DIAG_TEMPLATE_WORD","DIAG_WIRE_TEXT","DIAG_WORD_LIST","DOMParser","DUNGEON","DUNGEON_REGION_BIT","DataView","Date","DecompressionStream","Diag","Diagnostics","Display","EARRING","EMERGENCY_DEFAULT","EMERGENCY_LIMITS","EMERGENCY_LOG_MS","EMERGENCY_MAX","EMERGENCY_RETRY_MS","EMERGENCY_TRIGGERS","EQUIP_MARGIN","EU","EUSWORD","EU_M","EU_W","EXPIRED_WAIT_MS","Emergency","Emitter","Equip","Error","FA","FLAT_NODES_WITH_CLIPPER","FORT","FileReader","Float32Array","Float64Array","FormData","GAME_CACHE","GAME_PACK_MAX","GIVE_UP_MS","H","HA","HARP","HEAVY","HUNTER","HUNT_POLYGON","HUNT_POLYGON_MAX","Hook","Hunt","HuntArea","ID","IMBUE_RENEW_MS","ITEM_ACCESSORY","ITEM_ACTIONS","ITEM_ARMOUR_KIND","ITEM_ARMOUR_PART","ITEM_BALANCE_CONFIRM_MS","ITEM_DROP_CONFIRM_MS","ITEM_GEAR_SLOTS","ITEM_WEAPON","IYUTARU","Icons","ImageData","Infinity","Int16Array","Int32Array","ItemRules","ItemType","Items","JSON","KIND_NAMES","KVKK_CONSENT_URL","KVKK_NOTICE_URL","KeyboardEvent","L","LA","LEAN_CSS","LEAN_SKIN","LEVEL_ACCESSORY_SOCKETS","LEVEL_ARMOUR_SOCKET","LEVEL_ELEMENT_MASTERIES","LEVEL_GEAR","LEVEL_GEAR_CHECK_MS","LEVEL_GEAR_MAX_PLUS","LEVEL_IMBUE_SKILL","LEVEL_INT_MASTERIES","LEVEL_MOVE_CHECK_MS","LEVEL_MOVE_RETRY_MS","LEVEL_MOVE_STEP_MS","LEVEL_PART","LEVEL_SHOPS","LEVEL_SKILL_CHECK_MS","LEVEL_SPOTS","LEVEL_SPOT_ABOVE","LEVEL_SPOT_BELOW","LEVEL_SPOT_KEEP","LEVEL_SPOT_REACH_M","LEVEL_SPOT_WALK_FAILS","LEVEL_TIER_GAP","LEVEL_WEAPON_MASTERY","LIGHT","LOAD_WAIT_MS","LOGIN_GRACE_MS","LONG_MAX","LURE_ARRIVAL","LURE_RETAUNT_MS","LURE_TAUNT_MS","LeanMap","LeanWardrobe","Learned","Level","LevelSpot","Leveling","Log","Loot","Lure","M","MALL_BUY_GAP_MS","MALL_CALM_MS","MALL_HP_REF","MALL_PROBE_MS","MALL_REFUSE_BACKOFF_MS","MALL_REVERSE_REF","MALL_TIMEOUT_MS","MALL_TOWN_REVERSE_MS","MAP_ART","MAP_CLASS_COLOR","MASTERY_IDS","MASTERY_NAMES","MINIMAP_FLOOR_CELL_XZ","MINIMAP_FLOOR_CELL_Y","MIN_GAP","MONSTER_CLASS_ICONS","MONSTER_CLASS_KEYS","MONSTER_CLASS_LABELS","MallBuyer","MallProbe","Manual","Map","Math","MonsterClasses","NATTR_BR","NATTR_CRITICAL","NATTR_ER","NATTR_HR","NATTR_MA","NATTR_MAINT","NATTR_MAR","NATTR_MD","NATTR_MDINT","NATTR_PA","NATTR_PAR","NATTR_PASTR","NATTR_PD","NATTR_PDSTR","NAVDATA_AREAS","NAVDATA_BASE","NAVDBG","NECKLACE","NET_SLOTS","NOTES_URL","NaN","Native","NativeClipper","NativeWorker","Navigation","Number","ORIGIN","OSB_HOTKEYS","OUTDOOR_FEATURES","OWN_CACHE","OWN_CACHE_MAX","Object","Observer","P","PACKED_ALPHA","PACKED_FLOATS","PACKED_UV","PARTY_CLASS_KEYS","PASSAGE_BOX_PAD","PENDING_MS","PERF_BINS","PERF_GAP","PERF_MAX_LONG_MS","PERF_MAX_MB","PERF_MAX_MS","PERF_SAMPLE_MS","PERF_TICK","PET_FOLLOW_MS","PET_GAP_MS","PET_GEAR_HOLD_MS","PET_GIVE_UP_ATTEMPTS","PET_IDLE_RADIUS","PET_IDLE_SHARE","PET_IDLE_WINDOW_MS","PET_INPUT_HOLD_S","PET_INPUT_TYPES","PET_LOCK_BUDGET_MS","PET_LOCK_LINK_MS","PET_LOCK_WINDOW_MS","PET_REJECTED_MAX","PET_TRAVEL_SETTLE_MS","PI","PICK_BLOCK_INDICES","PLAYER_INV_HOLD_MS","PLAYER_INV_KINDS","PLAYER_INV_PREFIXES","PLAYER_MALL_HOLD_MS","PREFERRED_ATTACK_MS","PREFERRED_MAX","PREFERRED_NAME_MAX","PREFERRED_ROWS_APART","PREFERRED_SWITCH_GAP_MS","PREFERRED_TIER","PRIVACY_CONTACT","PRIVACY_URL","PROTECT_MAX_HITS","PROTECT_WINDOW_MS","PURSUIT_NAV","Party","Perf","PerformanceObserver","PetAttack","PetPotion","Potion","ProfileShare","Promise","Protect","Q","QUEST_FAR","QUEST_FIND","QUEST_LEARN_MS","QUEST_REACH","QUEST_REWARD_BACKOFF_MS","QUEST_REWARD_TRIES","QUEST_SETTLE_MS","QUEST_SKIP_MS","QUEST_STEP_MS","QUEST_VISIT_BACKOFF_MS","QUEST_WALK_MS","Quest","QuestData","R","RARITY","RARITY_HP","REFUSAL_LIMIT","REFUSAL_MEANINGS","REGION_SIZE","RELEASE_NOTES","RELOAD_MAX_MS","REPORT_DELAYS_MS","REPORT_DESCRIPTION_MAX","REPORT_SCREENSHOT_MAX","RES_ALIVE_MS","RES_NAMES_MAX","RES_REFUSAL_MS","RES_REFUSED_MS","RES_TRIES_MAX","RES_WAIT_MAX_S","RES_WAIT_MIN_S","RETRY_DELAY_MS","RETRY_FINAL","RETRY_MAX_PER_HOUR","RETRY_PLAYER_KINDS","RETRY_PLAYER_MS","RETRY_SAME_MS","RING","ROTATION_ICONS","ROTATION_LABELS","ROUTE_PAD","ROUTE_REACH_SNAP","ROUTE_SEGMENT","ROUTE_SNAP","ROUTE_SPACING","ROUTE_VISITED","Range","Reconnect","RenderControl","RepairHammer","Reports","Response","Restock","Resurrect","Retry","Rotations","Route","RouteCheck","RunIntent","S","SA","SAFETY_ACTIONS","SAFETY_IDLE_MS","SAFETY_PARTY_WAIT_MS","SAFETY_PREFIX","SAFETY_TOWN_WAIT_MS","SAFETY_TRIP_END","SECTOR","SELL_STAR_ITEM_MS","SELL_STAR_KEEP_SLOTS","SELL_STAR_STEP_MS","SESSION_FIELDS","SESSION_LIMIT","SETUP_PRESETS","SHARE","SHIELD","SIM_KINDS","SNAP_MS","SOX_SEALS","SPAWN_MANIFEST_PATH","SPAWN_POS_PATH","SPEAR","SROLean","STAFF","STALL_MAX_OFFERS","STALL_MS","STALL_SALE_WAIT_MS","STALL_STEP_TIMEOUT_MS","STALL_TRIES","STONES","STONE_FAILED","STONE_MAX","STOP_CODES","STORE_KEY","SUPPORT_BACKOFF_MS","SUPPORT_BATCH","SUPPORT_CONFIRM_MS","SUPPORT_EARLY_MS","SUPPORT_OVERLAP_KEY","SUPPORT_OVERLAP_MS","SUPPORT_TARGET_FRIEND","SUPPORT_URL","SUPPORT_WEAPON_BACKOFF_MS","SWORD","Safety","ScrollBuff","SellStar","Set","Settings","Setup","Sound","SpawnData","SpeedScroll","Stall","StatPoints","Stats","StopCodes","Store","String","Supplies","Support","T","TAHOMET","TBLADE","THIEF","THREAT_FINISH_PCT","THREAT_RANK","THREAT_WINDOW_MS","TIGER_GIRL","TOWN_OPEN_TRIES","TOWN_OPEN_WAIT_MS","TOWN_PHASES","TOWN_REVERSE","TOWN_SERVICE_OF","TOWN_SETTLE_MS","TOWN_STALL_KEY","TOWN_STALL_RELOAD_GAP_MS","TOWN_STOCK_MAX","TOWN_STOCK_PREFIX","TOWN_STOCK_UNSOLD_MAX","TOWN_TABLE","TRACE_LIMIT","TRADER","TRADE_GOODS_MASK","TRADE_GOODS_TYPE","TRADE_JOB_SLOT","TRADE_NEAR","TRADE_OPEN_MS","TRADE_STEP_MS","TRADE_STOP","TRADE_SUMMON_MS","TRADE_VEHICLE_BAND","TRADE_VEHICLE_NAME","TRANSIENT_PHASES","TRAP_LIMIT","TRAVEL_ARRIVE_MS","TRAVEL_FIND","TRAVEL_GOLD","TRAVEL_HOP","TRAVEL_LAND","TRAVEL_PORTAL","TRAVEL_REACH","TRAVEL_REPLANS","TRAVEL_STEP_MS","TRAVEL_TABLE","TRAVEL_WALK","TSTAFF","TSWORD","Telemetry","TextDecoder","TextEncoder","Ticker","Town","Trace","Trade","Trap","Travel","U","UI","UNIQUE_CODE_NAMES","UNIQUE_COLLECT_MS","UNIQUE_COLLECT_SETTLE_MS","UNIQUE_EXTRA_NESTS","UNIQUE_GIVE_UP_LOSS","UNIQUE_GIVE_UP_MS","UNIQUE_GIVE_UP_RATIO","UNIQUE_HIT_MS","UNIQUE_KNOWN_KEY","UNIQUE_KNOWN_MAX","UNIQUE_LEVELS_KEY","UNIQUE_LEVELS_MAX","UNIQUE_LOST_NOTICE_MS","UNIQUE_LOW_HIT_MS","UNIQUE_LOW_PCT","UNIQUE_MAP_H","UNIQUE_MAP_MAX_UPP","UNIQUE_MAP_W","UNIQUE_NEST_MAX","UNIQUE_NEST_RETRY_MS","UNIQUE_NEST_SAME","UNIQUE_NOTICE_NAMES","UNIQUE_NO_NESTS","UNIQUE_OTHERS_MS","UNIQUE_OWN_DROP_DIST","UNIQUE_OWN_DROP_MS","UNIQUE_PILL","UNIQUE_REACH_FACTOR","UNIQUE_SEEN_KEY","UNIQUE_SEEN_MAX","UNIQUE_SEEN_SAME","UNIQUE_SETTLE_MAX_MS","UNIQUE_SETTLE_MS","UNIQUE_SETTLE_QUIET_MS","UNIQUE_SOURCE_TEXT","UNIQUE_SPOT_FAILS","UNIQUE_SPOT_MAX","UNIQUE_SPOT_REACH","UNIQUE_STATE_FRESH_MS","UNIQUE_STATE_KEY","UNIQUE_STATE_MAX","UNIQUE_STATE_SOURCES","UNIQUE_STATE_TRUST_M","UNIQUE_SYMBOL_CODES","UNIQUE_SYMBOL_REFS","UNIQUE_TABLE","UNIQUE_TICK_NOTE","UNIQUE_TICK_TIP","UNIQUE_TRACKER_BACKOFF_MAX_MS","UNIQUE_TRACKER_EVERY_MS","UNIQUE_TRACKER_PATH","UNIQUE_TRACKER_REFRESH_MS","UNIQUE_TRACKER_SHOWN_MS","UNIQUE_TRACKER_TIMEOUT_MS","UNIQUE_TRACKS_MAX","UNIQUE_WAIT_CHECK_MS","URL","URRUCHI","Uint16Array","Uint32Array","Uint8Array","UniqueHunt","UniqueList","UniqueNests","UniqueState","UniqueTracker","Updates","VERSION","VOUCHER","W","WALK_LEG","WALK_LEG_REACH","WALK_MAX_LEGS","WALK_MAX_MS","WALK_NAV_MS","WALK_NAV_REACH","WALK_NAV_SKIPS","WALK_PLAN_MS","WD_ANIM_FAM","WD_ARMOR_T3","WD_AV_KEYS","WD_EQ_GRID","WD_EQ_KEYS","WD_JOB_T4","WD_MEDIA","WD_ONE_HAND","WD_PAGE","WD_PET_SKIP","WD_RX","WD_SLOT_T4","WD_WEAPON_T4","WalkBack","Wardrobe","WdCfg","WdData","WeakMap","Worker","World","X","Y","Z","_","__SRO_ASISTAN__","__SRO_LEAN__","__sroAsistanHooked","a","a0","a1","aa","ab","abandon","abandonAt","abandonSent","abc","abnormal","abort","abortBackground","aborted","about","above","abs","absolute","ac","accept","acceptNames","acceptRes","acceptResAny","acceptResurrection","acceptanceSent","accepted","accepting","accessories","accessory","account","accounts","act","action","actionMs","actions","active","activeElement","activeShop","activity","activityExportBox","activityExportRaw","activityExportRefresh","activityExportText","activityLog","activityPanel","activityStatus","actual","add","addCorner","addElements","addEventListener","addGameplay","addHere","addPoint","addPreferred","addSpot","addTerm","added","additions","address","adjusted","admission","admit","admitObjectProduct","admitted","advance","advanceOnNoXp","after","afterKillOnly","afterSell","again","age","ageMs","ago","ahead","alchemy","alchemyActive","alchemyAttempts","alchemyElixirsUsed","alchemyError","alchemyFailures","alchemyLog","alchemyNote","alchemyPending","alchemyPowdersUsed","alchemyPreview","alchemyResultFlags","alchemyStats","alchemySuccesses","alchemyTarget","alchemyWindowVisible","alert","alertOrb","alive","aliveSince","all","allImbues","allowed","alpha","alphaCutoff","alt","ammo","ammoCount","ammoFor","ammoSkipped","ammoSupplies","amount","anchor","angle","animatedWater","announce","announced","answer","answerPrompt","answered","antiStuck","antiStuckTick","any","anyLoot","anyOn","apart","app","app_version","appearanceState","append","apply","applyBatch","applyClassic","applyEvent","applyGameplay","applyNow","applySession","applySet","applySoon","applyTimer","appointed","approach","apps","arc","arcs","arcsAt","area","areaDone","areaFor","areaNote","areaSkills","areaTaunt","areas","args","arguments","armed","armedAbandon","armedUntil","armor","armorClass","armour","around","aroundMember","arr","arrayBuffer","arrival","arrivalRadius","arrive","arrived","arrivedAt","arrivedState","arrow","ask","askedAt","assemble","asset","assetLoaderMain","assetUrl","assets","assign","assigned","astar","astral","async","at","atSpot","atan2","atk","atob","attachShadow","attachSimulation","attachedEffects","attack","attackFlags","attackRanks","attackRoute","attacked","attacker","attackerCount","attackers","attacking","attackingPlayer","attempt","attempted","attempts","attr","attrExpected","attrFused","attrKey","attrNote","attrPercent","attrRows","attrStones","attrTarget","attrValue","attrValues","attributeCount","attributes","attributesKnown","attrs","audio","auth","auto","autoAccept","autoAcceptMatching","autoEquip","autoInvite","autoList","autoMastery","autoRecruit","autoRes","autoRestore","autoRevive","autoSet","autoSetup","autoStart","autoStartNote","autoStatPoints","av","avSlotOf","avTf","available","avatarInventory","avatarSlot","avatars","avoid","avoidKs","avoidKsBelow","avoidKsScope","avoidNow","avoided","aw","await","away","ax","axis","ay","az","b","b0","b1","back","backAt","background","backgroundImage","backoff","backoffBaseMs","backoffCapMs","backup","backupKey","bad","bag","bagCount","bagFree","bagItem","bagSignature","bagSlot","bagSox","bagStone","balance","balanceBan","balanceTick","balancing","ban","band","banned","bans","bar","bars","base","base64Bytes","base64url","baseAv","baseInv","baseline","batch","batchEvents","batchType","batches","bb","before","begin","beginPath","beginRecording","below","berserk","berserkClasses","berserkCornered","berserkGauge","beside","best","bestAt","bestD","bestDiff","bestHp","bestOfGroup","bestRank","bestRow","bestScore","bestTotal","bin","bind","bins","bit","bits","blank","blob","block","blockKey","blockThrough","blockValue","blocked","blockedAt","blockedFor","blockedGroups","blockedHp","blockedTiles","blockedUntil","blocks","blues","bodies","body","bodyByModel","bodyOf","bolt","bonus","booked","boot","bootstrap","bot","botProfile","botState","bot_version","bottom","bottomTolerance","boundary","bounds","box","boxes","break","bridges","broken","btoa","bubbles","budget","budgetSilk","buf","buff","buffAuto","buffCastAt","buffGear","buffGearActive","buffGearMovePending","buffGearRecovery","buffGearRestoring","buffGearStatus","buffRanks","buffRemaining","buffSeen","buffSets","buffSlots","buffSwap","buffer","buffers","buffs","build","buildAv","buildGroups","buildImbue","buildInv","buildNav","buildPets","builds","built","bulk","bulkActions","bundle","bus","busy","busyAt","button","buttons","buy","buyCure","buyHP","buyMP","buySkipped","buyStage","buyers","bx","by","byId","byName","byPet","byWeapon","byte","byteLength","byteOffset","bytes","bytesOf","bz","c","c0","c1","cache","cacheGet","cached","caches","caches_","call","calls","calm","came","canCast","canProbe","canRepair","canSell","cancel","cancelAsk","cancelRecording","cancelTrip","cancelVideoFrameCallback","cancelWalk","cancelable","cancelled","cancelledAtMs","candidate","candidatePath","candidates","canon","canonicalPose","canvas","cap","capacity","caps","capture","captureMs","captureUntil","capturing","card","carried","carryStage","case","cast","castBuff","castGapMs","castIds","castProgressAt","castTarget","castable","caster","casting","casts","cat","catalog","catch","categories","category","ceil","cell","cellBoxes","cellEntry","cellEvents","cellIndex","cellWords","cells","center","centre","cfg","cfgAnchor","cfgBase","cfgBeforeUnique","cfgKey","ch","champion","chance","chanceAt","chances","change","changed","changedNow","changedSeen","changes","charCodeAt","charName","character","characterCollects","characterPvs","characters","charactersAt","chase","chat","check","checkAt","checkPetFull","checkScroll","checked","checkedAt","children","chime","choice","choose","chooseBeforeUnique","chooseLoot","chooseSlot","chooseTarget","chord","chosen","chosenShield","chrome","claimSale","claimantGid","clamp","class","classAllowed","classKey","classList","classMode","classModeRow","classModes","className","classOf","classOffset","classes","classic","classicButton","classicTabs","clean","cleanPreferred","clear","clearCrumbs","clearCustom","clearInterval","clearSeen","clearTimeout","click","clientHeight","clientOk","clientWidth","clientX","clientY","client_ok","clip","clipQuery","clipboard","clipboardData","clipped","clipper","clipping","clone","close","closeMenu","closeNext","closePath","closeShop","closeWhenEmpty","closed","closest","cls","cmd","co","code","codePointAt","codename","codes","codesByName","collar","collarSlot","collect","collectDrops","collectTerms","collector","collectorFor","color","colors","cols","column","combat","combatBuffs","combatHold","combatKey","combatTab","command","commandKey","commandMode","commands","commonArea","companionGid","compensation","complete","completed","completedQuests","compose","composedPath","config","configAge","configDueAt","configEveryMs","configRetryAt","configStaleMs","configUsable","configurable","confirmPending","confirmPotions","confirming","conform","connect","consent","consentAt","consentRetried","consented","consider","console","const","constructor","consumable","consumed","contact","contactKey","contains","contents","context","contexts","continue","control","controller","controls","conv","cooldown","cooldownGroup","cooldownLeft","cooldownMs","cooled","coordinateFrame","coordinateText","coordinates","coords","copy","copyCoordinates","copyingLog","corner","cornerClicks","corneredBerserk","corners","correlation","cos","cosGid","cosRecords","cost","count","countFn","counted","country","counts","covered","covers","cpu","create","createBufferSource","createElement","createGain","createImageBitmap","createNavigation","createNavigationIndex","createObjectStore","createObjectURL","createOscillator","createPassageLinks","credential","credentials","cross","crossX","crossZ","crosses","crossing","crumb","crumbs","crypto","cssDone","cssText","cstat","cstatFields","ctab","ctl","ctrlKey","ctx","cur","cure","cureLow","curePills","cureTarget","currency","current","currentRow","currentTarget","currentTime","cursor","custom","customKey","customKinds","customLabel","customMaxBytes","cut","cutBytes","cuts","cx","cy","cycle","cycleFrom","cz","d","damage","damageAbs","damageInc","damaged","data","dataRoute","dataUrl","dataset","dayCount","dayStart","db","dbp","ddj","dead","deadCollar","deadText","deadTrustM","deadline","death","deathAt","deathInArea","deathLimitHit","deathPoint","deathReturn","deaths","debounce","decimal","decision","deck","deckY","decode","decodeAudioData","decodeURIComponent","deepMerge","def","default","defaultIntervalS","defaultPerfIntervalS","defence","defineProperty","deg","degree","degrees","delayMs","delete","deleteData","deletePreset","deliver","delivered","deliveries","deliveryVersion","delta","deltaY","den","departing","depositItem","depth","describe","description","descriptionSymbol","dest","destination","destroyed","det","detail","detailed","details","detect","detour","detours","devicePixelRatio","di","diagBackoff","diagInterval","diagStep","diagnosticBox","diagnosticOnly","diagnosticState","diagnosticText","diagnostics","diagnosticsBlock","diagnosticsConfig","dialogue","dialogueRevision","died","diff","digest","direct","directionA","directionB","dirty","disabled","disabledRecheckMs","disconnect","disconnectMessage","dispatchEvent","displaceRegionXZ","display","displayCoords","disposable","dist","dist2D","distTo","distance","distanceUnits","distances","divisor","dj","do","doReload","doc","document","documentElement","done","doubleSided","down","download","draft","drag","dragBy","draggable","drain","drainKey","drained","draw","drawAttributes","drawClassic","drawCorners","drawImage","drawItems","drawPolygon","drawPreview","drawSpots","drawn","drawnView","dress","drive","driven","drop","dropBan","dropBlocked","dropImage","dropTick","dropped","dropping","drops","dst","due","dueAt","dueBuffs","due_","dump","dungeon","dungeonLinks","dungeonOwnerPath","dungeonWater","durability","duration","durationMs","during","dx","dxt5Alpha","dy","dz","e","early","earlyMs","earned","edge","edgeBoxes","edgeDistance","edgeEvents","edgeIds","edgeResponse","edges","ef","effect","effectiveMaxHp","effects","el","elements","eligible","elite","elixir","elixirRef","elixirs","else","emergency","emergencySkills","emit","empty","en","enable","enabled","encode","encodeURIComponent","encoded","encoding","end","endContainer","endWalk","ended","endpoint","endsWith","engage","engageBeforeChase","engageHp","engagedAt","english","ensure","ensureCatalogue","ensureData","ensureEq","ent","enter","entering","entity","entityCodes","entries","entriesFor","entry","entryVisit","ents","env","episode","epoch","eq","eqPlan","equip","equipment","equipmentSlotCount","equipped","equippedOut","err","error","errorCode","error_class","errors","escape","escapeCandidates","eu","ev","event","eventBytes","eventHandlers","eventNames","events","every","everyMs","ex","exact","exc","excess","exchange","exclude","exec","exit","exits","exp","expRequired","expShare","expandLogs","expanded","expected","expectedLog","experience","expired","expiredAt","expiredWait","expires","explanation","exponentialRampToValueAtTime","export","exportBackup","exporting","extends","extent","extra","extras","ey","ez","f","f32","factor","factories","fail","failTown","failTravel","failed","failedAt","failedWait","fails","failure","failureCounts","failureKey","failureSamples","failureWait","failures","fake","fallback","fallbackId","fallbackLogAt","fallbackNote","fallbackToNormal","fallen","false","fam","family","familyCache","familyGroups","fams","far","farAxis","farUnits","fast","fatal","fault","faults","features","featuresAt","fee","feedBlocked","feedLastAt","feedPending","feedTick","feedback","fees","ferry","fetch","fetchBytes","fg","field","fields","fight","fightBetweenCasts","file","files","filesLoaded","filesMissing","fill","fillMissing","fillRect","fillStyle","fillText","filter","filterLabel","filterWhy","filtered","filters","final","finally","find","findAny","findIndex","fingerprint","fingerprintFrames","finish","finishFight","finishRecording","finishTrip","finished","fire","first","firstChild","firstLeg","firstOurs","firstStop","firstUrl","fit","fitDiagnostics","fitPanel","fitWindow","fits","flags","flat","flatMap","floor","floorMinimap","floors","flow","flushPotions","fmt","fmtBig","fmtClock","fmtDuration","fmtInt","fn","focus","fold","follow","followButton","followed","font","food","foodPct","foodTotal","foods","for","forAstral","forBody","forEach","forGood","forParty","force","forcePage","forcedAt","foreign","forget","forgetHunting","form","format","formulaTf","found","fp","fraction","frame","frameId","frames","free","freeBag","freeBagSlots","freeSlot","freeze","frequency","fresh","friendly","friendlySkills","from","fromBag","fromBase64","fromBase64url","fromCaches","fromCharCode","fromEntries","fromNetwork","fromOld","fromPet","fromPoint","fromRegion","front","fround","full","fullAlert","function","fx","fy","fz","g","gain","gained","game","gameCache","gamePack","gameplayRewriters","gap","gapBins","gapMax","gapMin","gapScale","gap_ms","gaps","gate","gates","gaveUp","gear","gearChoices","gearFor","gearKeys","gearName","gearOf","gearOn","gearOptions","gearOwner","gearRef","gearRole","gearSet","gearSlots","gecko","gen","gender","gendered","generalBuyers","generatedAt","generic","geometry","geometryPickBlocks","geometryPickBounds","geometryVertex","get","getAttribute","getBoundingClientRect","getContext","getCoordinates","getDisplayMedia","getElementById","getEntries","getFloat32","getFloat64","getHours","getInt16","getInt32","getItem","getMinutes","getOwnPropertyDescriptor","getRandomValues","getRangeAt","getReader","getRootNode","getSeconds","getSelection","getTracks","getUint16","getUint32","getUint8","getter","gi","giant","giantParty","gid","giftSilk","give","giveUp","giveUpCheck","giver","global","globalThis","glow","gm","gmReplies","go","goal","goalCovered","goalReach","goals","gold","goldChange","goldKnown","gone","goneAt","good","goods","got","gp","grade","graph","grass","grassQty","grassSlot","greeting","grid","gridEdges","gridX","gridZ","grids","ground","groundItem","groundTarget","group","groupId","groupLevel","groupMs","groupOf","grouped","groups","guard","guardAsync","guardAt","guarded","guards","guild","gunzip","gx","gz","h","halt","haltAt","haltAttempts","haltSent","halted","hammer","hammerNote","handled","handler","harmsLocal","has","hasBackup","hasOverrides","hasOwn","hasOwnProperty","hash","have","head","header","headerOffsets","headers","heading","headline","heads","heal","healEstimate","healId","healTick","healed","heap","height","heightMap","heights","held","heldFor","heldLevel","heldSpot","helpText","helperNearby","helperSeenAt","helpers","helping","here","hero","hex","hgp","hgpCfg","hi","hidden","hide","hideAvatars","high","highest","hint","history","hit","hitAt","hitByOthers","hitByUs","hitSim","hitUs","hits","hittingUs","hold","holdForConfig","holdS","holdUntil","holds","home","homeLike","homeMax","homeTown","homeWeapon","honor","hop","hops","host","hostJob","hostMessage","hostOn","hostPerf","hostPerfDone","hostSend","hostSending","hostSize","hostTimer","hosted","hostedPerfConfig","how","hp","hpBelow","hpLow","hpOf","hpPct","hpPctOf","hpPotions","hpSeen","hpTarget","hp_pct","href","hsig","html","hungerPets","hunt","huntArea","huntAtDeath","huntCfg","huntChooseTarget","huntCorner","huntPolygon","huntStart","huntStop","huntTickBeforeAntiStuck","hunting","hurry","hx","hy","hypot","hypot2","hypot3","hypot4","hz","i","i0","icon","iconDdj","iconDdjPath","iconLoaded","iconPath","icons","id","identity","idle","idleAt","idleMs","idleTick","ids","if","ignore","image","imbue","imbueBeforeAttack","imbuePicker","imbueTick","imbued","imbues","img","immortal","impact","impacts","importKey","importOriginal","imported","in","inArea","inBag","inDungeon","inFlight","inHuntArea","inRange","inStorage","inTown","inWorld","inWorldSession","inbox","inc","include","included","includes","index","indexCount","indexOf","indexedDB","indices","info","infos","init","initial","initialize","inner","innerHeight","innerWidth","input","inputAt","inputHoldMs","insertBefore","inside","install","installWorkerHook","install_id","install_key","instance","instanceof","int","integer","intellect","intent","interrupt","intersectGeometry","intersects","interval","intervalMs","interval_s","inv","inventory","inventoryBound","inventoryPending","inventorySlotCount","inverse","invitation","inviteAnyone","inviteMessage","inviteNames","inviteRadius","inviteWait","invitedAt","is","isAlive","isAmmo","isArray","isAttackable","isAttackableMob","isCasting","isCollapsed","isComposing","isConnected","isContentEditable","isCure","isDead","isDungeonRegion","isEquipment","isFinite","isGold","isInteger","isMap","isMonster","isMount","isNew","isNum","isOpen","isPotion","isReturnScroll","isSafeInteger","isSafetyTrip","isSitting","isStackable","isStar","isTradeGoods","isTrusted","isUnique","isView","it","item","itemClass","itemCooldownLeft","itemCooldowns","itemFilter","itemIds","itemMall","itemMenu","itemParam1_29c","itemParam2_2a0","itemParam3_2a4","itemParam4_2a8","itemShare","itemUse","itemUseOnDeadPet","itemUseOnPet","items","itemsByRefObjId","ix","iz","j","j0","jitter","job","jobSuit","join","joinMain","joinMessage","joinRequest","joinedKey","joining","joints","journal","js_heap_mb","json","judge","k","k2","k3","keep","kept","key","keyCode","keys","keysOf","kids","kill","killed","killer","kills","kind","kindName","kinds","kit","kits","kk","known","knownId","knownLevel","knownMonsterNames","knownSkillIds","knownWord","ksAvoids","l","label","labels","landed","landedAt","lane","language","last","lastAt","lastAttackAt","lastBreadcrumbAt","lastBuff","lastCast","lastCastAt","lastCastGid","lastCastId","lastCastState","lastError","lastErrorAt","lastFollowAt","lastFullChimeAt","lastGold","lastHit","lastHp","lastIndexOf","lastInviteAt","lastJoinAt","lastLeaveAt","lastMono","lastMoveAt","lastOrderAt","lastPageAt","lastPct","lastPetLockMs","lastPose","lastRecallAt","lastRegisterAt","lastScrollPoint","lastSentText","lastSeq","lastSkillKey","lastStop","lastText","lastTileError","lastTrace","lastTrip","lastUse","lastXpAt","late","lateGaps","lateMs","lateTicks","late_pct","later","latest","launch","layoutButton","leader","leaderBack","leaderName","leaks","learn","learnAt","learnWorld","learned","learnedNote","learnedSkills","leave","leaveIfNotLeader","leaveWrongParty","leaving","left","leftTimer","leg","legFrom","legPoint","legRecorded","legRoute","legTries","legacyPacked","legacyPlain","legend","legs","len","length","let","letter","level","levelFamily","levelMap","levelMax","levelMin","levelOf","levelRanges","levelRequirements","levelSpotTick","levelSpots","levelUp","leveled","leveling","levelingBuild","levelingMove","levelingOn","levels","levelup","lg","li","limit","limitM","limited","line","lineTo","lineWidth","linearRampToValueAtTime","lines","link","linkEdge","linkPassages","linked","linkedEntry","links","list","listed","listenInput","listing","live","living","lo","load","loadFailure","loadLevels","loadPets","loadPreset","loadReq","loaded","loader","loading","local","localCooldownMs","localGid","localName","localStorage","locale","localeCompare","localize","locate","locating","location","lock","lockMs","lockMsSince","lockNote","lockOwner","lockSeen","lockShare","locked","log","logList","logged","loggedAt","logs","longTasks","long_tasks","lookup","looped","looping","loops","loot","lootAllowed","lootBan","lootChoose","lootGid","lootSince","lose","lost","low","lowAtLastSight","lowMp","lower","luck","lure","lureOn","m","ma","maMax","maMin","mac","macro","magic","magicReferences","magicStones","main","mainName","makeLog","makeMenubar","makeOrb","makeSide","makeStrip","malformed","mall","mallBuyer","mallNote","mallReverse","manifest","manifestAt","manifestGen","manifestInfo","manifestLoads","manifestP","manual","manualAt","manualPauseS","manualSeenAt","map","mapContext","mapInfo","mapNests","margin","mark","markGrid","marker","markers","mask","masteries","masteriesMet","mastery","masteryGroups","masteryStep","masteryTrainSpCost","match","matches","matching","matchingPending","matchingResult","matchingStateKnown","material","materials","matrix","max","maxAll","maxBytes","maxChars","maxChord","maxDistance","maxHeight","maxHp","maxHpOf","maxIdleAt","maxIntervalS","maxLength","maxM","maxMessage","maxMp","maxMs","maxNodes","maxNote","maxPerfIntervalS","maxQty","maxRecoveries","maxStack","maxStep","maxTries","maxWidth","maxX","maxZ","maximum","mb","md","me","measure","mediaDevices","meet","member","memberHp","members","memo","memory","menu","menuAway","menus","merchantId","merchantReverse","merged","mesh","meshes","message","messageChars","messages","meta","metaKey","metadata","meters","method","metres","middle","migrate","mime","min","minGap","minIntervalS","minMpPct","minPerfIntervalS","minWaitMs","minX","minZ","mine","minimapCoordinates","minimapFloors","minimapPoseKey","minimise","minimised","minute","minutes","mismatch","miss","misses","missing","missingAt","mm","mobs","mobsNear","mode","model","modelName","modelRef","models","modes","module","mono","monsterClass","monsterId","monsters","moon","more","motion","mount","mountIds","mountedOn","mounts","movable","move","moveAt","moveDone","moveDue","moveDue_","moveFail","moveFailed","moveFailedAt","moveOpen","moveSpot","moveStep","moveTick","moveTo","moved","movedAt","movedFrom","movementMode","movementPending","moves","mp","mpBelow","mpLow","mpOk","mpPct","mpPercent","mpPotions","mpTarget","mp_pct","mr","ms","msg","mutation","muted","mx","my","myCos","mz","n","name","nameKey","nameOf","nameSymbol","named","names","native","nativeAlchemyMode","nativeAlchemyPending","nativeErrorCode","nativePayloads","nativePost","nav","navContact","navContactDetail","navCrossings","navHeight","navLocal","navMessage","navObstacleContact","navReplans","navWorth","navigation","navigationError","navigationEventDirection","navigationEventStop","navigationEvents","navigationFloor","navigationReady","navigator","navmesh","nc","ne","near","nearSegment","nearby","nearbyLabel","nearest","nearestM","nearestOpen","need","needed","needs","needsConfig","neighbors","neighbours","nest","nestText","nests","nestsOf","nestsReady","network","new","newEntry","newIdentity","newRun","newer","newest","next","nextAfterS","nextAt","nextAttr","nextCandidate","nextCastId","nextFix","nextIndex","nextSibling","nextStand","nextStone","nextTown","next_after_s","nn","noLoot","noPoseAt","noSpots","noTarget","noXp","noXpDue","node","nodeType","nodes","nodesAt","normal","normalAttack","normalBuffs","normalize","normalizeRegionXZ","normalized","note","noteDeath","noteEntity","noteFallback","noteInput","noteLevel","noteNotice","notePlayer","noteRefusal","noteStop","noteTravel","notes","notesBox","notesSince","notice","notices","now","npc","npcCode","npcConversation","npcEntity","npcModels","npcRoute","npcs","nr","nt","ntxImage","null","number","numeric","nx","nz","o","object","objectLinks","objectNavigation","objectSpans","objectStore","objectiveValues","objects","observation","observe","observeApproach","observeAttribute","observePotions","observeSales","observeStone","observedStall","observer","observers","obstacle","obstacles","occludesGeometry","odds","of","ofCode","ofName","off","offer","offerFor","offerGoods","offerKind","offered","offers","offersAt","offhand","offset","offsetHeight","offsetLeft","offsetTop","offsets","offsetsAt","offsetsGrid","ok","okAt","old","oldDefaults","oldGear","oldKey","oldStones","on","onCast","onClose","onDeath","onDespawn","onDone","onEntity","onFail","onGameplay","onSetup","onSimulationMessage","onSnapshot","onSpawn","onTerrainPlane","once","oncomplete","oneHanded","onended","onerror","onload","only","onlyWhileRunning","onmessage","onsuccess","onupgradeneeded","op","opacity","open","openCache","openFailed","openMenu","openSent","openTries","openedAt","opening","operation","operationId","opt","option","optionName","optional","options","opts","orb","orbAlert","orbDetail","orbDragged","orbState","orbVitals","orbWasDead","order","origin","originRegion","originX","originZ","original","originalStart","os","oscillator","ot","other","others","othersBefore","othersFighting","ours","oursAt","out","outDamaged","outOwner","outcome","outdated","outdoor","outfit","outline","outlineGrid","outlines","output","outside","outsideEdgeStart","outsider","outsiderDead","outsiders","over","overCap","overlapped","overlaps","overlay","oversize","overwrite","own","ownCache","ownDrop","ownListing","ownPuts","ownStall","owned","ownedCellStart","ownedPlacementStart","ownedSurface","owner","ownerGid","ownerJid","ownerName","ownerPath","owners","ownership","owns","ox","oz","p","p3","p4","p50","p95","p99","pa","paMax","paMin","pack","packPath","packStart","packageId","packed","packs","pad","padStart","page","pager","pages","paint","paintPath","paintSign","pairKey","pairs","pal","palette","palettePickBounds","pane","panel","paramId","paramName","parent","parentElement","parentNode","parse","parseConfig","parseFrame","parseFromString","part","partial","parts","party","partyAtStart","partyChampion","partyDefaults","partyGiant","partyLeader","partyMatching","partyMembers","partyNote","partyOptions","partyStatus","partyText","passThrough","passageLinks","passages","passive","patch","path","pattern","pause","pauseEveryM","pauseMs","pauseReason","pauseS","pauseUntil","paused","pausedUntil","payload","pct","pd","peek","pend","pending","pendingDelete","pendingDone","pendingMoves","pendingPotions","pendingTown","pendingXP","perDay","perHour","perPlus","percent","perf","perfBytes","perfEntries","perfType","perf_interval_s","performance","persist","personal","pet","petAttack","petAttackEngage","petAttackHuntTick","petAttackNote","petBlocked","petClearable","petCollector","petEndAt","petFailedAt","petFar","petFree","petFreeSlots","petFull","petFullReturn","petFullSound","petGid","petHgp","petHold","petHp","petIdle","petIdleRadius","petIds","petInFlight","petInputHoldS","petInv","petItem","petItems","petKey","petLocks","petLook","petManual","petMode","petNote","petPotion","petPotionNote","petPromise","petReach","petRef","petReviveFailedAt","petSentAt","petSetup","petSetupAttempts","petStatus","petStep","petStopped","petTick","petToBag","petWait","petWhileManual","petWhileStopped","pets","petsReady","phantom","phase","phaseAt","phases","phys","pick","pickDestination","pickFood","pickGeometry","pickGeometryBlocks","pickNavigationGround","pickOffer","pickRay","pickRayProjector","pickRow","pickShield","picked","picker","picks","pickup","pickupAttempts","pickupDefaults","pickupPending","pickupRadius","pickupRetry","pill","pipe","pipeThrough","pivot","pixels","pk","place","placeOrb","placeholder","placement","placements","places","plain","plainGear","plan","planLocal","planPicked","planText","planarDistance","planarDistanceSquared","planeHeight","planeHeights","planeKindOf","planeType","planeTypes","planned","planning","platform","play","playBuffer","playCustom","player","playerAlert","playerAt","playerCheck","playerFirst","playerHit","playerInvAt","playerMallAt","playerPotionTick","playerSeen","playerStopped","playerYield","players","playersNear","playsInline","plus","plusOv","pm","point","pointStatus","pointerId","points","poison","polygon","pop","port","portal","portalCongruent","pos","pose","position","positions","post","postMessage","potion","potionCategory","potionCount","potionDelay","potionSummaryAt","potionTotals","potionWindowReserved","potions","potionsStage","pots","pow","powder","powderDegree","powderRef","powderWanted","powders","pr","pref","prefer","preferCurrentTab","preferred","preferredCache","preferredNow","preferredOffset","preferredRow","preferredRows","preferredSwitch","preferredSwitchAt","prefix","prefs","prepStage","prepare","preparePet","prepared","prepend","prerequisites","present","preset","presets","pressOk","pressed","prev","prevPhase","preventDefault","preview","previewList","previewNote","previews","previous","price","prices","primary","primaryShield","primaryWeapon","prior","priority","priorityCodes","priorityDone","privacy","probe","probeAt","probeReadyAt","probeRevision","probed","problem","process","processing","product","profile","profileKey","progress","progressAt","progressSeq","progression","promise","protect","protectEditing","protectPick","protected","prototype","pruneDrained","pruneOwn","pt","pts","pullPoints","pulled","pulledMobs","pulls","purchaseLimit","purpose","push","put","putOwn","pw","px","py","pz","q","qk","quality","quantile","quantity","queries","query","querySelector","querySelectorAll","quest","questBlocked","questFind","questHigh","questMarkerPose","questMarkers","questPending","questProgress","questToken","question","quests","queue","queued","quiet","qx","qy","qz","r","race","radius","radiusSquared","random","randomize","range","rangeBounds","rangeCount","rangeEnd","rangeIndex","rangeWords","ranges","rank","ranks","rar","rarity","rarityAuxIcon","rate","rate_limited","ratio","raw","rawBase64","rawX","rawZ","ray","rayIntersectsBounds","reach","reachable","reached","reachedOpen","reachedOwner","read","readAsDataURL","readAsText","readConfig","readHeap","readOnly","reader","readout","ready","real","realAnim","realArmor","realAv","realEq","realPlus","realShield","realTf","reason","reasonAt","rebirth","rebuild","rebuildCatalog","rebuildInv","rec","recall","recallCooldown","receivedAtMs","recent","recentCommands","recentErrors","recentStates","recentStops","reconnect","reconnectBusy","record","recorded","recording","recover","recoveries","recoveringUntil","recovery","recruit","rect","rectangle","redirect","redirected","reduce","ref","refId","refObjId","reference","referrerPolicy","reflection","refresh","refreshControls","refreshErrorAt","refreshManifest","refreshMs","refreshNote","refreshRow","refreshS","refreshTerms","refreshView","refreshed","refreshers","refreshing","refs","refsByCode","refsOf","refusal","refusalGroups","refusalWarningAt","refusals","refuse","refused","refusedMove","refusedText","region","regionCatalog","regionDelta","regionId","regionMoveAllowed","regionMoveContinuation","regionMoveDestination","regionOffsetXZ","regionOriginXZ","regionRelativeXZ","regionSize","regions","register","registerEvent","registered","registration","registrationFailed","registrationPending","reject","rejected","rejectionReady","rel","relative","relax","release","releaseAt","releases","reload","reloadPage","reloadStreak","reloadWait","reloaded","reloads","relocate","rem","remaining","remainingBudget","remainingMs","remember","remove","removeAttribute","removeEventListener","removeImage","removeItem","removeLast","removePoint","removeSpot","render","renderActivity","renderHead","renderLeft","renderMembers","renderPane","renderTable","rendered","repair","repairHammer","repairs","repeat","repeatCount","repeatMs","repeated","replace","replaceChildren","replaceable","replaced","replan","replans","reply","report","reportAsk","reportBox","reportCapture","reportClose","reportConfig","reportConfirm","reportCopy","reportDescription","reportImage","reportKind","reportNote","reportRemove","reportSave","reportSend","reportStatus","reportText","reports","reqInt","reqLevel","reqShield","reqStr","reqi","request","requestIdleCallback","requestRemainingMs","requestVideoFrameCallback","requested","requestedSpan","requesting","requests","required","requiredLevel","reregistered","res","resBusy","resMax","resNames","resRadius","resWaitS","resend","resendMs","resent","reserve","reset","resetAll","resetRun","resetSlot","resetWorld","residencyBytes","resident","residentOnly","resolve","resolveName","resolved","response","rest","restartClocks","resting","restock","restore","restoreAt","restorePanel","restored","restoredAt","restoring","result","resultOnly","results","resume","resumeAfterRevive","resumeAt","resumeHunt","resumeHunting","resumeSpot","resumeTick","resuming","resurrect","resurrection","retained","retainedFraction","retarget","retaunt","retreat","retries","retry","retryAfter","retryAfterMaxMs","retryAfterMs","retryAt","retryNote","return","returnAfterRevive","returnBy","returnHpPct","returnHunt","returnScroll","returnScrollActive","returnToCenter","returnTrip","returning","reuse","rev","reverse","reverseBlocked","reverseBuyer","reverseChoice","reverseNote","reverseReturnPoints","reverseScroll","reverses","revision","revival","revivalSlot","revive","reviveDelay","revivePet","reviveWaitS","revived","revivedAt","revokeObjectURL","rewardSent","rewriters","rid","right","rival","rivalDuring","role","roll","room","rooms","root","rotate","rotation","rotationClass","rotationKey","rotations","round","route","routeArea","routeLength","routes","routine","row","rowSymbol","rows","rowsFor","rule","ruled","rules","run","runLed","running","rx","rz","s","s0","s1","s2","s3","s4","safe","safeFailure","safety","safetyDefaults","said","sale","saleNoteAt","salePetGid","same","sameClass","sameCoordinateSpace","sameDungeonFloor","sameFingerprintMs","sameMesh","samePlane","samePlaneAdjacent","sample","sampleKey","samplePickAlpha","sample_pct","sampled_out","samples","satiety","save","savePreset","saveProfile","saveStock","saved","savedBerserk","savedSettings","say","sc","scale","scanDoneAt","scene","schedule","scheduled","schema","scope","score","scores","screenshot","screenshots","scroll","scrollAccepted","scrollAttempts","scrollHeight","scrollRequest","scrollTop","scrolls","seal","search","searchAt","sec","second","secondaryShield","secondaryWeapon","seconds","secondsAgo","section_combatBerserk","section_combatBuffs","section_combatEmergency","section_combatGear","section_combatHuntArea","section_combatImbue","section_combatLure","section_combatMonsters","section_combatOptions","section_combatPet","section_combatPreferred","section_combatRotation","section_combatUnique","section_lootBalance","section_lootCollection","section_lootWho","section_partyBuffs","section_partyHeal","section_partyMembers","section_partyParty","section_partyProtect","section_partyTrace","section_questAuto","section_questJournal","section_questPick","section_settingsActivity","section_settingsAntiStuck","section_settingsBehaviour","section_settingsMastery","section_settingsObstacles","section_settingsPrivacy","section_settingsProfiles","section_settingsReports","section_settingsSafety","section_settingsShare","section_settingsStatPoints","section_settingsStats","section_suppliesMall","section_suppliesPotions","section_suppliesRestock","section_townAmmo","section_townCycle","section_townTrip","section_townWhen","sections","sectorFrames","sectorX","sectorY","seen","seenAt","seenGen","seenGids","seenHits","seenMax","seenNames","seenObstacles","seenPending","seenRef","seenRevision","seenTerrainCells","segment","segments","sel","selTries","select","selected","selectedActivityText","selection","selectionPolicy","self","selfDefence","selfUrl","sell","sellBag","sellExcess","sellFirst","sellOld","sellStar","sellStarButton","sellStarNote","sellStarStatus","sellable","sellableBag","sellableDrained","sellsBag","send","sendMs","sendReward","sending","sent","sentAt","sentScroll","sentSession","sentSignature","seq","sequence","service","serviceEntity","serviceWait","services","session","sessionArrow","sessionBox","sessionFields","sessionId","sessionLog","sessionLogPanel","sessionOf","sessionSignature","sessions","set","setAreas","setAttribute","setBar","setBuild","setCenter","setCentre","setCharacters","setClassic","setClipQuery","setCoordinates","setCustom","setData","setEnabled","setGear","setInterval","setItem","setKind","setLineDash","setLoader","setOpt","setPet","setPointerCapture","setPrice","setProperty","setTimeout","setTransform","setUsage","setValueAtTime","setWide","sets","settingValues","settings","settle","settleCap","settled","settling","setup","setupAt","setupBlocked","setupTown","sex","sh","sha","sha256","shape","shaped","share","shared","shield","shieldMissing","shieldSkill","shields","shift","shiftKey","shop","shopCompletionRevision","shopping","shops","shopsData","short","shortened","shouldResume","show","showActivityExport","showDiagnostics","showNotes","showReport","showSession","shown","shows","si","sibling","sid","side","sideFields","sig","sight","sign","signal","signature","signedLocalCoordinates","signs","silently","silk","sim","simNow","simOffset","simUrl","simulationClockKnown","sin","since","sinceEntryMs","sit","sitToggleAt","site","size","skill","skillAt","skillCatalog","skillCooldowns","skillDetails","skillId","skillKey","skillList","skillName","skillOf","skillOptions","skillPoints","skillReason","skillRows","skillSlot","skillStep","skillTick","skillTip","skills","skillsOn","skip","skipBelow","skipCurrent","skipStar","skipped","skips","sky","slain","sleep","slice","slide","slideNormal","slot","slotGroup","slotName","slots","slug","smallSince","smith","snap","snapAt","snapped","snapshot","social","socket","sockets","soft","sold","some","sort","sorted","sounded","sounds","source","sourceEdge","sourceOwner","sources","sox","soxFound","soxLoadAt","soxOf","soxOk","soxOn","soxOnly","soxSeals","soxSound","soxSoundPicker","spCost","space","spaced","span","spanEpoch","spanMono","span_s","spans","spare","spawnAt","spawns","spec","specialGlows","speedBuff","speedNote","speedScroll","speedScrollAttempts","speedScrollPending","spent","spentSilk","splice","split","splitList","splitMask","spot","spotDead","spotFields","spotFor","spotHeader","spotLevel","spotMemo","spotOutside","spotText","spotWarned","spotX","spotY","spots","spotsMove","spotsOn","sqrt","src","srcObject","st","stable","stack","stackRoom","stacks","stage","staged","stale","stall","stallMs","stallNote","stalled","stalls","stand","standIn","standPoint","standing","star","starSkipped","start","startAttributes","startBeforeArea","startBeforeUnique","startContainer","startDelay","startDelayMs","startGold","startHunting","startMax","startMono","startMove","startParty","startTerrainY","startTo","started","startedAt","startedAtMs","startsWith","stash","stat","statPoints","state","stateCfg","stateOf","stateText","states","stats","statue","status","steady","step","stepBack","stepName","stepOut","steps","still","stillThere","stock","stockCache","stockKey","stockRows","stone","stoneAttempts","stoneFailures","stoneLimit","stoneRefusal","stones","stonesOnly","stonesUsed","stop","stopAfter","stopAll","stopAt","stopBefore","stopBeforeUnique","stopHunting","stopImmediatePropagation","stopInvFull","stopMax","stopNoHpPotion","stopOnPlayers","stopped","stops","storage","store","storeLevels","storeSox","stored","storedConfig","storesFromBag","str","straight","strangers","strayed","streak","stream","strength","strict","strikes","string","stringify","strip","stripLabel","stripLine","stripName","stripReason","stripState","stroke","strokeStyle","strokeText","structured","stuck","stuckNote","style","subarray","subtabs","subtle","successes","suit","summary","summon","summonAt","sun","super","supplies","supplyShort","support","supported","supportedEntryTypes","sure","surface","surfaceHeight","suspend","suspended","swap","swapped","switch","switchType","sx","sy","symbol","symbolCode","symbolic","sync","syncConsent","synced","syncedUsage","sz","t","t0","t1","t3","t4","tab","tabFor","tabIndex","table","tableRefs","tabs","tag","tagName","tail6","take","taken","talked","target","targetAt","targetCapabilities","targetEdge","targetGid","targetHpMark","targetIds","targetMove","targetPending","targetRequired","targetScore","targetSince","targetSlot","targetStats","targetTimeoutS","targets","taskMs","tasks","taunt","tc","telemetry","tell","template","templateChars","tenth","term","termMin","terminate","terms","terrain","terrainCells","terrainDepth","terrainGrid","terrainIntervals","terrainOwnerPath","terrainParts","terrainVisit","terrainY","test","text","textAlign","textContent","textEntries","texts","tf","tfFor","theirs","then","there","theta","thin","thinned","this","threat","threatBeforeUnique","threatNote","threats","three","throw","tick","tickBins","tickMax","tickMin","tickScale","tick_ms","ticked","ticks","tid","tid3","tid4","tidWord","tids","tidyEq","tier","tiers","tile","tileCellIds","tileSize","tiles","tilesPerAxis","time","timedOut","timeout","timeoutMs","timer","timing","tip","tipped","titan","titans","title","to","toBag","toBase64","toBigInt","toBlob","toCos","toExponential","toFixed","toISOString","toLocaleString","toLocaleTimeString","toLowerCase","toPet","toPoint","toRegion","toString","toUpperCase","toWorld","toast","toastTimer","toggle","toggleBot","toggleHide","toggleMinimised","toggleVisibility","token","tone","tones","tools","tooltip","top","total","totalJSHeapSize","totalLegs","total_ms","toward","town","townActive","townAt","townBox","townCycle","townDetail","townFail","townKey","townNote","townOf","townOn","townOptions","townPhase","townPick","townReady","townReason","townReturn","townReverse","townStatus","townTick","town_phase","towns","tr","trace","track","trackGear","tracker","trackerNote","trackerSwitch","tracks","trade","trail","trailMs","trailed","trainable","trainingError","trainingPending","transaction","transfer","transform","transforms","transient","transition","translate","transport","trap","trapStage","trapTile","travel","travelAt","travelTick","travelling","tree","tried","triedAt","tries","trigger","trim","trip","trips","true","trunc","trustMs","try","ts","turn","turned","turnedOn","tx","type","typeFlags","typed","typedAdd","typeof","types","tz","u","u10","u16","u32","u8","ui","uiPrefs","unauthorised","unblock","unbound","unbuyable","unchanged","undefined","underAttack","undo","unescape","unique","uniqueDefaults","uniqueKilled","uniqueNests","uniqueState","uniqueText","uniques","unknown","unlearned","unlock","unlockSound","unlocking","unmatched","unnamed","unpoison","unregisterEvent","unrouted","unsafeWindow","unshift","unsold","unsynced","until","unverified","unwanted","up","update","updateButton","updateNote","updateOrb","updateRunLed","updateSession","updateSwitch","updateWide","updated","updates","upgrade","upgradeClassModes","upgradeProfile","upgradeSoxSound","upp","uptime_s","url","urls","usable","usage","usageAt","usageDueAt","usageText","usage_version","use","useCharacter","useLegs","useNav","useOutfit","useTarget","used","usedJSHeapSize","usedUp","usedUpText","userAgentData","userMessage","userStop","userText","uuid","uv","uvs","ux","uz","v","v8","va","valid","validAv","validEq","validKey","validPurpose","validate","validateLinks","value","valueA","values","vanished","variance","varianceIntMax1c4","varianceIntMin1c0","vb","vehicle","vendor","verified","verify","verifyAt","verifyState","version","vertex","vertexDirection","vertexDirections","vertices","vf","viaArrival","viaData","video","videoHeight","videoWidth","view","viewKey","vigor","visibility","visibilityState","visible","visit","visitFail","visited","visitors","vital","vitals","vitalsOf","void","vt","w","wait","waitField","waitMs","waitNote","waitS","waitText","waitUntil","waited","waiting","waitingForConfig","waits","walk","walkBack","walkDungeon","walkFails","walkTerrain","walkable","walking","walkingRestock","walks","wall","wallOf","walls","want","wantAt","wantPage","wantPowder","wantShield","wanted","wants","wardrobe","wardrobeData","warn","warnMs","warnSpot","warned","warnings","was","wasHunting","wasOn","watch","watchLoad","watchLock","watchSelling","waypoint","wd","wdAnimFam","wdAvatarName","wdBodyName","wdClassName","wdClone","wdFold","wdGameIcon","wdGlow","wdInt","wdIsEquip","wdItemName","wdJobMode","wdKindName","wdParse","wdSafe","wdSlotName","wdSoxName","wdText","wdTf","wdTid3","wdTid4","weHit","weapon","weaponBroken","weaponKinds","weaponTf","weaponTypes","weapons","wear","wearCombat","webkitAudioContext","webview","weight","weights","what","when","where","which","while","whileNoAttack","whileStopped","who","why","whyNot","wide","width","win","window","windowFrame","windowOpen","windowOwner","wipe","wire","wireApply","wireLearn","wireLoad","wireLoaded","wireNextAt","wireRows","wireSave","withDropped","withImage","withSlot","within","word","worker","world","worldAt","worldAudioPosition","worldDelta","worldMap","worldX","worldZ","worn","wrap","wrapped","write","writeGeometryVertex","writeText","ws","wx","wz","x","x0","x1","xp","xpDelta","xpKey","xpKnown","xpPartial","xpPct","xs","xx","xy","y","y0","yaw","yes","yield","yielding","z","z0","z1","zIndex","zTop","zi","zj","zombie","zoom","zoomIn","zoomOut","zs","zw","zz"];
+const DIAG_KNOWN_WORDS = new Set(DIAG_WORD_LIST);
+const DIAG_TEMPLATE_WORD = /<(?:q|n|url|x|path)>|(?:[A-Za-z0-9_$]|[^\x00-\x7f])+/g;
+const DIAG_PHASES = ['signed-out', 'listing-servers', 'loading-roster', 'authenticating', 'connecting', 'entering-world', 'world', 'reconnecting', 'disconnected'];
+const DIAG_MODES = { idle: 'idle', fight: 'fight', loot: 'loot', resting: 'resting', standing: 'resting', 'town service': 'town', returning: 'returning', return: 'returning',
+  travelling: 'travelling', quest: 'quest', resurrect: 'resurrect', 'party support': 'party-support', recording: 'recording', shopping: 'shopping', error: 'error',
+  search: 'hunting', manual: 'hunting', player: 'hunting', buff: 'hunting', dead: 'hunting', 'support only': 'hunting' };
+const DIAG_DETAIL_NUMBERS = ['durationMs', 'distance', 'attempt', 'quantity', 'hpPct', 'mpPct', 'delayMs', 'kills', 'deaths', 'potions', 'items', 'revision', 'visited', 'progressAgeMs', 'skillId', 'leg', 'legs'];
+const DIAG_DETAIL_FLAGS = ['attackingPlayer', 'choice'];
+const DIAG_OUTCOMES = ['requested', 'confirmed', 'refused', 'unconfirmed', 'cancelled', 'waiting', 'summary'];
+const DIAG_REFUSAL_SOURCES = ['cast', 'inventory', 'unknown'];
+const DIAG_REFUSAL_REASONS = ['cooldown-or-action-recovery', 'unmapped-error', 'unclassified-error'];
+const DIAG_QUIET_STOPS = new Set(['player-stop', 'walk-back-start', 'quest-visit']);
+const STOP_CODES = [
+  [/^stopped (by you|from outside)/i, 'player-stop'],
+  [/^internal error/i, 'internal-error'],
+  [/^settings changed/i, 'settings-changed'],
+  [/^character changed/i, 'character-changed'],
+  [/^world change/i, 'world-change'],
+  [/^game connection failed/i, 'connection-failed'],
+  [/^all activities stopped/i, 'stop-all'],
+  [/^safety: .*deaths?\b/i, 'safety-death'],
+  [/^safety: .*player attacked/i, 'safety-player-alert'],
+  [/^safety: .*party/i, 'safety-party'],
+  [/^safety: .*unique/i, 'safety-unique'],
+  [/^safety: /i, 'safety-stop'],
+  [/^stuck: no progress/i, 'stuck-no-progress'],
+  [/^character cannot move/i, 'trapped'],
+  [/^out of HP potions/i, 'out-of-hp-potions'],
+  [/^inventory full/i, 'inventory-full'],
+  [/^(the )?character died/i, 'character-died'],
+  [/^hunt area is in another region/i, 'hunt-area-other-region'],
+  [/No saved hunting (spot|point)|save a hunting spot first/i, 'no-hunting-spot'],
+  [/^Town cycle stopped: /i, 'town-trip-failed'],
+  [/^Recovery town services completed/i, 'town-recovery-done'],
+  [/^Travel stopped: /i, 'travel-failed'],
+  [/^(Walk back (stopped|interrupted)|Manual control: walk back|Cannot walk to the saved hunting spot|The hunting spot is )/i, 'walk-back-cancelled'],
+  [/^walking back to the hunting spot/i, 'walk-back-start'],
+  [/^Potion restock: /i, 'restock-failed'],
+  [/^Lure: /i, 'lure-stopped'],
+  [/^unique hunt: stopped by you|^unique hunt: stopped from outside/i, 'player-stop'],
+  [/^unique hunt: .*killed/i, 'unique-hunt-done'],
+  [/^unique hunt: time limit/i, 'unique-time-limit'],
+  [/^unique hunt: /i, 'unique-hunt-stopped'],
+  [/^visiting a quest NPC/i, 'quest-visit'],
+  [/^Resurrection return/i, 'resurrect-return-failed'],
+];
+const StopCodes = {
+  code(source, reason) {
+    if (source === 'town') return 'town-trip-failed';
+    const text = String(reason || '');
+    for (const [pattern, code] of STOP_CODES) if (pattern.test(text)) return code;
+    return 'other';
+  },
+};
+const Diag = {
+  inbox: [], pending: new Map(), sentAt: new Map(), trailed: new Set(), terms: new Map(), perf: [], admitted: [], dayStart: -Infinity, dayCount: 0,
+  dropped: { rate_limited: 0, oversize: 0, sampled_out: 0 }, run: '', startMono: 0, since: Infinity, selfUrl: '', draw: -1, gen: 0, errors: 0, off: false, busy: false, quiet: 0, started: false,
+  scheduled: false, processing: null,
+  lastStop: { code: '', at: -Infinity },
+  job: { dueAt: 0, failures: 0, nextAfterS: 0, pausedUntil: 0, waitingForConfig: false, configDueAt: 0, consentRetried: false, halted: false, sentAt: 0, result: '' },
+  enabled: false, hostOn: false, hostPerf: false, hostTimer: 0, hostSending: false,
+  recording() { return this.enabled && !this.off; },
+  sync() {
+    const was = this.enabled;
+    if (Telemetry.hosted()) this.enabled = this.hostOn && Telemetry.supported();
+    else {
+      const config = Telemetry.consented() && Telemetry.supported() ? Telemetry.diagnosticsConfig() : null;
+      if (config && this.draw < 0) this.draw = Math.floor(Telemetry.random() * 100);
+      this.enabled = !!config && this.draw < config.sample_pct;
+    }
+    if (!this.enabled) this.wipe();
+    else if (!was) this.since = now();
+    Perf.sync();
+    this.hostJob();
+  },
+  hostMessage(data) {
+    if (!data || data.type !== DIAG_HOSTED.switchType || typeof data.on !== 'boolean' || !Telemetry.hosted()) return;
+    if (data.perf !== undefined && typeof data.perf !== 'boolean') return;
+    try {
+      const perf = data.on && data.perf === true;
+      if (this.hostOn === data.on && this.hostPerf === perf) return;
+      this.hostOn = data.on; this.hostPerf = perf;
+      this.sync();
+    } catch { this.fault(); }
+  },
+  hostedPerfConfig() {
+    return this.hostPerf && this.recording() && Telemetry.hosted() ? { perf: true, perf_interval_s: Telemetry.timing.diagnostics.defaultPerfIntervalS } : null;
+  },
+  hostPerfDone(entry) {
+    this.hostPerf = false;
+    Perf.sync();
+    if (!entry || !this.wire(entry) || !this.recording()) return;
+    const message = { type: DIAG_HOSTED.perfType, perf: entry };
+    if (this.hostSize(JSON.stringify(message)) > DIAG_HOSTED.perfBytes) return;
+    try { W.chrome.webview.postMessage(message); } catch { this.fault(); }
+  },
+  hostJob() {
+    if (!(this.recording() && Telemetry.hosted())) {
+      if (this.hostTimer) { clearTimeout(this.hostTimer); this.hostTimer = 0; }
+      return;
+    }
+    if (this.hostTimer) return;
+    this.hostTimer = setTimeout(() => { this.hostTimer = 0; void this.hostSend().finally(() => this.hostJob()); }, DIAG_HOSTED.everyMs);
+  },
+  async hostSend() {
+    if (this.hostSending) return;
+    this.hostSending = true;
+    try {
+      const gen = this.gen;
+      await this.process();
+      if (gen !== this.gen || !this.recording()) return;
+      const built = await Telemetry.idle(() => this.recording() && gen === this.gen ? this.assemble(null, { hosted: true }) : null);
+      if (!built || gen !== this.gen || !this.recording()) return;
+      W.chrome.webview.postMessage(built.message);
+      this.delivered(built);
+    } catch { this.fault(); } finally { this.hostSending = false; }
+  },
+  start() {
+    if (this.started) return;
+    this.started = true;
+    this.startMono = now();
+    this.selfUrl = this.firstUrl(new Error('self').stack);
+    W.addEventListener?.('error', event => this.error('', event?.error ?? event?.message, 'window', false));
+    W.addEventListener?.('unhandledrejection', event => this.error('', event?.reason, 'rejection', false));
+    bus.on('log', entry => this.warn(entry));
+    bus.on('spawn', e => { if (e?.kind === 'player' && this.recording()) this.addTerm(e.name); });
+    bus.on('chat', line => { if (this.recording()) for (const key of ['sender', 'name', 'from', 'character', 'player']) this.addTerm(line?.[key]); });
+    if (Telemetry.hosted()) W.chrome.webview.addEventListener?.('message', event => this.hostMessage(event?.data));
+  },
+  firstUrl(stack) {
+    for (const line of String(stack || '').split('\n')) { const frame = this.parseFrame(line); if (frame) return frame.url; }
+    return '';
+  },
+  fault() {
+    this.errors++;
+    if (this.errors < DIAG_LIMIT.faults || this.off) return;
+    this.off = true; this.wipe();
+  },
+  silently(fn) { this.quiet++; try { return fn(); } finally { this.quiet--; } },
+  context() {
+    const out = { phase: '', mode: '', running: false, dead: false, townPhase: '', mono: now() };
+    try {
+      out.phase = String(World.phase || ''); out.mode = String(Controller.mode || ''); out.running = !!Hunt.running;
+      out.townPhase = String(Town.trip?.phase || ''); out.dead = World.inWorld() && !!World.isDead();
+    } catch {}
+    return out;
+  },
+  same(a, b) {
+    return a.kind === b.kind && a.module === b.module && a.origin === b.origin && a.name === b.name && a.message === b.message && a.stack === b.stack &&
+      a.category === b.category && a.code === b.code && a.text === b.text && a.source === b.source;
+  },
+  queue(item) {
+    const last = this.inbox[this.inbox.length - 1];
+    if (last && this.same(last, item)) { last.repeat++; return; }
+    if (this.inbox.length >= DIAG_LIMIT.inbox) { this.dropped.rate_limited++; return; }
+    item.repeat = 1; item.at = Date.now(); item.context = this.context(); item.mono = item.context.mono; item.seq = Number(Activity.sequence) || 0;
+    this.inbox.push(item);
+    this.later();
+  },
+  later() {
+    if (this.scheduled) return;
+    this.scheduled = true;
+    const run = () => { this.scheduled = false; void this.process(); };
+    if (typeof W.requestIdleCallback === 'function') W.requestIdleCallback(run, { timeout: 5000 });
+    else setTimeout(run, 0);
+  },
+  error(module, e, origin = 'guard', handled = true) {
+    if (this.busy || !this.recording()) return;
+    this.busy = true;
+    try {
+      const object = e !== null && typeof e === 'object';
+      this.queue({ kind: 'js_error', module: String(module || ''), origin, handled: !!handled, name: object ? String(e.name ?? '') : '',
+        message: object ? String(e.message ?? '') : String(e ?? ''), stack: object && typeof e.stack === 'string' ? e.stack : '' });
+    } catch { this.fault(); } finally { this.busy = false; }
+  },
+  warn(entry) {
+    if (this.quiet || this.busy || !entry || entry.level !== 'warn' && entry.level !== 'error' || !this.recording()) return;
+    this.busy = true;
+    try {
+      const failure = entry.failure;
+      this.queue({ kind: 'warn', category: String(entry.category || ''), code: String(entry.code || ''), text: String(entry.text || ''),
+        refusal: failure ? { source: failure.source, reason: failure.reason, native: failure.nativeErrorCode } : null });
+    } catch { this.fault(); } finally { this.busy = false; }
+  },
+  stop(source, reason) {
+    if (this.busy || !this.recording()) return;
+    this.busy = true;
+    try {
+      const code = StopCodes.code(source, reason);
+      if (DIAG_QUIET_STOPS.has(code) || code === this.lastStop.code && now() - this.lastStop.at < 1000) return;
+      this.lastStop = { code, at: now() };
+      this.queue({ kind: 'bot_stop', source, code });
+    } catch { this.fault(); } finally { this.busy = false; }
+  },
+  addTerm(value) {
+    if (typeof value !== 'string') return;
+    const term = value.trim().toLowerCase();
+    if (term.length < DIAG_LIMIT.termMin || term.length > 64) return;
+    this.terms.delete(term); this.terms.set(term, true);
+    if (this.terms.size > DIAG_LIMIT.terms) this.terms.delete(this.terms.keys().next().value);
+  },
+  collectTerms(value, depth = 0) {
+    if (!value || typeof value !== 'object' || depth > 3) return;
+    for (const [key, item] of Object.entries(value)) {
+      if (typeof item === 'string') { if (/name|sender|leader|from|player|character|caster|member/i.test(key)) this.addTerm(item); }
+      else if (item && typeof item === 'object') this.collectTerms(item, depth + 1);
+    }
+  },
+  refreshTerms() {
+    this.addTerm(World.charName);
+    this.addTerm(String(Settings.profileKey || '').replace(/^profile:/, ''));
+    for (const e of World.ents.values()) if (e?.kind === 'player') this.addTerm(e.name);
+    const gp = World.gp;
+    for (const key of ['social', 'partyMatching', 'guild', 'union', 'exchange']) this.collectTerms(gp?.[key]);
+  },
+  leaks(text) {
+    const lower = String(text).toLowerCase();
+    for (const term of this.terms.keys()) if (lower.includes(term)) return true;
+    return false;
+  },
+  clean(text) { return this.leaks(text) ? '<x>' : text; },
+  code(value) { return typeof value === 'string' && DIAG_CODE.test(value) && !this.leaks(value) ? value : null; },
+  slug(text) { return String(text || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64); },
+  ours(url) {
+    const u = String(url || '');
+    return !!u && (u === this.selfUrl || /userscript\.html\?name=OSB(?:\.user\.js)?(?:&|$)/i.test(u) || /(?:^|[/\\])OSB\.user\.js(?:[?#]|$)/i.test(u));
+  },
+  parseFrame(line) {
+    const v8 = /^\s*at (?:async )?(?:(.+?) \()?(.+?):(\d+):(\d+)\)?\s*$/.exec(line);
+    if (v8) return { fn: v8[1] || '', url: v8[2], line: v8[3], column: v8[4] };
+    const gecko = /^\s*([^@\s]*)@(.+?):(\d+):(\d+)\s*$/.exec(line);
+    return gecko ? { fn: gecko[1], url: gecko[2], line: gecko[3], column: gecko[4] } : null;
+  },
+  frames(stack) {
+    const out = [];
+    let first = null;
+    for (const line of String(stack || '').split('\n')) {
+      if (out.length >= DIAG_LIMIT.frames) break;
+      const frame = this.parseFrame(line);
+      if (!frame) continue;
+      const mine = this.ours(frame.url);
+      if (first === null) first = mine;
+      if (!mine) { if (out[out.length - 1] !== 'ext') out.push('ext'); continue; }
+      const name = frame.fn.replace(/^(new|async) /, '').replace(/ \[as [^\]]*\]$/, '');
+      const fn = /^[A-Za-z_$][A-Za-z0-9_$.<>]{0,63}$/.test(name) ? name : '?';
+      const place = frame.line.length <= 7 && frame.column.length <= 5 ? '@' + frame.line + ':' + frame.column : '';
+      const text = fn + place;
+      out.push(DIAG_FRAME.test(text) ? this.clean(text) : 'ext');
+    }
+    return { frames: out, firstOurs: first === true };
+  },
+  template(message) {
+    let t = String(message || '').slice(0, DIAG_LIMIT.messageChars);
+    t = t.replace(/'[^']*'|"[^"]*"|`[^`]*`|«[^»]*»/g, '<q>');
+    t = t.replace(/\b[a-z][a-z0-9+.-]*:\/\/\S+/gi, '<url>');
+    t = t.replace(/[A-Za-z]:\\\S*|\\\\\S+|(?:\/[^\s/]+){2,}\/?/g, '<path>');
+    t = t.replace(/\S+@\S+/g, '<x>');
+    t = t.replace(/\b0x[0-9a-f]+\b|\d{2,}/gi, '<n>');
+    t = t.replace(/[\p{L}\p{N}_]{3,}/gu, word => this.terms.has(word.toLowerCase()) ? '<x>' : word);
+    t = t.replace(DIAG_TEMPLATE_WORD, word => word[0] === '<' || this.knownWord(word) ? word : '<x>');
+    t = t.replace(/[^A-Za-z0-9 .,:;()<>'_/-]/g, '').replace(/\s+/g, ' ').trim();
+    t = t.replace(DIAG_TEMPLATE_WORD, word => word[0] === '<' || this.knownWord(word) ? word : '<x>').slice(0, DIAG_LIMIT.templateChars);
+    return this.clean(t);
+  },
+  knownWord(word) {
+    return /^[0-9]+$/.test(word) || /^[A-Za-z0-9_]+$/.test(word) && (DIAG_ENGINE_WORD_SET.has(word.toLowerCase()) || DIAG_KNOWN_WORDS.has(word));
+  },
+  mapContext(c) {
+    const out = { phase: DIAG_PHASES.includes(c.phase) ? c.phase : 'other', mode: DIAG_MODES[c.mode] || (c.running ? 'hunting' : 'other') };
+    if (TOWN_PHASES.includes(c.townPhase)) out.town_phase = c.townPhase;
+    out.dead = !!c.dead;
+    out.uptime_s = clamp(Math.round((c.mono - this.startMono) / 60000) * 60, 0, 2592000);
+    return out;
+  },
+  detail(details) {
+    const out = {};
+    for (const key of DIAG_DETAIL_NUMBERS) { const v = details?.[key]; if (typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= 1e9) out[key] = this.tenth(v); }
+    for (const key of DIAG_DETAIL_FLAGS) if (typeof details?.[key] === 'boolean') out[key] = details[key];
+    return out;
+  },
+  trail(mono, seq = Infinity) {
+    const rows = [...Log.lines, ...(Activity.refusals || [])].filter(e => Number.isFinite(e?.mono) && e.mono >= this.since && e.mono <= mono && mono - e.mono <= DIAG_LIMIT.trailMs && (e.id ?? 0) <= seq)
+      .sort((a, b) => a.mono - b.mono || (a.id ?? 0) - (b.id ?? 0)).slice(-DIAG_LIMIT.trail);
+    const out = [];
+    for (const e of rows) {
+      const structured = this.code(e.code) && e.code !== 'legacy-message';
+      const entry = { s: clamp(Math.round((e.mono - mono) / 1000), -86400, 0), l: ['info', 'warn', 'error', 'cmd'].includes(e.level) ? e.level : 'info',
+        c: ACTIVITY_CATEGORIES.includes(e.category) ? e.category : 'engine', k: structured ? e.code : 'legacy' };
+      if (!structured) entry.e = Diagnostics.errorCode(e.text);
+      if (DIAG_OUTCOMES.includes(e.outcome)) entry.o = e.outcome;
+      if (Number.isInteger(e.repeatCount) && e.repeatCount > 1) entry.n = Math.min(e.repeatCount, DIAG_LIMIT.count);
+      const d = this.detail(e.details);
+      if (Object.keys(d).length) entry.d = d;
+      out.push(entry);
+    }
+    return out;
+  },
+  build(raw) {
+    const kind = raw.kind;
+    let body, key;
+    if (kind === 'js_error') {
+      const type = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(raw.name) && !this.leaks(raw.name) ? raw.name : 'Error';
+      const { frames, firstOurs } = this.frames(raw.stack);
+      if ((raw.origin === 'window' || raw.origin === 'rejection') && !firstOurs) return null;
+      const error = { type };
+      if (DIAG_ENGINE_ERRORS.has(type)) error.template = this.template(raw.message);
+      const module = this.code(this.slug(raw.module));
+      if (module) error.module = module;
+      Object.assign(error, { handled: raw.handled, origin: raw.origin, frames });
+      body = { error };
+      key = [type, module || '', frames.filter(f => f !== 'ext').slice(0, DIAG_LIMIT.fingerprintFrames).map(f => f.replace(/@.*$/, '')).join(','), error.template || ''].join('|');
+    } else if (kind === 'warn') {
+      const category = ACTIVITY_CATEGORIES.includes(raw.category) ? raw.category : 'engine';
+      const structured = this.code(raw.code) && raw.code !== 'legacy-message';
+      const warn = { category, code: structured ? raw.code : 'legacy' };
+      if (!structured) warn.error_class = Diagnostics.errorCode(raw.text);
+      const native = raw.refusal?.native;
+      if (raw.refusal && Number.isInteger(native) && native >= 0 && native <= 65535) {
+        warn.refusal = { source: DIAG_REFUSAL_SOURCES.includes(raw.refusal.source) ? raw.refusal.source : 'unknown',
+          reason: DIAG_REFUSAL_REASONS.includes(raw.refusal.reason) ? raw.refusal.reason : 'unclassified-error', native };
+      }
+      body = { warn };
+      key = [category, warn.code, warn.error_class || '', warn.refusal ? [warn.refusal.source, warn.refusal.reason, warn.refusal.native].join(':') : ''].join('|');
+    } else if (kind === 'bot_stop') {
+      const code = this.code(raw.code) || 'other', source = ['stop', 'town', 'stop_all'].includes(raw.source) ? raw.source : 'stop';
+      body = { stop: { code, source } };
+      key = [code, source].join('|');
+    } else return null;
+    return { kind, body, key: 'osb|' + kind + '|' + key, context: this.mapContext(raw.context), at: raw.at, mono: raw.mono, seq: raw.seq, repeat: raw.repeat || 1 };
+  },
+  minute(ms) { return new Date(Math.floor(ms / 60000) * 60000).toISOString().replace(/\.\d{3}Z$/, 'Z'); },
+  async fingerprint(text) {
+    const digest = new Uint8Array(await W.crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)));
+    const fp = Telemetry.hex(digest.subarray(0, 8));
+    return fp === DIAG_RESERVED_FP ? '0000000000000001' : fp;
+  },
+  tenth(value) { return Number.isInteger(value) ? value : Math.round(value * 10) / 10; },
+  wire(value) {
+    if (value === null || value === undefined) return false;
+    if (typeof value === 'number') return Number.isFinite(value) && this.tenth(value) === value;
+    if (typeof value === 'string') return !DIAG_WIRE_TEXT.test(value);
+    if (typeof value === 'boolean') return true;
+    if (Array.isArray(value)) return value.every(item => this.wire(item));
+    if (typeof value === 'object') return Object.values(value).every(item => this.wire(item));
+    return false;
+  },
+  admit(fp, built) {
+    const known = this.pending.get(fp);
+    if (known) { known.count = Math.min(known.count + built.repeat, DIAG_LIMIT.count); return; }
+    const t = Date.now();
+    this.admitted = this.admitted.filter(at => t - at < 3600000);
+    if (t - this.dayStart >= 86400000) { this.dayStart = t; this.dayCount = 0; }
+    if (this.admitted.length >= DIAG_LIMIT.perHour || this.dayCount >= DIAG_LIMIT.perDay) { this.dropped.rate_limited++; return; }
+    this.admitted.push(t); this.dayCount++;
+    const count = Math.min(built.repeat, DIAG_LIMIT.count);
+    const event = { kind: built.kind, source: 'osb', fp, at: this.minute(built.at), count, ...built.body, context: built.context };
+    if (!this.trailed.has(fp) && this.trailed.size < 1000) {
+      this.trailed.add(fp);
+      const trail = this.trail(built.mono, built.seq);
+      if (trail.length) event.trail = trail;
+    }
+    this.pending.set(fp, { event, mono: built.mono, count });
+  },
+  process() {
+    if (!this.processing) this.processing = this.drain().finally(() => { this.processing = null; });
+    return this.processing;
+  },
+  async drain() {
+    try {
+      while (this.inbox.length && this.recording()) {
+        const gen = this.gen;
+        const built = await Telemetry.idle(() => {
+          this.refreshTerms();
+          return this.inbox.splice(0).map(raw => this.build(raw)).filter(Boolean);
+        });
+        for (const item of built) {
+          const fp = await this.fingerprint(item.key);
+          if (gen !== this.gen) return;
+          this.admit(fp, item);
+        }
+      }
+    } catch { this.fault(); }
+  },
+  size(value) { return new TextEncoder().encode(typeof value === 'string' ? value : JSON.stringify(value)).length; },
+  hostSize(text) { return this.size(text) + 5 * (text.match(/[<>&']/g)?.length || 0); },
+  safe(event) { return !this.leaks(JSON.stringify(event)); },
+  assemble(config, { preview = false, hosted = false } = {}) {
+    const t = Date.now(), chosen = [];
+    const limit = hosted ? { events: DIAG_HOSTED.events, bytes: DIAG_HOSTED.bytes } : { events: DIAG_LIMIT.batchEvents, bytes: DIAG_LIMIT.cutBytes };
+    const measure = text => hosted ? this.hostSize(text) : this.size(text);
+    for (const [fp, p] of [...this.pending].sort((a, b) => a[1].mono - b[1].mono)) {
+      if (chosen.length >= limit.events) break;
+      if (!preview && t - (this.sentAt.get(fp) ?? -Infinity) < DIAG_LIMIT.sameFingerprintMs) continue;
+      let event = { ...p.event, count: p.count };
+      if (this.size(event) > DIAG_LIMIT.eventBytes) { const { trail, ...rest } = event; event = rest; }
+      if (this.size(event) > DIAG_LIMIT.eventBytes || !this.safe(event) || !this.wire(event) || event.fp === DIAG_RESERVED_FP) { if (!preview) { this.pending.delete(fp); this.dropped.oversize++; } continue; }
+      chosen.push({ fp, event });
+    }
+    if (!preview) for (let i = this.perf.length - 1; i >= 0; i--) if (!this.wire(this.perf[i])) this.perf.splice(i, 1);
+    const queued = !hosted && config?.perf ? this.perf.filter(entry => this.wire(entry)).slice(0, DIAG_LIMIT.perfEntries) : [];
+    const perf = !hosted && preview && config?.perf && queued.length < DIAG_LIMIT.perfEntries ? [...queued, ...Perf.peek()] : queued;
+    if (!chosen.length && !perf.length) return null;
+    if (hosted) {
+      const message = { type: DIAG_HOSTED.batchType, events: chosen.map(c => c.event) };
+      let text = JSON.stringify(message);
+      for (let i = message.events.length - 1; i >= 0 && measure(text) > limit.bytes; i--) {
+        if (message.events[i].trail) { const { trail, ...rest } = message.events[i]; message.events[i] = rest; text = JSON.stringify(message); }
+      }
+      const dropped = { rate_limited: 0, oversize: 0, sampled_out: 0 };
+      while (measure(text) > limit.bytes && message.events.length) {
+        message.events.shift(); const cut = chosen.shift();
+        dropped.oversize++;
+        if (!preview) { this.pending.delete(cut.fp); this.dropped.oversize++; }
+        text = JSON.stringify(message);
+      }
+      if (!message.events.length) return null;
+      return { text, sent: chosen.map(c => ({ fp: c.fp, count: c.event.count })), perf: 0, dropped, message };
+    }
+    const payload = { schema: 1, app: 'osb', app_version: VERSION, run: this.run || (this.run = Telemetry.hex(Telemetry.bytes(8))), env: {}, events: chosen.map(c => c.event) };
+    if (perf.length) payload.perf = perf;
+    const dropped = { ...this.dropped };
+    const withDropped = () => { if (dropped.rate_limited || dropped.oversize || dropped.sampled_out) payload.dropped = dropped; else delete payload.dropped; return JSON.stringify(payload); };
+    let text = withDropped();
+    for (let i = payload.events.length - 1; i >= 0 && measure(text) > limit.bytes; i--) {
+      if (payload.events[i].trail) { const { trail, ...rest } = payload.events[i]; payload.events[i] = rest; text = withDropped(); }
+    }
+    while (measure(text) > limit.bytes && payload.events.length) {
+      payload.events.shift(); const cut = chosen.shift();
+      dropped.oversize = Math.min(dropped.oversize + 1, 100000);
+      if (!preview) { this.pending.delete(cut.fp); this.dropped.oversize++; }
+      text = withDropped();
+    }
+    while (measure(text) > limit.bytes && payload.perf?.length) { payload.perf.pop(); if (!payload.perf.length) delete payload.perf; text = withDropped(); }
+    if (!payload.events.length && !payload.perf) return null;
+    return { text, sent: chosen.map(c => ({ fp: c.fp, count: c.event.count })), perf: payload.perf?.length || 0, dropped, payload };
+  },
+  async compose(config, options) {
+    await this.process();
+    return this.assemble(config, options);
+  },
+  delivered(built, { remember = true } = {}) {
+    const t = Date.now();
+    for (const { fp, count } of built.sent) {
+      const p = this.pending.get(fp);
+      if (remember) this.sentAt.set(fp, t);
+      if (!p) continue;
+      p.count -= count;
+      if (p.count <= 0) this.pending.delete(fp);
+      else { delete p.event.trail; p.event.at = this.minute(t); }
+    }
+    this.perf.splice(0, built.perf);
+    for (const key of Object.keys(this.dropped)) this.dropped[key] = Math.max(0, this.dropped[key] - (built.dropped[key] || 0));
+  },
+  async preview() {
+    try {
+      if (!Telemetry.consented()) return '';
+      const built = await this.compose(Telemetry.diagnosticsConfig(), { preview: true });
+      return built ? JSON.stringify(built.payload, null, 2) : '';
+    } catch { this.fault(); return ''; }
+  },
+  wipe() {
+    this.gen++;
+    Perf.stop();
+    this.inbox.length = 0; this.pending.clear(); this.sentAt.clear(); this.trailed.clear(); this.terms.clear(); this.perf.length = 0; this.admitted.length = 0;
+    this.dayStart = -Infinity; this.dayCount = 0; this.run = ''; this.lastStop = { code: '', at: -Infinity };
+    for (const key of Object.keys(this.dropped)) this.dropped[key] = 0;
+  },
+  reset() {
+    this.wipe();
+    this.job = { dueAt: 0, failures: 0, nextAfterS: 0, pausedUntil: 0, waitingForConfig: false, configDueAt: 0, consentRetried: false, halted: false, sentAt: 0, result: '' };
+  },
+  status() {
+    return { recording: this.recording(), pending: this.pending.size, queued: this.inbox.length, off: this.off, halted: this.job.halted, sentAt: this.job.sentAt, result: this.job.result };
+  },
+};
+
+
+const PERF_BINS = 32;
+const PERF_TICK = { low: 0.05, high: 1000, lateMs: 50 };
+const PERF_GAP = { low: 10, high: 10000, lateMs: 250 };
+const PERF_SAMPLE_MS = 60000;
+const PERF_MAX_MS = 600000;
+const PERF_MAX_LONG_MS = 86400000;
+const PERF_MAX_MB = 262144;
+const Perf = {
+  on: false, last: -1, intervalMs: 0, epoch: 0, timer: 0, observer: null,
+  tickBins: new Uint32Array(PERF_BINS), gapBins: new Uint32Array(PERF_BINS),
+  ticks: 0, gaps: 0, tickMin: Infinity, tickMax: 0, gapMin: Infinity, gapMax: 0, lateTicks: 0, lateGaps: 0,
+  tasks: 0, taskMs: 0, heap: null, samples: 0, spanMono: 0, spanEpoch: 0,
+  tickScale: PERF_BINS / Math.log(PERF_TICK.high / PERF_TICK.low),
+  gapScale: PERF_BINS / Math.log(PERF_GAP.high / PERF_GAP.low),
+  step() {
+    const started = this.begin();
+    Controller.tick();
+    this.end(started);
+  },
+  begin() {
+    if (!this.on) return -1;
+    const t = now();
+    if (this.last >= 0) {
+      const gap = t - this.last;
+      const bin = gap > PERF_GAP.low ? Math.floor(Math.log(gap / PERF_GAP.low) * this.gapScale) : 0;
+      this.gapBins[bin > 31 ? 31 : bin]++;
+      this.gaps++;
+      if (gap > this.gapMax) this.gapMax = gap;
+      if (gap < this.gapMin) this.gapMin = gap;
+      if (gap > PERF_GAP.lateMs) this.lateGaps++;
+    }
+    this.last = t;
+    return t;
+  },
+  end(started) {
+    if (started < 0 || !this.on) return;
+    const duration = now() - started;
+    const bin = duration > PERF_TICK.low ? Math.floor(Math.log(duration / PERF_TICK.low) * this.tickScale) : 0;
+    this.tickBins[bin > 31 ? 31 : bin]++;
+    this.ticks++;
+    if (duration > this.tickMax) this.tickMax = duration;
+    if (duration < this.tickMin) this.tickMin = duration;
+    if (duration > PERF_TICK.lateMs) this.lateTicks++;
+  },
+  sync() {
+    const config = !Diag.recording() ? null : Telemetry.hosted() ? Diag.hostedPerfConfig() : Telemetry.diagnosticsConfig();
+    const wanted = !!config?.perf;
+    this.intervalMs = wanted ? config.perf_interval_s * 1000 : 0;
+    if (wanted === this.on) return;
+    if (wanted) this.start();
+    else this.stop();
+  },
+  start() {
+    this.on = true;
+    this.clear();
+    this.observe();
+    this.schedule();
+  },
+  stop() {
+    this.on = false; this.epoch++; this.last = -1;
+    if (this.timer) { clearTimeout(this.timer); this.timer = 0; }
+    try { this.observer?.disconnect(); } catch {}
+    this.observer = null;
+    this.clear();
+    this.heap = null;
+  },
+  clear() {
+    this.tickBins.fill(0); this.gapBins.fill(0);
+    this.ticks = 0; this.gaps = 0; this.tickMin = Infinity; this.tickMax = 0; this.gapMin = Infinity; this.gapMax = 0; this.lateTicks = 0; this.lateGaps = 0;
+    this.tasks = 0; this.taskMs = 0; this.samples = 0;
+    this.spanMono = now(); this.spanEpoch = Date.now();
+  },
+  observe() {
+    const Observer = W.PerformanceObserver;
+    if (typeof Observer !== 'function' || !Observer.supportedEntryTypes?.includes?.('longtask')) return;
+    try {
+      this.observer = new Observer(list => this.longTasks(list.getEntries()));
+      this.observer.observe({ type: 'longtask' });
+    } catch { this.observer = null; }
+  },
+  longTasks(entries) {
+    if (!this.on) return;
+    for (const entry of entries) {
+      const duration = Number(entry?.duration);
+      if (!Number.isFinite(duration) || duration < 0) continue;
+      this.tasks++; this.taskMs += duration;
+    }
+  },
+  schedule() {
+    if (this.timer) return;
+    const epoch = this.epoch;
+    this.timer = setTimeout(() => { this.timer = 0; void this.sample(epoch); }, PERF_SAMPLE_MS);
+  },
+  async sample(epoch) {
+    try {
+      await Telemetry.idle(() => { if (epoch === this.epoch && this.on) this.take(); });
+    } catch { Diag.fault(); }
+    if (epoch === this.epoch && this.on) this.schedule();
+  },
+  take() {
+    this.heap = this.readHeap() || this.heap;
+    this.samples++;
+    if (now() - this.spanMono >= this.intervalMs) this.close();
+  },
+  readHeap() {
+    const memory = typeof performance !== 'undefined' ? performance.memory : null;
+    const mb = bytes => Math.min(PERF_MAX_MB, Math.max(0, Math.round(Number(bytes) / 1048576)));
+    if (!memory || !Number.isFinite(Number(memory.usedJSHeapSize)) || !Number.isFinite(Number(memory.totalJSHeapSize))) return null;
+    return { used: mb(memory.usedJSHeapSize), total: mb(memory.totalJSHeapSize) };
+  },
+  close() {
+    const entry = this.entry({ preview: false });
+    this.clear();
+    if (Telemetry.hosted()) { Diag.hostPerfDone(entry); return; }
+    if (!entry || !Diag.wire(entry)) return;
+    Diag.perf.push(entry);
+    while (Diag.perf.length > DIAG_LIMIT.perfEntries) Diag.perf.shift();
+  },
+  peek() {
+    if (!this.on) return [];
+    const entry = this.entry({ preview: true });
+    return entry && Diag.wire(entry) ? [entry] : [];
+  },
+  entry({ preview }) {
+    const heap = this.heap || (preview ? this.readHeap() : null);
+    const tick = this.summary(this.tickBins, this.ticks, this.tickMin, this.tickMax, this.lateTicks, PERF_TICK, this.tickScale);
+    const gap = this.summary(this.gapBins, this.gaps, this.gapMin, this.gapMax, this.lateGaps, PERF_GAP, this.gapScale);
+    const tasks = this.observer ? { count: Math.min(this.tasks, DIAG_LIMIT.count), total_ms: Diag.tenth(Math.min(this.taskMs, PERF_MAX_LONG_MS)) } : null;
+    if (!heap && !tick && !gap && !tasks) return null;
+    const seconds = Math.round((now() - this.spanMono) / 1000);
+    const entry = { at: Diag.minute(this.spanEpoch), span_s: Math.min(86400, Math.max(60, seconds)), samples: Math.min(1440, Math.max(1, this.samples)) };
+    if (heap) entry.js_heap_mb = heap;
+    if (tick) entry.tick_ms = tick;
+    if (gap) entry.gap_ms = gap;
+    if (tasks) entry.long_tasks = tasks;
+    return entry;
+  },
+  summary(bins, total, min, max, late, range, scale) {
+    if (!total) return null;
+    const round = value => Math.round(Math.min(PERF_MAX_MS, Math.max(0, value)) * 10) / 10;
+    const quantile = q => {
+      const rank = q * total;
+      let below = 0;
+      for (let i = 0; i < PERF_BINS; i++) {
+        if (!bins[i]) continue;
+        if (below + bins[i] >= rank) {
+          const value = range.low * Math.exp((i + (rank - below) / bins[i]) / scale);
+          return Math.min(max, Math.max(min, value));
+        }
+        below += bins[i];
+      }
+      return max;
+    };
+    return { p50: round(quantile(0.5)), p95: round(quantile(0.95)), p99: round(quantile(0.99)), max: round(max), late_pct: Math.round(Math.min(100, late / total * 100) * 10) / 10 };
   },
 };
 
@@ -21344,8 +22149,9 @@ const UI = {
       this.reportNote = el('p', '', 'muted');
       this.reportStatus = el('p', '', 'muted'); this.reportStatus.setAttribute('role', 'status');
       this.reportBox = this.windowFrame('Report', () => Reports.close(),
-        el('p', 'When you press Send, this report goes to the OSB team at our server, api.osb.lol: your description, the technical details shown below and the screenshot, if you added one. Please leave out passwords and personal details. If the report shows a bug, we may quote your description and parts of the details in a public GitHub issue; never your install ID, character names, e-mail or screenshot. Kept for 6 months after the matter closes. You can also copy it or save it as a file and attach it to an issue at github.com/corevider/osb.', 'muted'),
+        el('p', 'When you press Send, this report goes to the OSB team at our server, api.osb.lol: your description, the technical details shown below and the screenshot, if you added one. Please leave out passwords and personal details. We never copy your description or the details into a public GitHub issue. If the report shows a bug, we may open a public issue that we write ourselves, with only our own summary, the product and version and the report code. It never contains your install ID, character names, e-mail or screenshot. Kept for 6 months after the matter closes.', 'muted'),
         Telemetry.link(),
+        el('p', 'You can also copy it or save it as a file and attach it to an issue at github.com/corevider/osb.', 'muted'),
         this.reportNote,
         this.field('Kind', this.reportKind),
         this.field('What happened? (optional)', this.reportDescription),
@@ -22960,7 +23766,7 @@ const UI = {
     // One throwing refresher must not stall every later one on each update; the error is logged at most every 5 s.
     this.refreshers.forEach(refresh => {
       try { refresh(); }
-      catch (e) { if (now() - (this.refreshErrorAt || -Infinity) > 5000) { this.refreshErrorAt = now(); Log.error('Panel update failed: ' + (e?.message || e)); } }
+      catch (e) { Diag.error('panel', e, 'panel'); if (now() - (this.refreshErrorAt || -Infinity) > 5000) { this.refreshErrorAt = now(); Diag.silently(() => Log.error('Panel update failed: ' + (e?.message || e))); } }
     });
     for (const slot of this.pane.querySelectorAll('.slot[data-skill]')) {
       const id = Number(slot.dataset.skill), left = World.cooldownLeft(id), total = World.skill(id)?.cooldownMs || 0;
@@ -23815,7 +24621,7 @@ function userStop(reason = 'stopped by you') {
 
 function boot() {
   if (Setup.isNew()) UI.current = 'Setup';
-  UI.mount(); Stats.init(); Sound.init(); Updates.start(); Diagnostics.start(); Telemetry.start();
+  UI.mount(); Stats.init(); Sound.init(); Updates.start(); Diagnostics.start(); Diag.start(); Telemetry.start();
   const unlockSound = e => {
     if (e.isTrusted && (Settings.profile.hunt.pickup.petFullSound || Sound.soxOn() || Sound.anyOn() || UniqueHunt.active)) Sound.unlock();
   };
@@ -23885,7 +24691,7 @@ function boot() {
       else UI.body.hidden = !UI.body.hidden;
     }
   }, true);
-  Ticker.start(() => Controller.tick(), 100);
+  Ticker.start(() => Perf.step(), 100);
   setInterval(() => { Wardrobe.tick(); UI.update(); }, 500);
   W.SROLean = { version: VERSION, stats: Stats, updates: Updates, diagnostics: Diagnostics, reports: Reports, alchemy: Alchemy, buffGear: BuffGear, world: World, settings: Settings, hunt: Hunt, loot: Loot, speedScroll: SpeedScroll, repairHammer: RepairHammer, resurrect: Resurrect, stall: Stall, quest: Quest,
     restock: Restock, town: Town, walkBack: WalkBack, travel: Travel, antiStuck: AntiStuck, chase: Chase, trap: Trap, autoMastery: AutoMastery, statPoints: StatPoints, share: ProfileShare, trace: Trace, setup: Setup, reconnect: Reconnect, petPotion: PetPotion, petAttack: PetAttack, mall: MallProbe, mallBuyer: MallBuyer, scrolls: ScrollBuff, navigation: Navigation, route: Route, wardrobe: Wardrobe, wardrobeData: WdData, learned: Learned, controller: Controller, ui: UI, activity: Activity, map: LeanMap, render: RenderControl, support: Support, items: ItemRules, stop: () => userStop('stopped from outside the panel'), log: Log };

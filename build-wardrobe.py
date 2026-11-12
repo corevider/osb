@@ -11,6 +11,9 @@ def part(a, b):
     return source[start:source.index(b, start)]
 constants = part('const WD_MEDIA =', 'const WdCfg =')
 helpers = part('const wdInt =', '// Rich tooltip in the item tooltip style')
+wd_safe_old = "    Log.warn('Görünüm Stüdyosu (' + what + '): ' + ((e && e.message) || e));\n"
+assert helpers.count(wd_safe_old) == 1
+helpers = helpers.replace(wd_safe_old, "    Diag.error('wardrobe', e, 'guard');\n    Diag.silently(() => Log.warn('Görünüm Stüdyosu (' + what + '): ' + ((e && e.message) || e)));\n")
 # Honor skins have the same validated body/slot contract as other catalogue rows.
 helpers = helpers.replace("  if (c.includes('_HONOR')) return null;\n", '')
 data = part('const WdData =', '// ---- the module ---')

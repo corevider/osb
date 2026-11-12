@@ -100,7 +100,7 @@ const petAttackHuntTick = Hunt.tick;
 Hunt.tick = function () {
   const out = petAttackHuntTick.apply(this, arguments);
   if (this.running && !Town.trip && !Restock.trip && !WalkBack.active && !Resurrect.trip && !Travel.active && !World.gp?.storage) {
-    try { PetAttack.tick(); } catch (e) { Log.error('Pet attack: ' + (e?.message || e)); }
+    try { PetAttack.tick(); } catch (e) { Diag.error('pet-attack', e, 'guard'); Diag.silently(() => Log.error('Pet attack: ' + (e?.message || e))); }
   }
   return out;
 };

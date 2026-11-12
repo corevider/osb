@@ -5,6 +5,7 @@ import runpy
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from english_only import english_only, leftovers
+import diagnostics_vocabulary
 
 base = Path(__file__).resolve().parent
 runpy.run_path(str(base / 'build-wardrobe.py'))
@@ -27,6 +28,9 @@ hook = hook.replace("  simUrl: '',\n", "  simUrl: '',\n  assetUrl: '',\n")
 hook = hook.replace("        if (name === 'sro-simulation') {\n", "        if (name === 'sro-assets') Hook.assetUrl = String(url);\n        if (name === 'sro-simulation') {\n")
 # Wardrobe rewrites only renderer copies; the mirror retains real items.
 hook = hook.replace("          if (!(Hook.probe.passSelect && inner && inner.kind === 'select')) return undefined;", "          return undefined;")
+sim_catch_old = "    Log.error('Veri işlenemedi: ' + (err && err.message ? err.message : err));\n"
+assert hook.count(sim_catch_old) == 1
+hook = hook.replace(sim_catch_old, "    Diag.error('simulation', err, 'data');\n    Diag.silently(() => Log.error('Veri işlenemedi: ' + (err && err.message ? err.message : err)));\n")
 world = section('const TRANSIENT_PHASES =', '// ---------------------------------------------------------------------------\n// Probe:')
 gp_call_old = "          this.applyGameplay(ev.state);\n"
 assert world.count(gp_call_old) == 1
@@ -268,7 +272,7 @@ skin += '\nconst LEAN_CSS = ' + __import__('json').dumps((base / 'lean-skin.css'
 header = '''// ==UserScript==
 // @name         OSB
 // @namespace    https://github.com/corevider/osb
-// @version      2.0.13
+// @version      2.0.14
 // @homepageURL  https://github.com/corevider/osb
 // @supportURL   https://github.com/corevider/osb/issues
 // @updateURL    https://raw.githubusercontent.com/corevider/osb/main/osb.meta.js
@@ -292,7 +296,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[OSB] Another SRO assistant is active. Disable it and reload to use OSB.');
   return;
 }
-const VERSION = '2.0.13';
+const VERSION = '2.0.14';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });
@@ -380,6 +384,8 @@ parts = [header, utils, (base / 'lean-settings.js').read_text(encoding='utf-8'),
          release_notes(), (base / 'lean-update.js').read_text(encoding='utf-8'),
          (base / 'lean-diagnostics.js').read_text(encoding='utf-8'),
          (base / 'lean-telemetry.js').read_text(encoding='utf-8'),
+         (base / 'lean-diagnostics-upload.js').read_text(encoding='utf-8'),
+         (base / 'lean-perf.js').read_text(encoding='utf-8'),
          (base / 'lean-reports.js').read_text(encoding='utf-8'),
          (base / 'lean-items.js').read_text(encoding='utf-8'),
          (base / 'lean-equip.js').read_text(encoding='utf-8'),
@@ -396,6 +402,9 @@ output = '\n\n'.join(parts).replace('[SRO Asistan]', '[OSB]')
 output = english_only(output)
 left = leftovers(output)
 assert not left, 'Turkish text left in the bot: ' + repr(left[:5])
+vocabulary = diagnostics_vocabulary.build(output, diagnostics_vocabulary.version_of(output))
+(base / diagnostics_vocabulary.FILE_NAME).write_text(diagnostics_vocabulary.text(vocabulary), encoding='utf-8', newline='\n')
+output = diagnostics_vocabulary.embed(output, vocabulary)
 (base / 'osb.user.js').write_text(output, encoding='utf-8', newline='\n')
 (base / 'osb.meta.js').write_text(header[:header.index('// ==/UserScript==') + len('// ==/UserScript==')] + '\n', encoding='utf-8', newline='\n')
 print(f'Built osb.user.js: {len(output.encode("utf-8")):,} bytes, {len(output.splitlines()):,} lines')

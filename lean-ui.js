@@ -50,8 +50,9 @@ const UI = {
       this.reportNote = el('p', '', 'muted');
       this.reportStatus = el('p', '', 'muted'); this.reportStatus.setAttribute('role', 'status');
       this.reportBox = this.windowFrame('Report', () => Reports.close(),
-        el('p', 'When you press Send, this report goes to the OSB team at our server, api.osb.lol: your description, the technical details shown below and the screenshot, if you added one. Please leave out passwords and personal details. If the report shows a bug, we may quote your description and parts of the details in a public GitHub issue; never your install ID, character names, e-mail or screenshot. Kept for 6 months after the matter closes. You can also copy it or save it as a file and attach it to an issue at github.com/corevider/osb.', 'muted'),
+        el('p', 'When you press Send, this report goes to the OSB team at our server, api.osb.lol: your description, the technical details shown below and the screenshot, if you added one. Please leave out passwords and personal details. We never copy your description or the details into a public GitHub issue. If the report shows a bug, we may open a public issue that we write ourselves, with only our own summary, the product and version and the report code. It never contains your install ID, character names, e-mail or screenshot. Kept for 6 months after the matter closes.', 'muted'),
         Telemetry.link(),
+        el('p', 'You can also copy it or save it as a file and attach it to an issue at github.com/corevider/osb.', 'muted'),
         this.reportNote,
         this.field('Kind', this.reportKind),
         this.field('What happened? (optional)', this.reportDescription),
@@ -1666,7 +1667,7 @@ const UI = {
     // One throwing refresher must not stall every later one on each update; the error is logged at most every 5 s.
     this.refreshers.forEach(refresh => {
       try { refresh(); }
-      catch (e) { if (now() - (this.refreshErrorAt || -Infinity) > 5000) { this.refreshErrorAt = now(); Log.error('Panel update failed: ' + (e?.message || e)); } }
+      catch (e) { Diag.error('panel', e, 'panel'); if (now() - (this.refreshErrorAt || -Infinity) > 5000) { this.refreshErrorAt = now(); Diag.silently(() => Log.error('Panel update failed: ' + (e?.message || e))); } }
     });
     for (const slot of this.pane.querySelectorAll('.slot[data-skill]')) {
       const id = Number(slot.dataset.skill), left = World.cooldownLeft(id), total = World.skill(id)?.cooldownMs || 0;

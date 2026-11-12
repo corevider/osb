@@ -220,6 +220,7 @@ Hunt.tick = function () {
 // Stops everything, for the player and for the bot itself. A pending auto-start survives it: only the player's own
 // Stop (userStop) cancels that.
 function stopAll(reason = 'all activities stopped') {
+  Diag.stop('stop_all', reason);
   Town.record('stop');
   UniqueHunt.stop(reason);
   Alchemy.stop();
@@ -311,7 +312,8 @@ const Controller = {
   // Optional features must never stop hunting: an error in one is logged (at most every 5 s) and skipped.
   guard(name, fn) {
     try { return fn(); } catch (e) {
-      if (now() - (this.guardAt[name] ?? -Infinity) > 5000) { this.guardAt[name] = now(); Log.error(name + ' error: ' + (e?.message || e)); }
+      Diag.error(name, e, 'guard');
+      if (now() - (this.guardAt[name] ?? -Infinity) > 5000) { this.guardAt[name] = now(); Diag.silently(() => Log.error(name + ' error: ' + (e?.message || e))); }
       return false;
     }
   },
@@ -428,8 +430,9 @@ const Controller = {
       else if (Hunt.running) { if (!Trace.tick()) Hunt.tick(); this.mode = Restock.trip ? 'shopping' : Hunt.state; }
       else { this.guard('Idle pet pickup', () => Loot.idleTick()); this.mode = 'idle'; }
     } catch (e) {
+      Diag.error('controller', e, 'tick');
       stopAll('internal error');
-      if (now() - this.lastErrorAt > 5000) { this.lastErrorAt = now(); Log.error(e.message || String(e)); UI.toast('Bot stopped: ' + e.message, 'warn'); }
+      if (now() - this.lastErrorAt > 5000) { this.lastErrorAt = now(); Diag.silently(() => Log.error(e.message || String(e))); UI.toast('Bot stopped: ' + e.message, 'warn'); }
       this.mode = 'error';
     } finally {
       Town.record();

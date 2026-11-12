@@ -14,7 +14,7 @@ function userStop(reason = 'stopped by you') {
 
 function boot() {
   if (Setup.isNew()) UI.current = 'Setup';
-  UI.mount(); Stats.init(); Sound.init(); Updates.start(); Diagnostics.start(); Telemetry.start();
+  UI.mount(); Stats.init(); Sound.init(); Updates.start(); Diagnostics.start(); Diag.start(); Telemetry.start();
   const unlockSound = e => {
     if (e.isTrusted && (Settings.profile.hunt.pickup.petFullSound || Sound.soxOn() || Sound.anyOn() || UniqueHunt.active)) Sound.unlock();
   };
@@ -84,7 +84,7 @@ function boot() {
       else UI.body.hidden = !UI.body.hidden;
     }
   }, true);
-  Ticker.start(() => Controller.tick(), 100);
+  Ticker.start(() => Perf.step(), 100);
   setInterval(() => { Wardrobe.tick(); UI.update(); }, 500);
   W.SROLean = { version: VERSION, stats: Stats, updates: Updates, diagnostics: Diagnostics, reports: Reports, alchemy: Alchemy, buffGear: BuffGear, world: World, settings: Settings, hunt: Hunt, loot: Loot, speedScroll: SpeedScroll, repairHammer: RepairHammer, resurrect: Resurrect, stall: Stall, quest: Quest,
     restock: Restock, town: Town, walkBack: WalkBack, travel: Travel, antiStuck: AntiStuck, chase: Chase, trap: Trap, autoMastery: AutoMastery, statPoints: StatPoints, share: ProfileShare, trace: Trace, setup: Setup, reconnect: Reconnect, petPotion: PetPotion, petAttack: PetAttack, mall: MallProbe, mallBuyer: MallBuyer, scrolls: ScrollBuff, navigation: Navigation, route: Route, wardrobe: Wardrobe, wardrobeData: WdData, learned: Learned, controller: Controller, ui: UI, activity: Activity, map: LeanMap, render: RenderControl, support: Support, items: ItemRules, stop: () => userStop('stopped from outside the panel'), log: Log };

@@ -58,8 +58,8 @@ Settings are saved per character.
 
 OSB sends nothing about you to anyone unless you say so. The bot talks to the game page, and it fetches only update information and navigation data from `raw.githubusercontent.com/corevider/osb` and `api.github.com`. Those requests carry no data about you or your game. The update check (about every 15 minutes) is on by default and can be switched off under **Settings → Privacy → Check GitHub for OSB updates**; when it is off, OSB makes no update request at all and you update by hand. Two features can send data to the OSB team at `api.osb.lol`, and both are off until you act:
 
-- **Share usage statistics** (Settings → Privacy, off by default): a short status report about every 10 minutes, linked to a random install ID. You can see exactly what is sent, download it, or delete it from the server at any time. A second switch adds your character names. Inside OSB Manager, OSB sends none of this itself.
-- **Send** in the report window: one report you have previewed, after you confirm. Without usage statistics it is anonymous.
+- **Share usage statistics, error reports and performance data** (Settings → Privacy, off by default): a short status report about every 10 minutes and, when the server asks for them, error reports: which part of OSB failed and how, why the bot stopped by itself and what it did just before, as fixed codes, never the text of your log, names, chat or positions. Everything is kept under a random install ID. You can see exactly what is sent, download it, or delete it from the server at any time. A second switch adds your character names. Inside OSB Manager, OSB sends none of this itself. If you turned sharing on in an older version, the text has changed: tick the switch again if you want to keep sharing.
+- **Send** in the report window: one report you have previewed, after you confirm. Without sharing it is anonymous.
 
 No other host receives data. Details, the list of requests and what is never sent: [docs/telemetry.md](docs/telemetry.md). Privacy contact: privacy@osb.lol.
 

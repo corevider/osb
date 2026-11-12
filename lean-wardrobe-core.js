@@ -45,7 +45,8 @@ function wdSafe(what, fn) {
   try {
     return fn();
   } catch (e) {
-    Log.warn('Wardrobe (' + what + '): ' + ((e && e.message) || e));
+    Diag.error('wardrobe', e, 'guard');
+    Diag.silently(() => Log.warn('Wardrobe (' + what + '): ' + ((e && e.message) || e)));
     return undefined;
   }
 }

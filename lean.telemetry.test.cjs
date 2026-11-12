@@ -49,7 +49,7 @@ module.exports = function telemetryTests( { test: baseTest, source } ) {
 
 	const GOLDEN_REGISTER = {
 		install_id: "3f0b2c1e-7d4a-4c55-9a51-2b8f7e4c9d10", install_key: "kq3Vt3N1rA8b0bq3QyU2sQj3XcYw8m3cXzq8b6F0wJs", app: "osb", app_version: "2.0.4", os: "windows", locale: "en",
-		consent: { usage_version: 1, characters: false },
+		consent: { usage_version: 2, characters: false },
 	};
 	const GOLDEN_TELEMETRY = {
 		schema: 1, app_version: "2.0.4",
@@ -101,12 +101,13 @@ module.exports = function telemetryTests( { test: baseTest, source } ) {
 	*/
 	function harness( { stored = {}, hosted = false, idle = true, hidden = {} } = {} ) {
 		let t = START;
-		const storage = new Map( Object.entries( stored ) ), timers = [], requests = [], idleCalls = [], logs = [];
+		const storage = new Map( Object.entries( stored ) ), timers = [], requests = [], idleCalls = [], logs = [], digests = [], listeners = {};
 		let nextTimer = 1, active = 0, maxActive = 0, pendingCrypto = 0, ticking = false;
 		const track = promise => { pendingCrypto++; return promise.finally( () => { pendingCrypto--; } ); };
 		const crypto = { getRandomValues: array => nodeCrypto.webcrypto.getRandomValues( array ), subtle: {
 			importKey: ( ...args ) => track( nodeCrypto.webcrypto.subtle.importKey( ...args ) ),
 			sign: ( ...args ) => track( nodeCrypto.webcrypto.subtle.sign( ...args ) ),
+			digest: ( ...args ) => { digests.push( { inTick: ticking } ); return track( nodeCrypto.webcrypto.subtle.digest( ...args ) ); },
 		} };
 		class FakeDate extends Date {
 			constructor( ...args ) { if ( args.length ) super( ...args ); else super( t ); }
@@ -132,7 +133,7 @@ module.exports = function telemetryTests( { test: baseTest, source } ) {
 			return reply( 404, { code: "not_found" } );
 		};
 		const win = {
-			addEventListener() {}, localStorage: { getItem: k => storage.get( k ) ?? null, setItem: ( k, v ) => storage.set( k, v ), removeItem: k => storage.delete( k ) },
+			addEventListener: ( type, fn ) => { ( listeners[type] ||= [] ).push( fn ); }, localStorage: { getItem: k => storage.get( k ) ?? null, setItem: ( k, v ) => storage.set( k, v ), removeItem: k => storage.delete( k ) },
 			crypto, navigator: { language: "en-GB", platform: "Win32" },
 			fetch: ( url, init = {} ) => {
 				const entry = { url, method: init.method || "GET", init, body: init.body, headers: init.headers || {}, at: t, inTick: ticking, aborted: false, concurrent: ++active };
@@ -150,7 +151,8 @@ module.exports = function telemetryTests( { test: baseTest, source } ) {
 				} );
 			},
 		};
-		if ( hosted ) win.chrome = { webview: {} };
+		const webview = { listeners: [], posted: [], addEventListener( type, fn ) { if ( type === "message" ) this.listeners.push( fn ); }, postMessage( message ) { this.posted.push( { at: t, text: JSON.stringify( message ), message: JSON.parse( JSON.stringify( message ) ) } ); } };
+		if ( hosted ) win.chrome = { webview };
 		if ( idle ) win.requestIdleCallback = ( fn, options ) => { idleCalls.push( options ); setTimeout( fn, 0 ); };
 		const document = { createElement: tag => new FakeElement( tag ), documentElement: { append() {} } };
 		const setTimeout = ( fn, ms = 0 ) => { const id = nextTimer++; timers.push( { id, at: t + ms, fn } ); return id; };
@@ -174,7 +176,9 @@ module.exports = function telemetryTests( { test: baseTest, source } ) {
 		b.Telemetry.timing.resendMs = 0;
 		Object.assign( b.Telemetry, hidden );
 		const h = {
-			...b, win, storage, timers, requests, idleCalls, logs, server, reply,
+			...b, win, context, storage, timers, requests, idleCalls, logs, server, reply, digests, listeners, webview,
+			host( data ) { for ( const fn of webview.listeners ) fn( { data } ); },
+			get ticking() { return ticking; },
 			get now() { return t; }, get maxActive() { return maxActive; },
 			async settle() {
 				const turn = () => new Promise( resolve => setImmediate( resolve ) );
@@ -199,7 +203,7 @@ module.exports = function telemetryTests( { test: baseTest, source } ) {
 				t = end;
 				await h.settle();
 			},
-			gameTick() { ticking = true; try { b.Controller.tick(); } finally { ticking = false; } },
+			gameTick() { ticking = true; try { b.Perf.step(); } finally { ticking = false; } },
 			ofPath( prefix, method ) { return requests.filter( r => r.url.slice( BASE.length ).startsWith( prefix ) && ( !method || r.method === method ) ); },
 			bodies( prefix ) { return h.ofPath( prefix ).map( r => JSON.parse( r.body ) ); },
 			consent() { assert.equal( b.Telemetry.setUsage( true ), true ); },
@@ -272,7 +276,7 @@ module.exports = function telemetryTests( { test: baseTest, source } ) {
 		const h = harness();
 		h.consent();
 		let record = JSON.parse( h.storage.get( "sroBotLean:v1:telemetry" ) );
-		assert.equal( record.usage, 1 ); assert.equal( record.usageText, "2026-11-04.1", "the id of the consent text is stored" ); assert.equal( record.usageAt, START ); assert.equal( record.characters, false ); assert.equal( record.charactersAt, 0 );
+		assert.equal( record.usage, 2 ); assert.equal( record.usageText, "2026-11-12.1", "the id of the consent text is stored" ); assert.equal( record.usageAt, START ); assert.equal( record.characters, false ); assert.equal( record.charactersAt, 0 );
 		await h.advance( 5 * MINUTE );
 		h.Telemetry.setCharacters( true );
 		record = JSON.parse( h.storage.get( "sroBotLean:v1:telemetry" ) );
@@ -522,7 +526,7 @@ module.exports = function telemetryTests( { test: baseTest, source } ) {
 		h.Telemetry.setCharacters( true );
 		await h.advance( 20 * MINUTE );
 		assert.equal( h.ofPath( "/installs/me/consent", "PUT" ).length, 1, "the server is told at once" );
-		assert.deepEqual( JSON.parse( h.ofPath( "/installs/me/consent", "PUT" )[0].body ), { usage_version: 1, characters: true } );
+		assert.deepEqual( JSON.parse( h.ofPath( "/installs/me/consent", "PUT" )[0].body ), { usage_version: 2, characters: true } );
 		const last = h.bodies( "/telemetry" ).at( -1 );
 		assert.deepEqual( last.accounts[0].character, { name: "ExampleHero" } );
 		h.Telemetry.setCharacters( false ); await h.advance( 20 * MINUTE );
@@ -725,12 +729,12 @@ module.exports = function telemetryTests( { test: baseTest, source } ) {
 		const button = label => host.find( n => n.tag === "button" && n.textContent === label )[0];
 		usage.checked = false; usage.fire( "change", { isTrusted: true } );
 		assert.equal( h.Telemetry.consented(), true, "the box alone does not withdraw" ); assert.equal( usage.checked, true );
-		assert.match( host.textContent, /Stop sharing and delete your usage data from api\.osb\.lol\? Reports you already sent are deleted too\./ );
+		assert.match( host.textContent, /Stop sharing usage statistics, error reports and performance data, and delete them from api\.osb\.lol\? Reports you already sent are deleted too\./ );
 		button( "Cancel" ).click(); assert.equal( h.Telemetry.consented(), true );
 		usage.checked = false; usage.fire( "change", { isTrusted: true } );
 		button( "Yes, stop and delete" ).click(); await h.advance( 5000 );
 		assert.equal( h.Telemetry.consented(), false ); assert.equal( h.ofPath( "/installs/me", "DELETE" ).length, 1 );
-		assert.match( host.textContent, /keep it for 45 days/ ); assert.ok( !/anonymous usage/i.test( host.textContent ), "the statistics are never called anonymous" );
+		assert.match( host.textContent, /We keep usage data for 45 days, error data for 30 days and performance data for 14 days/ ); assert.ok( !/anonymous usage/i.test( host.textContent ), "the statistics are never called anonymous" );
 	} );
 
 	test( "the update check is on by default, asks only GitHub about the OSB repository and sends no user data", async () => {
@@ -819,7 +823,7 @@ module.exports = function telemetryTests( { test: baseTest, source } ) {
 		await h.advance( 5 * MINUTE );
 		const register = h.bodies( "/installs" ).find( b => b.install_id );
 		assert.deepEqual( typesOf( register ), typesOf( GOLDEN_REGISTER ) );
-		assert.equal( register.app, "osb" ); assert.equal( register.app_version, APP_VERSION ); assert.deepEqual( register.consent, { usage_version: 1, characters: true } );
+		assert.equal( register.app, "osb" ); assert.equal( register.app_version, APP_VERSION ); assert.deepEqual( register.consent, { usage_version: 2, characters: true } );
 		assert.match( register.install_id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/ ); assert.match( register.install_key, /^[A-Za-z0-9_-]{43}$/ );
 		const telemetry = h.bodies( "/telemetry" ).at( -1 );
 		assertSubsetShape( telemetry, GOLDEN_TELEMETRY );
@@ -969,7 +973,7 @@ module.exports = function telemetryTests( { test: baseTest, source } ) {
 		assert.equal( h.Telemetry.auth(), "", "no install key is used inside the Manager" );
 		const host = new FakeElement( "div" ); h.Telemetry.draw( host );
 		const text = host.textContent;
-		assert.match( text, /Usage statistics are handled by OSB Manager\. OSB sends none itself\./ ); assert.ok( !/Share usage statistics/.test( text ) );
+		assert.match( text, /Usage statistics, error reports and performance data are handled by OSB Manager\. OSB sends none itself\./ ); assert.ok( !/Share usage statistics/.test( text ) );
 		assert.deepEqual( host.find( n => n.tag === "input" ).map( n => n.attributes["aria-label"] ), [ "Check GitHub for OSB updates" ], "no usage toggle: only the update switch" );
 	} );
 
@@ -1012,7 +1016,7 @@ module.exports = function telemetryTests( { test: baseTest, source } ) {
 		assert.equal( h.ofPath( "/installs/me", "DELETE" ).length, 1 ); assert.equal( h.Telemetry.consented(), false );
 		const off = harness(); const offHost = new FakeElement( "div" ); off.Telemetry.draw( offHost );
 		offHost.find( n => n.tag === "button" && n.textContent === "Show what is sent" )[0].click(); await off.advance( 1000 );
-		assert.match( offHost.find( n => n.tag === "textarea" )[0].value, /^Nothing is sent while usage statistics are off/ ); assert.equal( off.requests.length, 0 );
+		assert.match( offHost.find( n => n.tag === "textarea" )[0].value, /^Nothing is sent while sharing is off/ ); assert.equal( off.requests.length, 0 );
 		const exportable = harness(); exportable.consent(); await exportable.advance( 5 * MINUTE );
 		const result = await exportable.Telemetry.download();
 		assert.equal( result.ok, true ); assert.deepEqual( JSON.parse( result.data ), { install: { id: "x" } } );
@@ -1287,4 +1291,6 @@ module.exports = function telemetryTests( { test: baseTest, source } ) {
 		assert.match( h.UniqueList.updated(), /^Updated \d+ s ago from the unique tracker/ );
 		assert.ok( !JSON.stringify( rows ).includes( "Sample Hero" ) && ![ ...h.storage.values() ].join( " " ).includes( "Sample Hero" ) );
 	} );
+
+	return { harness, lifecycle, FakeElement, assertSubsetShape, noPlatformRequests, constants: { START, MINUTE, HOUR, BASE, APP_VERSION } };
 };

@@ -111,14 +111,15 @@ const server = http.createServer((req, res) => {
 // worker) is recorded with consent off and with consent on against a server that never answers the telemetry request.
 // OSB_TICK_PROOF_MS sets the length of each run (default 20 s; the release proof uses 600000 = 10 minutes).
 // Only this test's copy of the script exposes the internals; the release script has no such hook.
-const testScript = script.replace(/\}\)\(\);\s*$/, 'window.__osbTest = { Telemetry, Controller };\n})();\n');
+const testScript = script.replace(/\}\)\(\);\s*$/, 'window.__osbTest = { Telemetry, Controller, Perf: typeof Perf === "undefined" ? null : Perf };\n})();\n');
 assert.notEqual(testScript, script);
 const percentile = (sorted, p) => sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))];
 async function tickRun(browser, localPort, hangingPort, withTelemetry, durationMs) {
+  const histograms = () => { const { Perf } = window.__osbTest; if (!Perf) return null; const entry = Perf.entry({ preview: true }); return entry ? { on: Perf.on, tick_ms: entry.tick_ms, gap_ms: entry.gap_ms, long_tasks: entry.long_tasks ?? null, js_heap_mb: entry.js_heap_mb ?? null } : { on: Perf.on }; };
   const page = await browser.newPage(), errors = [];
   page.on('pageerror', error => errors.push(error.message));
   const version = script.match(/const VERSION = '([\d.]+)';/)[1];
-  await page.addInitScript(v => localStorage.setItem('sroBotLean:v1:seenVersion', JSON.stringify(v)), version);
+  await page.addInitScript(v => { localStorage.setItem('sroBotLean:v1:seenVersion', JSON.stringify(v)); localStorage.removeItem('sroBotLean:v1:telemetry'); }, version);
   await page.goto(`http://127.0.0.1:${localPort}/`);
   await page.addScriptTag({ content: testScript });
   await page.waitForFunction(() => window.__osbTest && window.SROLean);
@@ -136,19 +137,21 @@ async function tickRun(browser, localPort, hangingPort, withTelemetry, durationM
   await page.waitForTimeout(durationMs);
   const result = await page.evaluate(() => {
     const { Telemetry } = window.__osbTest;
-    return { ticks: window.__ticks, long: window.__long, failures: Telemetry.failures, requests: Telemetry.inFlight };
+    return { ticks: window.__ticks, long: window.__long, failures: Telemetry.failures, requests: Telemetry.inFlight, recording: Telemetry.status().diagnostics.recording };
   });
+  result.perf = await page.evaluate(histograms);
   await page.close();
   assert.deepEqual(errors, []);
   const gaps = result.ticks.slice(1).map((t, i) => t - result.ticks[i]).sort((a, b) => a - b);
-  return { ticks: result.ticks.length, p50: percentile(gaps, 0.5), p99: percentile(gaps, 0.99), max: gaps[gaps.length - 1], longTasks: result.long.length, longestTask: Math.max(0, ...result.long), failures: result.failures };
+  return { ticks: result.ticks.length, p50: percentile(gaps, 0.5), p99: percentile(gaps, 0.99), max: gaps[gaps.length - 1], longTasks: result.long.length, longestTask: Math.max(0, ...result.long), failures: result.failures, diagnosticsRecording: result.recording, perfEntry: result.perf };
 }
 async function tickProof(browser, localPort) {
+  const perfConfig = { on: false };
   const durationMs = Number(process.env.OSB_TICK_PROOF_MS || 20000), hanging = [];
   const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, content-type', 'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE' };
   const stalled = http.createServer((req, res) => {
     if (req.method === 'OPTIONS') { res.writeHead(204, cors); res.end(); return; }
-    if (req.url.startsWith('/v1/config')) { res.writeHead(200, { ...cors, 'Content-Type': 'application/json' }); res.end(JSON.stringify({ schema: 1, telemetry: { enabled: true, interval_s: 300 }, reports: { enabled: true, screenshots: false }, client_ok: true, message: null })); return; }
+    if (req.url.startsWith('/v1/config')) { res.writeHead(200, { ...cors, 'Content-Type': 'application/json' }); res.end(JSON.stringify({ schema: 1, telemetry: { enabled: true, interval_s: 300 }, reports: { enabled: true, screenshots: false }, diagnostics: { enabled: true, perf: perfConfig.on, interval_s: 600, perf_interval_s: 1800, sample_pct: 100 }, client_ok: true, message: null })); return; }
     if (req.url === '/v1/installs') { res.writeHead(201, { ...cors, 'Content-Type': 'application/json' }); res.end('{}'); return; }
     hanging.push(req.url);
   });
@@ -156,9 +159,12 @@ async function tickProof(browser, localPort) {
   try {
     const without = await tickRun(browser, localPort, stalled.address().port, false, durationMs);
     const withTelemetry = await tickRun(browser, localPort, stalled.address().port, true, durationMs);
+    perfConfig.on = true;
+    const withPerf = await tickRun(browser, localPort, stalled.address().port, true, durationMs);
     console.log('TICK PROOF (ms between Controller.tick calls, 100 ms Ticker) over ' + durationMs + ' ms each');
     console.log('  telemetry off: ' + JSON.stringify(without));
     console.log('  telemetry on, server never answers: ' + JSON.stringify(withTelemetry) + ', telemetry requests held open: ' + hanging.length);
+    console.log('  telemetry on, perf on: ' + JSON.stringify(withPerf));
     assert.ok(hanging.length >= 1, 'the telemetry request really went out and was never answered');
     assert.ok(without.ticks > durationMs / 150 && withTelemetry.ticks > durationMs / 150, 'the ticker kept running');
     assert.ok(withTelemetry.max < 1000, 'no tick was delayed by a second');
@@ -1218,10 +1224,10 @@ async function tickProof(browser, localPort) {
     assert.deepEqual(reportRequests,[]);
     // Privacy settings: everything is off by default and the character display needs the usage consent first.
     await page.getByRole('button',{name:'Settings',exact:true}).click();
-    const usageToggle = page.getByLabel('Share usage statistics',{exact:true}), characterToggle = page.getByLabel('Show my characters in the OSB dashboard',{exact:true});
+    const usageToggle = page.getByLabel('Share usage statistics, error reports and performance data',{exact:true}), characterToggle = page.getByLabel('Show my characters in the OSB dashboard',{exact:true});
     await usageToggle.scrollIntoViewIfNeeded();
     assert.deepEqual([await usageToggle.isChecked(), await characterToggle.isChecked(), await characterToggle.isDisabled()], [false, false, true]);
-    await page.getByText('Install ID: none (nothing is sent while usage statistics are off).').waitFor();
+    await page.getByText('Install ID: none (nothing is sent while sharing is off).').waitFor();
     assert.equal(await page.locator('#sro-bot-lean').evaluate(host => host.shadowRoot.querySelector('a[href="https://osb.lol/en/privacy/"]')?.rel), 'noopener noreferrer');
     assert.deepEqual(reportRequests,[], 'the whole session so far sent nothing to api.osb.lol');
     assert.deepEqual(errors,[]);

@@ -1,4 +1,5 @@
 // Explicit report fields only: never export raw logs, profiles or game snapshots.
+const TOWN_PHASES = ['recall', 'recall-wait', 'revive-arrival', 'walk-arrival', 'service-wait', 'walk-storage', 'open-storage', 'store', 'close-storage', 'walk-vendor', 'open-vendor', 'buy', 'close-vendor', 'walk-smith', 'open-smith', 'sell', 'gear', 'repair', 'close-smith', 'walk-armor', 'open-armor', 'close-armor', 'walk-accessory', 'open-accessory', 'close-accessory', 'walk-gate', 'open-gate', 'mall-reverse', 'reverse', 'reverse-wait', 'leave', 'settle'];
 const Diagnostics = {
   history: [], errors: [], stops: [], last: '', started: false,
   number(value) { return Number.isFinite(value) ? value : null; },
@@ -21,6 +22,7 @@ const Diagnostics = {
   noteStop(source, reason) {
     const text = String(reason || '').slice(0, 160);
     this.stops.push({ at: now(), source, reason: text || 'no reason given' });
+    Diag.stop(source, text);
     if (this.stops.length > 8) this.stops.shift();
   },
   start() {
@@ -202,7 +204,7 @@ const Diagnostics = {
       requestRemainingMs: Number.isFinite(World.simNow()) && Number.isFinite(matching?.request?.expires) ? Math.max(0, matching.request.expires - World.simNow()) : null,
       townActive: !!Town.trip,
       levelingOn: !!c.leveling?.on, levelingMove: ['walk', 'select', 'menu', 'appoint'].includes(Leveling.move?.phase) ? Leveling.move.phase : null, levelingBuild: Leveling.build()?.key || null,
-      townPhase: ['recall', 'recall-wait', 'revive-arrival', 'walk-arrival', 'service-wait', 'walk-storage', 'open-storage', 'store', 'close-storage', 'walk-vendor', 'open-vendor', 'buy', 'close-vendor', 'walk-smith', 'open-smith', 'sell', 'gear', 'repair', 'close-smith', 'walk-armor', 'open-armor', 'close-armor', 'walk-accessory', 'open-accessory', 'close-accessory', 'walk-gate', 'open-gate', 'mall-reverse', 'reverse', 'reverse-wait', 'leave', 'settle'].includes(Town.trip?.phase) ? Town.trip.phase : null,
+      townPhase: TOWN_PHASES.includes(Town.trip?.phase) ? Town.trip.phase : null,
       scrollAttempts: this.number(Town.trip?.scrollAttempts), scrollAccepted: !!Town.trip?.scrollRequest?.accepted,
       returnScroll: !!Town.scroll(0x09ec), reverseScroll: !!Town.scroll(0x19ec),
       settings: { autoRecruit: !!c.party.autoRecruit, autoAccept: !!c.party.autoAcceptMatching,

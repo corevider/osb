@@ -1,22 +1,25 @@
 // Opt-in usage statistics and report delivery to api.osb.lol (protocol: docs/telemetry.md).
 // Nothing here runs in Controller.tick or the 100 ms Ticker. A setTimeout chain wakes it, the payload is copied when the
 // browser is idle, and every request is one at a time, uncredentialed, unredirected and aborted after 15 s.
-const CONSENT_VERSION = 1;
-const CONSENT_TEXT_VERSION = '2026-11-04.1';
+const CONSENT_VERSION = 2;
+const CONSENT_TEXT_VERSION = '2026-11-12.1';
 const PRIVACY_URL = 'https://osb.lol/en/privacy/';
+const KVKK_NOTICE_URL = 'https://osb.lol/kvkk/aydinlatma-metni/';
+const KVKK_CONSENT_URL = 'https://osb.lol/kvkk/acik-riza-metni/';
 const PRIVACY_CONTACT = 'privacy@osb.lol';
 const LONG_MAX = 9223372036854775807n;
 const Telemetry = {
   base: 'https://api.osb.lol/v1',
   timing: { startDelayMs: [60000, 180000], timeoutMs: 15000, minWaitMs: 60000, backoffBaseMs: 60000, backoffCapMs: 6 * 3600000, retryAfterMaxMs: 86400000,
     configEveryMs: 6 * 3600000, configStaleMs: 24 * 3600000, pauseMs: 24 * 3600000, resendMs: 3600000, disabledRecheckMs: 3600000,
-    minIntervalS: 300, maxIntervalS: 86400, defaultIntervalS: 600, cutBytes: 60 * 1024 },
+    minIntervalS: 300, maxIntervalS: 86400, defaultIntervalS: 600, cutBytes: 60 * 1024,
+    diagnostics: { minIntervalS: 600, maxIntervalS: 86400, defaultIntervalS: 600, minPerfIntervalS: 1800, maxPerfIntervalS: 86400, defaultPerfIntervalS: 1800 } },
   data: null, knownId: '', timer: 0, inFlight: false, lane: Promise.resolve(), gen: 0, failures: 0, errors: 0, off: false, halted: false,
   pausedUntil: 0, waitingForConfig: false, configDueAt: 0, configRetryAt: 0, reregistered: false, nextAfterS: 0,
-  slots: new Map(), sessions: new Map(), sentSignature: '', sentSession: '', pendingDelete: null, view: null,
+  slots: new Map(), sessions: new Map(), sentSignature: '', sentSession: '', pendingDelete: null, view: null, usageDueAt: 0, current: null, changedNow: false,
   now() { return Date.now(); },
   random() { return Math.random(); },
-  blank() { return { usage: 0, usageAt: 0, usageText: '', characters: false, charactersAt: 0, id: '', key: '', registered: false, attempted: false, synced: false, config: null, sentAt: 0, result: '' }; },
+  blank() { return { usage: 0, usageAt: 0, usageText: '', characters: false, charactersAt: 0, id: '', key: '', registered: false, attempted: false, synced: false, syncedUsage: 0, changedSeen: false, config: null, sentAt: 0, result: '' }; },
   load() {
     const saved = Store.get('telemetry', null), s = saved && typeof saved === 'object' ? saved : {}, d = this.blank();
     d.usage = Number.isInteger(s.usage) && s.usage > 0 ? s.usage : 0;
@@ -25,22 +28,27 @@ const Telemetry = {
     if (!d.id || !d.key) { d.id = ''; d.key = ''; d.usage = 0; }
     d.usageAt = d.usage > 0 && Number.isFinite(s.usageAt) ? s.usageAt : 0;
     d.usageText = d.usage > 0 && typeof s.usageText === 'string' ? s.usageText.slice(0, 32) : '';
-    d.characters = d.usage > 0 && s.characters === true;
+    d.characters = d.usage >= CONSENT_VERSION && s.characters === true;
     d.charactersAt = d.characters && Number.isFinite(s.charactersAt) ? s.charactersAt : 0;
     d.registered = d.usage > 0 && s.registered === true;
     d.attempted = d.usage > 0 && s.attempted === true;
     d.synced = d.registered && s.synced === true;
+    d.syncedUsage = d.registered ? Number.isInteger(s.syncedUsage) && s.syncedUsage > 0 ? s.syncedUsage : 1 : 0;
+    d.changedSeen = d.usage > 0 && s.changedSeen === true;
     d.sentAt = Number.isFinite(s.sentAt) ? s.sentAt : 0;
     d.result = ['ok', 'unreachable', 'rejected', 'paused', 'disabled'].includes(s.result) ? s.result : '';
     d.config = this.storedConfig(s.config);
     this.knownId = d.id;
-    return this.data = d;
+    this.data = d;
+    Diag.sync();
+    return d;
   },
   storedConfig(c) {
     const v = c?.value, t = this.timing;
     if (!c || !Number.isFinite(c.at) || !v?.telemetry || typeof v.telemetry.enabled !== 'boolean' || !Number.isFinite(v.telemetry.interval_s) || !v.reports || typeof v.reports.enabled !== 'boolean' || typeof v.reports.screenshots !== 'boolean') return null;
     return { at: c.at, value: { telemetry: { enabled: v.telemetry.enabled, interval_s: clamp(Math.round(v.telemetry.interval_s), t.minIntervalS, t.maxIntervalS) },
-      reports: { enabled: v.reports.enabled, screenshots: v.reports.screenshots }, client_ok: v.client_ok === true, message: typeof v.message === 'string' ? v.message.slice(0, 200) : null } };
+      reports: { enabled: v.reports.enabled, screenshots: v.reports.screenshots }, diagnostics: this.diagnosticsBlock(v.diagnostics, v.client_ok === true),
+      client_ok: v.client_ok === true, message: typeof v.message === 'string' ? v.message.slice(0, 200) : null } };
   },
   get() { return this.data || this.load(); },
   write() {
@@ -59,6 +67,8 @@ const Telemetry = {
   hosted() { return !!W.chrome?.webview; },
   supported() { return !!(W.crypto?.subtle && W.crypto.getRandomValues && W.fetch); },
   consented() { return this.get().usage >= CONSENT_VERSION; },
+  outdated() { const usage = this.get().usage; return usage > 0 && usage < CONSENT_VERSION; },
+  diagnosticsConfig() { const value = this.configUsable(); return value?.diagnostics?.enabled ? value.diagnostics : null; },
   active() { return this.consented() && !this.hosted() && !this.off && !this.halted && this.supported(); },
   os() {
     const platform = String(W.navigator?.userAgentData?.platform || W.navigator?.platform || '').toLowerCase();
@@ -80,19 +90,19 @@ const Telemetry = {
   newIdentity() {
     const d = this.get();
     d.id = this.uuid(); d.key = this.base64url(this.bytes(32));
-    d.registered = false; d.attempted = false; d.synced = false;
+    d.registered = false; d.attempted = false; d.synced = false; d.syncedUsage = 0;
     this.slots.clear();
   },
   resetRun() {
     this.failures = 0; this.halted = false; this.pausedUntil = 0; this.waitingForConfig = false; this.configDueAt = 0; this.configRetryAt = 0;
-    this.reregistered = false; this.nextAfterS = 0; this.sentSignature = ''; this.sentSession = ''; this.sessions.clear(); this.slots.clear();
+    this.reregistered = false; this.nextAfterS = 0; this.sentSignature = ''; this.sentSession = ''; this.sessions.clear(); this.slots.clear(); this.usageDueAt = 0;
   },
   // ---- Fail-safe: a bug here is counted, three of them switch the module off for this page, and the bot never notices.
   fault() {
     this.errors++;
     if (this.errors < 3 || this.off) return;
     this.off = true; this.cancel();
-    Log.warn('Usage statistics stopped for this page after repeated errors. Reload the game to try again.');
+    Diag.silently(() => Log.warn('Usage statistics stopped for this page after repeated errors. Reload the game to try again.'));
   },
   guard(fn, fallback) { try { return fn(); } catch { this.fault(); return fallback; } },
   async guardAsync(fn, fallback) { try { return await fn(); } catch { this.fault(); return fallback; } },
@@ -110,10 +120,11 @@ const Telemetry = {
   },
   enable() {
     if (!this.supported() || this.hosted() || this.consented()) return false;
-    const d = this.get();
-    this.gen++; this.cancel(); this.resetRun();
+    const d = this.get(), reuse = this.outdated() && !!d.id && !!d.key;
+    this.gen++; this.cancel(); this.abortBackground(); this.resetRun(); Diag.reset();
     d.usage = CONSENT_VERSION; d.usageAt = this.now(); d.usageText = CONSENT_TEXT_VERSION; d.characters = false; d.charactersAt = 0; d.sentAt = 0; d.result = ''; this.pendingDelete = null;
-    this.newIdentity(); this.write();
+    if (reuse) this.slots.clear(); else this.newIdentity();
+    this.write(); Diag.sync();
     this.schedule(this.startDelay());
     return true;
   },
@@ -126,7 +137,9 @@ const Telemetry = {
       return true;
     }, false);
   },
-  auth() { const d = this.get(); return !this.hosted() && d.registered && d.id && d.key ? `Bearer osb1.${d.id}.${d.key}` : ''; },
+  credential() { const d = this.get(); return !this.hosted() && d.id && d.key ? `Bearer osb1.${d.id}.${d.key}` : ''; },
+  auth() { return this.consented() && this.get().registered ? this.credential() : ''; },
+  abortBackground() { this.current?.abort(); },
   // ---- Network: one request at a time, never throws.
   request(options) {
     const run = () => this.send(options);
@@ -134,9 +147,9 @@ const Telemetry = {
     this.lane = next.then(() => {}, () => {});
     return next;
   },
-  async send({ path, method = 'GET', body, auth = '' }) {
+  async send({ path, method = 'GET', body, auth = '', background = false }) {
     const abort = new AbortController(), timer = setTimeout(() => abort.abort(), this.timing.timeoutMs);
-    this.inFlight = true;
+    this.inFlight = true; this.current = background ? abort : null;
     try {
       const init = { method, credentials: 'omit', referrerPolicy: 'no-referrer', redirect: 'error', cache: 'no-store', signal: abort.signal };
       const headers = {};
@@ -156,7 +169,7 @@ const Telemetry = {
     } catch {
       return { ok: false, status: 0, network: true };
     } finally {
-      clearTimeout(timer); this.inFlight = false;
+      clearTimeout(timer); this.inFlight = false; this.current = null;
     }
   },
   // ---- Scheduling
@@ -203,17 +216,25 @@ const Telemetry = {
     if (!this.active()) return;
     if (this.inFlight) return this.schedule(this.timing.minWaitMs);
     const gen = this.gen;
-    let wait;
     try {
       this.load();
       if (!this.active()) return;
-      wait = await this.step(gen);
+      if (this.now() >= this.usageDueAt) {
+        const wait = await this.step(gen);
+        if (gen !== this.gen) return;
+        this.usageDueAt = this.now() + wait;
+      }
+      if (this.active() && this.now() >= Diag.job.dueAt) {
+        const wait = await this.diagStep(gen);
+        if (gen !== this.gen) return;
+        Diag.job.dueAt = this.now() + wait;
+      }
     } catch {
-      this.fault(); wait = this.backoff();
+      this.fault(); this.usageDueAt = this.now() + this.backoff();
     }
     if (gen !== this.gen || !this.active()) return;
     this.persist();
-    this.schedule(wait);
+    this.schedule(Math.min(this.usageDueAt, Diag.job.dueAt) - this.now());
   },
   // One pass: config, registration, consent sync, then one snapshot. Returns the wait before the next pass.
   async step(gen) {
@@ -236,15 +257,15 @@ const Telemetry = {
       if (gen !== this.gen) return 0;
       if (!r.ok) return this.registrationFailed(r);
     }
-    if (this.get().synced !== this.get().characters) {
+    if (this.unsynced()) {
       const r = await this.syncConsent(gen);
       if (gen !== this.gen) return 0;
-      if (!r.ok) return r.status === 401 ? this.unauthorised() : this.failureWait(r);
+      if (!r.ok) return r.status === 401 || r.status === 404 ? this.unauthorised() : this.failureWait(r);
     }
     const built = await this.compose();
     if (gen !== this.gen) return 0;
     if (!built) return this.interval();
-    const r = await this.request({ path: '/telemetry', method: 'POST', body: built.text, auth: this.auth() });
+    const r = await this.request({ path: '/telemetry', method: 'POST', body: built.text, auth: this.auth(), background: true });
     if (gen !== this.gen) return 0;
     if (r.ok) return this.delivered(built, r);
     if (r.status === 401) return this.unauthorised();
@@ -260,6 +281,15 @@ const Telemetry = {
     const c = this.get().config;
     return c && this.now() - c.at < this.timing.configStaleMs ? c.value : null;
   },
+  diagnosticsBlock(block, clientOk) {
+    const t = this.timing.diagnostics, b = block && typeof block === 'object' ? block : null;
+    const seconds = (value, low, high, fallback) => Number.isFinite(value) ? clamp(Math.round(value), low, high) : fallback;
+    if (!b || typeof b.enabled !== 'boolean') return { enabled: false, perf: false, interval_s: t.defaultIntervalS, perf_interval_s: t.defaultPerfIntervalS, sample_pct: 100 };
+    return { enabled: b.enabled && clientOk, perf: b.enabled && clientOk && b.perf === true,
+      interval_s: seconds(b.interval_s, t.minIntervalS, t.maxIntervalS, t.defaultIntervalS),
+      perf_interval_s: seconds(b.perf_interval_s, t.minPerfIntervalS, t.maxPerfIntervalS, t.defaultPerfIntervalS),
+      sample_pct: Number.isFinite(b.sample_pct) ? clamp(Math.round(b.sample_pct), 0, 100) : 100 };
+  },
   parseConfig(body) {
     if (!body || typeof body !== 'object' || body.schema !== 1) return null;
     const t = body.telemetry, r = body.reports;
@@ -267,14 +297,16 @@ const Telemetry = {
     const seconds = Number.isFinite(t.interval_s) ? Math.round(t.interval_s) : this.timing.defaultIntervalS;
     const message = typeof body.message === 'string' ? Array.from(body.message).filter(c => { const n = c.codePointAt(0); return n >= 32 && n !== 127 && !(n >= 128 && n < 160); }).slice(0, 200).join('').trim() : '';
     return { telemetry: { enabled: t.enabled && body.client_ok, interval_s: clamp(seconds, this.timing.minIntervalS, this.timing.maxIntervalS) },
-      reports: { enabled: r.enabled && body.client_ok, screenshots: r.enabled && body.client_ok && r.screenshots === true }, client_ok: body.client_ok, message: message || null };
+      reports: { enabled: r.enabled && body.client_ok, screenshots: r.enabled && body.client_ok && r.screenshots === true },
+      diagnostics: this.diagnosticsBlock(body.diagnostics, body.client_ok), client_ok: body.client_ok, message: message || null };
   },
   async readConfig() {
-    const r = await this.request({ path: '/config?app=osb&version=' + encodeURIComponent(VERSION) });
+    const r = await this.request({ path: '/config?app=osb&version=' + encodeURIComponent(VERSION), background: this.consented() });
     const value = r.ok ? this.parseConfig(r.body) : null;
     if (!value) return r.ok ? { ...r, ok: false, malformed: true } : r;
     this.get().config = { at: this.now(), value };
-    this.waitingForConfig = false; this.configRetryAt = 0;
+    this.waitingForConfig = false; this.configRetryAt = 0; Diag.job.waitingForConfig = false;
+    Diag.sync();
     if (this.consented()) this.persist();
     return { ...r, config: value };
   },
@@ -290,9 +322,9 @@ const Telemetry = {
     d.attempted = true; this.persist();
     const body = JSON.stringify({ install_id: d.id, install_key: d.key, app: 'osb', app_version: VERSION, os: this.os(), locale: this.locale(),
       consent: { usage_version: d.usage, characters: d.characters } });
-    const sent = d.characters;
-    const r = await this.request({ path: '/installs', method: 'POST', body });
-    if (r.ok && gen === this.gen) { const now = this.get(); now.registered = true; now.synced = sent; this.failures = 0; this.persist(); }
+    const sent = d.characters, usage = d.usage;
+    const r = await this.request({ path: '/installs', method: 'POST', body, background: true });
+    if (r.ok && gen === this.gen) { const now = this.get(); now.registered = true; now.synced = sent; now.syncedUsage = usage; this.failures = 0; this.persist(); }
     return r;
   },
   registrationFailed(r) {
@@ -307,12 +339,13 @@ const Telemetry = {
     this.reregistered = true; d.registered = false;
     return this.jitter(this.timing.minWaitMs);
   },
+  unsynced() { const d = this.get(); return d.synced !== d.characters || d.syncedUsage !== d.usage; },
   async syncConsent(gen) {
     const d = this.get();
-    if (!d.registered || d.synced === d.characters) return { ok: true };
-    const sent = d.characters;
-    const r = await this.request({ path: '/installs/me/consent', method: 'PUT', body: JSON.stringify({ usage_version: d.usage, characters: sent }), auth: this.auth() });
-    if (r.ok && gen === this.gen) { this.get().synced = sent; this.persist(); }
+    if (!d.registered || !this.unsynced()) return { ok: true };
+    const sent = d.characters, usage = d.usage;
+    const r = await this.request({ path: '/installs/me/consent', method: 'PUT', body: JSON.stringify({ usage_version: usage, characters: sent }), auth: this.auth(), background: true });
+    if (r.ok && gen === this.gen) { const now = this.get(); now.synced = sent; now.syncedUsage = usage; this.persist(); }
     return r;
   },
   delivered(built, r) {
@@ -322,6 +355,60 @@ const Telemetry = {
     this.failures = 0; this.reregistered = false;
     this.sentSignature = built.signature; this.sentSession = built.sessionSignature;
     return this.interval();
+  },
+  diagInterval(config) {
+    const seconds = Math.max(config?.interval_s ?? this.timing.diagnostics.defaultIntervalS, Diag.job.nextAfterS);
+    return this.jitter(seconds * 1000);
+  },
+  diagBackoff() {
+    const t = this.timing, job = Diag.job;
+    job.failures++;
+    return Math.max(t.minWaitMs, this.random() * Math.min(t.backoffCapMs, t.backoffBaseMs * 2 ** job.failures));
+  },
+  async diagStep(gen) {
+    const t = this.timing, job = Diag.job, d = this.get();
+    if (Diag.off || job.halted) return Infinity;
+    if (this.now() < job.pausedUntil) return job.pausedUntil - this.now();
+    if (job.waitingForConfig) {
+      if (this.now() < job.configDueAt) return job.configDueAt - this.now();
+      const r = await this.readConfig();
+      if (gen !== this.gen) return 0;
+      if (!r.ok) return this.diagBackoff();
+    }
+    const config = this.diagnosticsConfig();
+    if (!config) return this.jitter(Math.max(t.minWaitMs, this.configAge(t.configEveryMs)));
+    if (!d.registered || this.unsynced()) return this.jitter(t.minWaitMs);
+    const built = await Diag.compose(config);
+    if (gen !== this.gen) return 0;
+    if (!built) return this.diagInterval(config);
+    const r = await this.request({ path: '/diagnostics', method: 'POST', body: built.text, auth: this.auth(), background: true });
+    if (gen !== this.gen) return 0;
+    if (r.ok) {
+      const next = Number(r.body?.next_after_s);
+      job.nextAfterS = Number.isFinite(next) ? clamp(next, 0, t.diagnostics.maxIntervalS) : 0;
+      Diag.delivered(built); job.failures = 0; job.sentAt = this.now(); job.result = 'ok';
+      return this.diagInterval(config);
+    }
+    if (r.status === 401) { this.usageDueAt = 0; return this.unauthorised(); }
+    if (r.status === 403 && r.code === 'consent_required') {
+      if (job.consentRetried) { job.halted = true; job.result = 'rejected'; return Infinity; }
+      job.consentRetried = true;
+      d.syncedUsage = 0;
+      const sync = await this.syncConsent(gen);
+      if (gen !== this.gen) return 0;
+      return sync.ok ? this.diagInterval(config) : this.diagBackoff();
+    }
+    if (r.status === 403) { job.result = 'paused'; job.pausedUntil = this.now() + t.pauseMs; return t.pauseMs; }
+    if (r.network || r.status >= 500 && r.status !== 503) { job.result = 'unreachable'; return this.diagBackoff(); }
+    if (r.status === 429) return clamp(r.retryAfterMs ?? this.diagBackoff(), t.minWaitMs, t.retryAfterMaxMs);
+    if (r.status === 503) {
+      const wait = clamp(r.retryAfterMs ?? this.diagBackoff(), t.minWaitMs, t.retryAfterMaxMs);
+      if (r.code !== 'disabled') return wait;
+      job.result = 'disabled'; job.waitingForConfig = true; job.configDueAt = this.now() + Math.max(t.disabledRecheckMs, wait);
+      return job.configDueAt - this.now();
+    }
+    Diag.delivered(built, { remember: false }); job.result = 'rejected';
+    return this.diagInterval(config);
   },
   // ---- Payload
   idle(fn) {
@@ -418,10 +505,10 @@ const Telemetry = {
   },
   // ---- Withdrawal and export
   async deleteData() {
-    const d = this.get(), id = d.id, auth = d.registered ? this.auth() : d.attempted && id && d.key ? `Bearer osb1.${id}.${d.key}` : '';
+    const d = this.get(), id = d.id, auth = d.registered || d.attempted ? this.credential() : '';
     const wasOn = d.usage > 0;
-    this.gen++; this.cancel(); this.resetRun();
-    this.data = this.blank(); this.write();
+    this.gen++; this.cancel(); this.abortBackground(); this.resetRun(); Diag.reset();
+    this.data = this.blank(); this.write(); Diag.sync();
     this.pendingDelete = null;
     if (!wasOn || !auth) return true;
     const r = await this.request({ path: '/installs/me', method: 'DELETE', auth });
@@ -432,14 +519,14 @@ const Telemetry = {
   async download() {
     const d = this.get();
     if (!d.registered) return { ok: false, text: 'Nothing has been sent from this install, so there is no data to download.' };
-    const r = await this.request({ path: '/installs/me/export', auth: this.auth() });
+    const r = await this.request({ path: '/installs/me/export', auth: this.credential() });
     if (r.ok) return { ok: true, id: d.id, data: r.text };
     return { ok: false, text: r.network ? 'The server could not be reached. Try again later.' : 'The server did not return your data. Try again later, or write to ' + PRIVACY_CONTACT + '.' };
   },
   status() {
     const d = this.get();
-    return { hosted: this.hosted(), supported: this.supported(), usage: this.consented(), characters: d.characters, id: d.id, sentAt: d.sentAt, result: d.result,
-      message: d.config?.value.message || '', off: this.off, halted: this.halted, pendingDelete: this.pendingDelete };
+    return { hosted: this.hosted(), supported: this.supported(), usage: this.consented(), outdated: this.outdated(), characters: d.characters, id: d.id, sentAt: d.sentAt, result: d.result,
+      message: d.config?.value.message || '', off: this.off, halted: this.halted, pendingDelete: this.pendingDelete, diagnostics: Diag.status() };
   },
   // ---- Settings section
   lastSentText() {
@@ -452,7 +539,7 @@ const Telemetry = {
     const v = this.view;
     if (!v || !v.box.isConnected) return;
     const s = this.status();
-    v.id.textContent = s.id ? 'Install ID: ' + s.id : 'Install ID: none (nothing is sent while usage statistics are off).';
+    v.id.textContent = s.id ? 'Install ID: ' + s.id : 'Install ID: none (nothing is sent while sharing is off).';
     v.copy.hidden = !s.id;
     v.sent.textContent = s.hosted ? '' : this.lastSentText();
     v.message.textContent = s.message;
@@ -462,10 +549,18 @@ const Telemetry = {
     const characters = v.characters.querySelector('input');
     if (characters) characters.disabled = !s.usage;
   },
-  link() {
-    const a = el('a', 'Privacy policy');
-    a.href = PRIVACY_URL; a.target = '_blank'; a.rel = 'noopener noreferrer';
+  link(text = 'Privacy policy', url = PRIVACY_URL) {
+    const a = el('a', text);
+    a.href = url; a.target = '_blank'; a.rel = 'noopener noreferrer';
     return a;
+  },
+  links() { return UI.row(this.link(), this.link('KVKK notice (Turkish)', KVKK_NOTICE_URL), this.link('KVKK explicit consent (Turkish)', KVKK_CONSENT_URL)); },
+  changed() {
+    const d = this.get();
+    if (!this.outdated()) return false;
+    if (d.changedSeen) return this.changedNow;
+    d.changedSeen = true; this.changedNow = true; this.write();
+    return true;
   },
   // A consent can only be given or withdrawn by a real click: a script-made event changes nothing.
   toggle(title, get, set) {
@@ -484,23 +579,37 @@ const Telemetry = {
       el('p', 'Only if you turn on "Use the game site\'s unique tracker" (Combat, Unique hunt, or the Setup page\'s Uniques list; it is off by default), OSB reads the game site\'s unique tracker (opensro.online/uniques) while the unique hunt runs or the Setup page is shown, at most every 2 minutes, without cookies and without any data about you. With it off OSB makes no such request.', 'muted'));
     return box;
   },
+  helpText() {
+    const box = el('div', null, 'muted'), list = el('ul');
+    list.append(el('li', 'Usage: the app and bot version, operating system and language, and for each game account the bot state, level, gold, HP and MP percentage, scroll counts and the current session\'s kills, deaths, XP, gold and SoX drops.'),
+      el('li', 'Errors: which part of OSB failed and how (the error type, a fixed message and the place in our code), why the bot stopped by itself, the game phase and what the bot did just before (fixed event codes, never the text of your log).'),
+      el('li', 'Performance: how long the bot\'s steps take and the page\'s memory use, with the OSB version.'));
+    box.append(el('p', 'When this is on, OSB sends data to our server, api.osb.lol, about every 10 minutes, so we can see how OSB is used and find and fix its errors:'), list,
+      el('p', 'Unless you also turn on character names below, it contains no character, player or account names. It never contains chat, positions, passwords, login IDs, file paths, your computer\'s name, hardware IDs or memory dumps. It is kept under a random install ID that is not linked to your name, login ID or computer. We keep usage data for 45 days, error data for 30 days and performance data for 14 days, and the install record for 90 days after it was last seen. Daily totals without the install ID are kept for 13 months. Turn it off at any time; your data on our server is then deleted, except those daily totals, which cannot identify you. Details: osb.lol/privacy'));
+    return box;
+  },
   draw(host) {
     const note = text => el('p', text, 'muted');
     if (this.hosted()) {
-      host.append(UI.group('Privacy', note('Usage statistics are handled by OSB Manager. OSB sends none itself.'), note('A report you send from OSB goes straight to api.osb.lol, and only when you press Send and confirm.'), this.updateSwitch(), this.link()));
+      host.append(UI.group('Privacy', note('Usage statistics, error reports and performance data are handled by OSB Manager. OSB sends none itself.'), note('A report you send from OSB goes straight to api.osb.lol, and only when you press Send and confirm.'), this.updateSwitch(), this.links()));
       return;
     }
     const stop = el('div', null, 'row'); stop.hidden = true;
-    stop.append(el('span', 'Stop sharing and delete your usage data from api.osb.lol? Reports you already sent are deleted too.'),
+    stop.append(el('span', 'Stop sharing usage statistics, error reports and performance data, and delete them from api.osb.lol? Reports you already sent are deleted too.'),
       UI.button('Yes, stop and delete', event => { if (event?.isTrusted !== true) return; stop.hidden = true; void this.setUsage(false); UI.draw(); }),
       UI.button('Cancel', () => { stop.hidden = true; }));
-    const usage = this.toggle('Share usage statistics', () => this.consented(), v => { if (v) { void this.setUsage(true); UI.draw(); } else stop.hidden = false; });
+    const usage = this.toggle('Share usage statistics, error reports and performance data', () => this.consented(), v => { if (v) { void this.setUsage(true); UI.draw(); } else stop.hidden = false; });
+    const changed = el('p', null, 'muted'); changed.hidden = !this.changed();
+    changed.append(el('strong', 'Changed'), el('span', ' The text of this switch changed: it now also covers error reports and performance data. Switch it on again if you want to share.'));
     const characters = this.toggle('Show my characters in the OSB dashboard', () => this.get().characters, v => { this.setCharacters(v); });
     const shown = el('textarea'); shown.readOnly = true; shown.rows = 10; shown.hidden = true; shown.setAttribute('aria-label', 'What is sent');
+    const errors = el('textarea'); errors.readOnly = true; errors.rows = 10; errors.hidden = true; errors.setAttribute('aria-label', 'Error reports waiting to be sent');
     const show = UI.button('Show what is sent', async () => {
-      if (!shown.hidden) { shown.hidden = true; return; }
-      shown.value = (this.consented() ? '' : 'Nothing is sent while usage statistics are off. This is what would be sent (the slot is a placeholder):\n') + await this.preview();
-      shown.hidden = false;
+      if (!shown.hidden) { shown.hidden = true; errors.hidden = true; return; }
+      shown.value = (this.consented() ? '' : 'Nothing is sent while sharing is off. This is what would be sent (the slot is a placeholder):\n') + await this.preview();
+      const batch = await Diag.preview();
+      errors.value = batch || (this.consented() ? 'No error reports are waiting to be sent.' : 'No error reports are recorded while sharing is off.');
+      shown.hidden = false; errors.hidden = false;
     });
     const download = UI.button('Download my data', async () => {
       const r = await this.download();
@@ -511,7 +620,7 @@ const Telemetry = {
     });
     const sure = el('div', null, 'row'); sure.hidden = true;
     const ask = UI.button('Delete my data', event => { if (event?.isTrusted === true) sure.hidden = false; });
-    sure.append(el('span', 'Delete all data for this install from api.osb.lol, including reports linked to it? This cannot be undone.'),
+    sure.append(el('span', 'Delete all data for this install from api.osb.lol, including linked reports, error reports and performance data? Sharing is turned off. This cannot be undone.'),
       UI.button('Yes, delete', event => { if (event?.isTrusted !== true) return; sure.hidden = true; void this.setUsage(false); UI.draw(); }),
       UI.button('Cancel', () => { sure.hidden = true; }));
     const id = el('span'), copy = UI.button('Copy install ID', async () => {
@@ -521,9 +630,9 @@ const Telemetry = {
     failed.hidden = true;
     const sent = el('p', '', 'muted'), message = el('p', '', 'muted');
     const box = UI.group('Privacy',
-      usage, stop, note('When this is on, OSB sends a short status report about every 10 minutes to our server, api.osb.lol: the app and bot version, operating system, language, and for each game account the bot state, level, gold, HP and MP percentage, scroll counts and the current session’s kills, deaths, XP, gold and SoX drops. It is linked to a random install ID, not to your login ID, password or computer. We use it to see how OSB is used and where it gets stuck, and keep it for 45 days (the install record for 90 days after it was last seen). Turn it off at any time; your data on our server is then deleted. Details: osb.lol/privacy'),
+      usage, changed, stop, this.helpText(), this.links(),
       characters, note('Also sends your character names and server names, so the OSB team can see your characters by name in its private dashboard. Never shown publicly. Turning this off deletes the names at once.'),
-      UI.row(show, download, ask), sure, shown, failed, sent, message, UI.row(id, copy), this.updateSwitch(), this.link());
+      UI.row(show, download, ask), sure, shown, errors, failed, sent, message, UI.row(id, copy), this.updateSwitch());
     this.view = { box, id, copy, sent, message, failed, characters };
     host.append(box);
     UI.refreshers.push(() => this.refreshView());
