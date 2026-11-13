@@ -6549,6 +6549,31 @@ test('party assist: for classes without the tick a monster a party member fights
   s.fighting(30); s.mob(32, 150); s.hit(32, 6); s.hit(6, 32);
   s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 32, 'protecting a member still goes for the monster they fight');
 });
+test('party assist: for classes without the tick each member goes first for the monsters it is nearest to', () => {
+  const mine = s => { const e = s.mob(33, 100); e.z = 40; return e; };
+  let s = assistFixture(); s.mob(30, 135); mine(s);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 33, 'Lead is nearer to the other wolf, before any hit');
+  s = assistFixture(); s.a.enabled = false; s.mob(30, 135); mine(s);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30, 'switch off: the nearest, as before');
+  s = assistFixture(); s.mob(30, 135);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30, 'nothing of our own: better than standing idle');
+  s = assistFixture(); s.mob(30, 135); mine(s); s.hit(30, 1);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30, 'it attacks us');
+  s = assistFixture(); s.mob(31, 135, 4); mine(s);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 31, 'a ticked class is shared');
+  s = assistFixture(); s.mob(30, 135); mine(s); s.f.World.ents.get(5).appearanceState = [2];
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30, 'a dead member owns nothing');
+  s = assistFixture(); s.mob(30, 135); mine(s); s.f.World.ents.delete(5);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30, 'a member out of view owns nothing');
+  s = assistFixture(); s.f.World.gp.social = { members: [] }; s.mob(30, 135); mine(s);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30, 'solo');
+  s = assistFixture(); s.f.World.gp.social = { localName: 'Me', members: [{ id: 5, name: 'Lead', status: 10 }] }; s.mob(30, 135); mine(s);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30, 'a party list without this character'); assert.equal(s.f.Hunt.running, true);
+  s = assistFixture(); s.mob(30, 135); mine(s); s.f.Assist.share = () => { throw new Error('boom'); };
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.running, true, 'an error in the sharing never stops hunting'); assert.equal(s.f.Hunt.targetGid, 30);
+  s = assistFixture(); s.f.Settings.profile.hunt.classModes.champion = 'prefer'; s.mob(30, 135, 1); mine(s);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30, 'a preferred class still comes before the sharing');
+});
 test('party assist: the monster the leader selected wins over monsters its area skill also hits', () => {
   const { f, mob, hit, fighting } = assistFixture();
   fighting(30); mob(31, 160, 4); mob(32, 170, 4, 'Troll');

@@ -1,8 +1,10 @@
 const ASSIST_WINDOW_MS = 6000;
 const ASSIST_SETTLE_MS = 3000;
 const ASSIST_MAX_HITS = 50;
+const ASSIST_SHARE_TIER = 1e5;
+const ASSIST_SHARE_MAX = 2;
 const Assist = {
-  hits: new Map(), gid: 0, open: false, acting: '', wanted: '', wantedAt: -Infinity, message: 'Party assist off.',
+  hits: new Map(), gid: 0, open: false, mates: { at: -Infinity, list: [] }, acting: '', wanted: '', wantedAt: -Infinity, message: 'Party assist off.',
   cfg() { return Settings.profile.party.assist; },
   reset() { this.hits.clear(); this.gid = 0; this.acting = this.wanted = ''; this.wantedAt = -Infinity; },
   clock() { return World.simNow() ?? now(); },
@@ -102,6 +104,23 @@ const Assist = {
     if (!Array.isArray(social?.members)) return false;
     return social.members.some(m => m?.name && m.name !== social.localName && t - (this.hits.get(this.key(m.name))?.get(e.gid) ?? -Infinity) < ASSIST_WINDOW_MS);
   },
+  matesInView() {
+    if (this.mates.at === now()) return this.mates.list;
+    const social = World.gp?.social, members = Array.isArray(social?.members) ? social.members : [], seen = members.length > 1 ? this.seen() : new Map();
+    const list = members.filter(m => m?.name && m.name !== social.localName && this.alive(m, seen.get(m.name)) && seen.has(m.name)).map(m => seen.get(m.name));
+    this.mates = { at: now(), list };
+    return list;
+  },
+  share(e) {
+    if (!this.cfg().enabled || this.cfg().classes?.[MonsterClasses.of(e)]) return 0;
+    const mine = dist2D(World.pose(), e), me = World.gp?.social?.localName || '';
+    let closer = 0;
+    for (const mate of this.matesInView()) {
+      const theirs = dist2D(mate, e);
+      if (theirs < mine || theirs === mine && mate.name < me) closer++;
+    }
+    return Math.min(closer, ASSIST_SHARE_MAX) * ASSIST_SHARE_TIER;
+  },
   focus(names, sim, pose, current) {
     let best = null, bestAt = -Infinity, by = '';
     for (const name of names) {
@@ -146,6 +165,8 @@ const Assist = {
 {
   const avoids = Hunt.ksAvoids;
   Hunt.ksAvoids = function (e, ...rest) { return avoids.call(this, e, ...rest) || Assist.taken(e); };
+  const classOffset = Hunt.classOffset;
+  Hunt.classOffset = function (e, attacking) { return classOffset.call(this, e, attacking) + (attacking ? 0 : Controller.guard('Party assist', () => Assist.share(e)) || 0); };
   const valid = Protect.valid;
   Protect.valid = function (...args) {
     Assist.open = true;
