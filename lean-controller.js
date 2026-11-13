@@ -175,6 +175,7 @@ Hunt.tick = function () {
   let current = this.currentTarget();
   const guard = Controller.guard('Protect party members', () => Protect.pick(current)) || null;
   if (!guard) current = Protect.release(current);
+  const assist = guard ? null : Controller.guard('Party assist', () => Assist.pick(current)) || null;
   const busy = attacked || !!guard;
   // One pickup at a time. A pet's request does not own the character's combat tick; a character pickup owns
   // movement until it is done or an attacker interrupts it. The pet's drops go first, then the character's.
@@ -205,7 +206,7 @@ Hunt.tick = function () {
   // its own buffs and party support, at its hunting spot or beside the member it follows.
   const attack = H.attack !== false;
   if (attack && Lure.on()) return Lure.tick();
-  const target = guard || (attack ? this.threat(current) || this.preferredSwitch(current) || current || this.chooseTarget() : null);
+  const target = guard || (attack ? this.threat(current) || assist || this.preferredSwitch(current) || current || this.chooseTarget() : null);
   if (target) { this.engage(target); return; }
   this.targetGid = 0; this.state = !attack ? 'support only' : Loot.active?.petGid ? 'loot' : 'search';
   if (H.returnToCenter && H.center && HuntArea.strayed(H, World.pose()) && now() - this.lastMoveAt > 2500) {

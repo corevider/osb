@@ -589,7 +589,7 @@ const UI = {
     } else if (this.current === 'Quest') {
       this.sections('questAuto', 'questPick', 'questJournal');
     } else if (this.current === 'Party') {
-      this.sections('partyMembers', 'partyHeal', 'partyProtect', 'partyBuffs', 'partyParty', 'partyTrace');
+      this.sections('partyMembers', 'partyHeal', 'partyProtect', 'partyAssist', 'partyBuffs', 'partyParty', 'partyTrace');
     } else if (this.current === 'Items') {
       this.drawItems();
     } else if (this.current === 'Setup') {
@@ -626,7 +626,7 @@ const UI = {
         this.drawItems(); this.sections('townTrip', 'townCycle', 'townAmmo'); } },
       { name: 'Training place', icon: 'action\\icon_cha_camp', pages: ['Combat', 'Party'], sections: [['combatHuntArea', 'Training place'], ['combatPreferred'], ['partyTrace'], ['combatLure'], ['combatPet'], ['combatUnique']] },
       { name: 'Party/Autores', icon: 'action\\icon_cha_party', pages: ['Party'], sections: [
-        ['partyMembers', 'Current party'], ['partyParty', 'Party settings'], ['partyHeal'], ['partyProtect']] },
+        ['partyMembers', 'Current party'], ['partyParty', 'Party settings'], ['partyHeal'], ['partyProtect'], ['partyAssist']] },
       { name: 'Player buffing', icon: 'action\\icon_cha_party', pages: ['Party'], sections: [['partyBuffs', 'Player buffing']] },
       { name: 'Quest', icon: 'action\\icon_cha_camp', pages: ['Quest'], sections: [['questAuto', 'Auto quest settings'], ['questPick', 'Quests to do'], ['questJournal']] },
       { name: 'Auto alchemy', icon: 'action\\icon_cha_alchemy', pages: ['Alchemy'], draw() { Alchemy.draw(); } },
@@ -806,9 +806,12 @@ const UI = {
       b.className = 'cell'; b.title = CLASS_MODE_TIPS[mode]; b.setAttribute('aria-label', CLASS_MODE_NAMES[mode] + ' ' + label);
       return b;
     });
-    const paint = () => buttons.forEach((b, i) => { const on = H().classModes[key] === CLASS_MODES[i]; b.className = on ? 'cell on' : 'cell'; b.setAttribute('aria-pressed', String(on)); });
+    const paintModes = () => buttons.forEach((b, i) => { const on = H().classModes[key] === CLASS_MODES[i]; b.className = on ? 'cell on' : 'cell'; b.setAttribute('aria-pressed', String(on)); });
+    const A = () => Settings.profile.party.assist, assist = this.button('Assist', () => { A().classes[key] = !A().classes[key]; Settings.saveProfile(); paint(); });
+    assist.title = 'With Assist the party leader on (Party page): attack this class together with the party leader.'; assist.setAttribute('aria-label', 'Assist ' + label);
+    const paint = () => { paintModes(); const on = !!A().classes[key]; assist.className = on ? 'cell on' : 'cell'; assist.setAttribute('aria-pressed', String(on)); };
     paint(); this.refreshers.push(paint);
-    row.append(name, ...buttons);
+    row.append(name, ...buttons, assist);
     return row;
   },
   section_combatRotation(host) {
@@ -1289,6 +1292,16 @@ const UI = {
       this.check('Also with Attack monsters off', () => c().whileNoAttack, v => c().whileNoAttack = v),
       note,
       el('p', 'Attacks a monster that hits a ticked member within this distance, while the bot runs. Your potions, death and return rules, town trips, Skip these mobs and fights of other players come first. It never chases past this distance or out of the hunting area, and never attacks players.', 'muted')));
+  },
+  section_partyAssist(host) {
+    const c = () => Settings.profile.party.assist, note = el('p', Assist.status(), 'muted');
+    this.refreshers.push(() => { note.textContent = Assist.status(); });
+    host.append(this.group('Assist the party leader',
+      this.check('Assist the party leader', () => c().enabled, v => { c().enabled = v; Assist.reset(); }),
+      this.number('Maximum distance from you (m)', () => c().range, v => c().range = v, 5, 100),
+      this.number('Leader counts within (m)', () => c().leaderRange, v => c().leaderRange = v, 10, 500),
+      note,
+      el('p', 'Attacks the monster the party leader is hitting, for the classes with Assist ticked under Combat, Monster classes. Other classes are fought as usual. The leader is the game\'s party leader; when they are dead, gone or too far away, the next living member of the party list within the leader distance leads. Members standing together work that out the same way, without any chat message; a member far from the others follows whoever is in its own reach. Protect party members, monsters hitting you, your potions, town trips, Skip these mobs and the hunting area come first.', 'muted')));
   },
   section_partyBuffs(host) {
     const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();
