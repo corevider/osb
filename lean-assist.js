@@ -2,7 +2,7 @@ const ASSIST_WINDOW_MS = 6000;
 const ASSIST_SETTLE_MS = 3000;
 const ASSIST_MAX_HITS = 50;
 const Assist = {
-  hits: new Map(), gid: 0, acting: '', wanted: '', wantedAt: -Infinity, message: 'Party assist off.',
+  hits: new Map(), gid: 0, open: false, acting: '', wanted: '', wantedAt: -Infinity, message: 'Party assist off.',
   cfg() { return Settings.profile.party.assist; },
   reset() { this.hits.clear(); this.gid = 0; this.acting = this.wanted = ''; this.wantedAt = -Infinity; },
   clock() { return World.simNow() ?? now(); },
@@ -94,6 +94,14 @@ const Assist = {
     if (splitList(Hunt.cfg().exclude).some(s => name.includes(s))) return false;
     return !Hunt.ksAvoids(e, sim);
   },
+  taken(e) {
+    if (this.open || !this.cfg().enabled || !e || this.cfg().classes?.[MonsterClasses.of(e)]) return false;
+    const t = this.clock();
+    if (t - (World.attackers.get(e.gid) ?? -Infinity) < ASSIST_WINDOW_MS || t - (World.hitByUs.get(e.gid) ?? -Infinity) < ASSIST_WINDOW_MS) return false;
+    const social = World.gp?.social;
+    if (!Array.isArray(social?.members)) return false;
+    return social.members.some(m => m?.name && m.name !== social.localName && t - (this.hits.get(this.key(m.name))?.get(e.gid) ?? -Infinity) < ASSIST_WINDOW_MS);
+  },
   focus(names, sim, pose, current) {
     let best = null, bestAt = -Infinity, by = '';
     for (const name of names) {
@@ -133,6 +141,15 @@ const Assist = {
   World.onCast = function (cast) {
     Controller.guard('Party assist', () => Assist.note(cast));
     return record.call(this, cast);
+  };
+}
+{
+  const avoids = Hunt.ksAvoids;
+  Hunt.ksAvoids = function (e, ...rest) { return avoids.call(this, e, ...rest) || Assist.taken(e); };
+  const valid = Protect.valid;
+  Protect.valid = function (...args) {
+    Assist.open = true;
+    try { return valid.apply(this, args); } finally { Assist.open = false; }
   };
 }
 bus.on('despawn', e => { if (e) for (const mine of Assist.hits.values()) mine.delete(e.gid); });

@@ -1301,7 +1301,7 @@ const UI = {
       this.number('Maximum distance from you (m)', () => c().range, v => c().range = v, 5, 100),
       this.number('Leader counts within (m)', () => c().leaderRange, v => c().leaderRange = v, 10, 500),
       note,
-      el('p', 'Attacks the monster the party leader is hitting, for the classes with Assist ticked under Combat, Monster classes. Other classes are fought as usual. The leader is the game\'s party leader; when they are dead, gone or too far away, the next living member of the party list within the leader distance leads. Members standing together work that out the same way, without any chat message; a member far from the others follows whoever is in its own reach. Protect party members, monsters hitting you, your potions, town trips, Skip these mobs and the hunting area come first.', 'muted')));
+      el('p', 'Attacks the monster the party leader is hitting, for the classes with Assist ticked under Combat, Monster classes. For the other classes a monster a party member is already fighting is left to them, unless it attacks you or you hit it first. The leader is the game\'s party leader; when they are dead, gone or too far away, the next living member of the party list within the leader distance leads. Members standing together work that out the same way, without any chat message; a member far from the others follows whoever is in its own reach. Protect party members, monsters hitting you, your potions, town trips, Skip these mobs and the hunting area come first.', 'muted')));
   },
   section_partyBuffs(host) {
     const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();

@@ -6524,6 +6524,31 @@ test('party assist: a member switches to the ticked-class monster the leader hit
   s.f.World.ents.set(8, { gid: 8, kind: 'cos', ownerGid: 5, regionId: 1, x: 150, y: 0, z: 100 }); s.hit(8, 31);
   s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 31, 'the leader pet counts as the leader');
 });
+test('party assist: for classes without the tick a monster a party member fights is left to them', () => {
+  let s = assistFixture(); s.mob(30, 110); s.mob(33, 180); s.hit(6, 30);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 33, 'the free wolf, not the nearer one Mate fights');
+  s = assistFixture(); s.mob(30, 110); s.mob(33, 180); s.hit(5, 30);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 33, 'the leader counts like any member');
+  s = assistFixture(); s.a.enabled = false; s.mob(30, 110); s.mob(33, 180); s.hit(6, 30);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30, 'switch off: as before');
+  s = assistFixture(); s.mob(30, 110); s.hit(6, 30);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 0, 'nothing free: wait'); assert.equal(s.selected(30), false);
+  s.f.advance(6100); s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30, 'Mate stopped hitting it 6 seconds ago');
+  s = assistFixture(); s.mob(30, 110); s.mob(33, 180); s.hit(6, 30); s.hit(30, 1);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30, 'it attacks us');
+  s = assistFixture(); s.mob(30, 110); s.mob(33, 180); s.hit(1, 30); s.hit(6, 30);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30, 'we hit it first');
+  s = assistFixture(); s.fighting(30); s.mob(33, 180); s.hit(6, 30); s.f.advance(300);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30, 'a fight already started is not dropped');
+  s = assistFixture(); s.mob(31, 110, 4); s.mob(33, 180); s.hit(6, 31);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 31, 'a ticked class is shared');
+  s = assistFixture(); s.f.World.ents.set(9, { gid: 9, kind: 'player', name: 'Stranger', regionId: 1, x: 170, y: 0, z: 100 });
+  s.f.Settings.profile.hunt.avoidKs = false; s.mob(30, 110); s.mob(33, 180); s.hit(9, 30);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30, 'a stranger is not a party member: the other-players rule decides');
+  s = assistFixture(); const p = s.f.Settings.profile.party.protect; p.enabled = true; p.names = ['Mate'];
+  s.fighting(30); s.mob(32, 150); s.hit(32, 6); s.hit(6, 32);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 32, 'protecting a member still goes for the monster they fight');
+});
 test('party assist: the monster the leader selected wins over monsters its area skill also hits', () => {
   const { f, mob, hit, fighting } = assistFixture();
   fighting(30); mob(31, 160, 4); mob(32, 170, 4, 'Troll');
