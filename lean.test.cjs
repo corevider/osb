@@ -6637,6 +6637,24 @@ test('party assist: members apart follow the leader in their own reach, and hits
   assert.equal(p.f.Assist.hits.get('lead').size, 1, 'a tick without a position keeps what was recorded'); assert.equal(p.f.Assist.acting, 'Lead');
   p.f.World.pose = pose;
 });
+test('party assist: a member ticked in the Protect party members list never leads', () => {
+  const view = (local, names) => {
+    const f = fixture(); f.Settings.profile.party.assist.enabled = true; f.Settings.profile.party.protect.names = names;
+    f.World.gp.social = { localName: local, leader: 5, members: [['A', 5], ['B', 6], ['C', 7], ['D', 8]].map(([name, id]) => ({ id, name, status: 10, region: 1, x: 100 + id, z: 100 })) };
+    return f.Assist.leader();
+  };
+  assert.deepEqual(['B', 'C', 'D'].map(n => view(n, ['a'])), ['B', 'B', 'B'], 'the game leader is protected: the next member, any letter case');
+  assert.deepEqual(['C', 'D'].map(n => view(n, ['A', 'B'])), ['C', 'C']);
+  assert.equal(view('D', ['A', 'B', 'C']), 'D', 'everyone else is protected: this character leads itself');
+  assert.equal(view('B', ['Gone']), 'A', 'a name that is not in the party changes nothing');
+  let s = assistFixture(); s.f.Settings.profile.party.protect.names = ['Lead']; s.fighting(30); s.mob(31, 160, 4); s.mob(32, 170, 4, 'Troll'); s.hit(5, 31); s.hit(6, 32);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 32, 'the protected game leader is not followed, Mate is');
+  s = assistFixture(); assert.equal(s.f.Assist.leader(), 'Lead'); s.f.Protect.toggle('Lead', true);
+  assert.equal(s.f.Assist.leader(), 'Mate', 'ticked while leading: replaced at once');
+  s.f.Protect.toggle('Lead', false); assert.equal(s.f.Assist.leader(), 'Mate'); s.f.advance(3100); assert.equal(s.f.Assist.leader(), 'Lead', 'unticked: leads again');
+  s = assistFixture(); s.f.Settings.profile.party.protect.all = true;
+  assert.equal(s.f.Assist.leader(), 'Lead', 'All party members alone excludes nobody: only ticked names count');
+});
 test('party assist: a dead leader is replaced at once, a leader out of reach after 3 seconds, and it leads again on return', () => {
   let s = assistFixture(); const f = s.f;
   assert.equal(f.Assist.leader(), 'Lead');

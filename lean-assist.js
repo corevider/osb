@@ -11,6 +11,10 @@ const Assist = {
   key(name) { return String(name || '').trim().toLowerCase(); },
   range() { return clamp(Number(this.cfg().range) || 40, 5, 100) * 10; },
   leaderRange() { return clamp(Number(this.cfg().leaderRange) || 100, 10, 500) * 10; },
+  mayLead(name) {
+    const key = this.key(name);
+    return !Settings.profile.party.protect.names.some(n => this.key(n) === key);
+  },
   party() {
     const social = World.gp?.social;
     if (!Array.isArray(social?.members)) return null;
@@ -41,6 +45,7 @@ const Assist = {
     if (!party || !pose) return '';
     const me = party.social.localName, seen = this.seen(), reach = this.leaderRange();
     for (const m of this.order(party.social, party.members)) {
+      if (!this.mayLead(m.name)) continue;
       if (m.name === me) { if (!World.isDead()) return me; continue; }
       const e = seen.get(m.name);
       if (this.alive(m, e) && dist2D(pose, this.place(m, e)) <= reach) return m.name;
@@ -52,7 +57,7 @@ const Assist = {
     if (!party) return true;
     if (name === party.social.localName) return World.isDead();
     const m = party.members.find(x => x.name === name);
-    return !m || !this.alive(m, this.seen().get(name));
+    return !m || !this.mayLead(name) || !this.alive(m, this.seen().get(name));
   },
   leader() {
     const next = this.elect();
