@@ -12,6 +12,7 @@ const SUPPORT_OVERLAP_MS = 30 * 60000; // a member whose buffs do not stack with
 const SUPPORT_OVERLAP_KEY = /^UIIT_(STT_)?SKILL_USE_FAIL_OVERLAP(_COUNT)?$/;
 const SUPPORT_EARLY_MS = 60000; // during a weapon change, buffs with less than this left are renewed too
 const SUPPORT_BATCH = 10;       // most party buff casts added to one weapon change
+const SUPPORT_HOLD_MS = 2 * 60000;
 const Support = {
   holdUntil: 0, sent: new Map(), misses: new Map(), overlaps: new Map(), early: new Set(), unblock: new Set(), lastBuff: null, message: 'Party support off.',
   cfg() { return Settings.profile.party.support; },
@@ -135,9 +136,22 @@ const Support = {
   // refused(): why the cast just sent will not land (a buff that does not stack, or any other refusal the game counted
   // against this member), so the weapon change moves on to the next one.
   entry(b, id, m, key, earlyMs = 3000) {
-    return { party: true, id, key, due: () => this.wants(b, m.name, earlyMs), cast: () => this.castBuff(b, m.name), shows: () => this.shows(b, m.name), ended: () => this.ended(b, m.name),
+    return { party: true, id, key, early: earlyMs > 3000, due: () => this.wants(b, m.name, earlyMs), cast: () => this.castBuff(b, m.name), shows: () => this.shows(b, m.name), ended: () => this.ended(b, m.name),
+      problem: () => this.problem(b, m.name, earlyMs), hold: why => this.hold(b, m.name, why),
       refused: () => this.overlaps.has(key) ? `${m.name} has a buff that ${World.skillName(id)} does not stack with.`
         : this.early.has(key) || this.blockedFor(id, m.gid) ? `${World.skillName(id)} did not go out on ${m.name}.` : '' };
+  },
+  problem(b, name, earlyMs = 3000) {
+    const m = this.members().find(x => x.name === name), id = this.skillOf(b);
+    if (!m || !m.alive || m.gid && this.has(m.gid, id, earlyMs)) return null;
+    const why = BuffGear.unfit(id, id && this.blockedFor(id, 0));
+    if (why) return why;
+    if (!m.inRange) return 'out of range or out of view';
+    return this.blockedFor(id, m.gid) ? 'the game refused it' : '';
+  },
+  hold(b, name, why) {
+    this.misses.set(name + ':' + b.group, { n: 0, until: now() + SUPPORT_HOLD_MS });
+    Log.info(`Party support: skipping ${World.skillName(this.skillOf(b))} on ${name} for two minutes: it could not be cast after changing weapons (${why}).`);
   },
   // Party buffs that need this gear, for a weapon change that happens anyway: the due ones and the ones running out
   // within a minute, so the next change does not come a minute later. At most SUPPORT_BATCH of them.

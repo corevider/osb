@@ -9849,9 +9849,11 @@ test('a primary weapon the game refuses is left alone without stopping hunting',
   assert.equal(f.BuffGear.run?.pending?.source, 15, 'tried again after 30 s');
   for (let n = 0; n < 20 && f.BuffGear.run; n++) { f.advance(300); f.BuffGear.tick(); }
   assert.equal(f.BuffGear.run, null); assert.equal(f.Hunt.running, true, 'hunting goes on');
-  assert.match(f.BuffGear.message, /would not equip .*until you pick it again/);
-  assert.equal(f.BuffGear.bad.has(harp), true); assert.equal(f.BuffGear.combat(), null, 'what is worn is the combat gear again');
-  const n = f.commands.length; f.advance(1000); f.BuffGear.tick(); assert.equal(f.commands.length, n, 'no retry');
+  assert.match(f.BuffGear.message, /would not equip .*tried again every five minutes/);
+  assert.equal(f.BuffGear.bad.has(harp), false, 'the primary weapon is never given up for good');
+  const n = f.commands.length; f.advance(1000); f.BuffGear.tick(); assert.equal(f.commands.length, n, 'no retry right away');
+  f.advance(300000); f.BuffGear.tick(); f.BuffGear.tick();
+  assert.equal(f.BuffGear.run?.pending?.source, 15, 'tried again after five minutes');
 });
 test('a bow or crossbow primary wears its own arrows or bolts from the bag, never the other kind', () => {
   const f = buffGearFixture(), gp = f.World.gp, at = s => gp.inventory.find(i => i.slot === s)?.refObjId;
@@ -9905,8 +9907,8 @@ test('a chosen shield the game refuses is skipped and the shield worn before goe
   attempt();
   assert.equal(f.BuffGear.bad.has(refusedShield), false); assert.match(f.BuffGear.message, /did not equip .*tried again in 30 s/);
   f.advance(30000); attempt();
-  assert.equal(f.BuffGear.bad.has(refusedShield), true); assert.match(f.BuffGear.message, /would not equip/);
-  const n = f.commands.length; f.advance(1000); f.BuffGear.tick(); assert.equal(f.commands.length, n, 'settled: nothing more to wear');
+  assert.equal(f.BuffGear.bad.has(refusedShield), false); assert.match(f.BuffGear.message, /would not equip .*every five minutes/);
+  const n = f.commands.length; f.advance(1000); f.BuffGear.tick(); assert.equal(f.commands.length, n, 'settled: nothing more to wear for five minutes');
 });
 test('a buff assigned to the secondary weapon or the shield wears it, then the primary comes back', () => {
   const f = buffGearFixture(), gp = f.World.gp, at = s => gp.inventory.find(i => i.slot === s)?.refObjId;
@@ -10826,6 +10828,7 @@ require('./lean.unique-nests.test.cjs')({ test, fixture });
 require('./lean.unique-state.test.cjs')({ test, fixture });
 require('./lean.unique-list.test.cjs')({ test, fixture });
 require('./lean.emergency.test.cjs')({ test, fixture });
+require('./lean.buff-gear.test.cjs')({ test, buffGearFixture, partyGear, casts, secondaryWornFixture });
 require('./lean.safety.test.cjs')({ test, fixture, townFixture });
 const telemetryKit = require('./lean.telemetry.test.cjs')({ test, source: isolated });
 require('./lean.diagnostics.test.cjs')({ test, ...telemetryKit });
