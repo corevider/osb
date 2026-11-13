@@ -131,7 +131,7 @@ jobs:
                the code and any logs or diagnostics in the issue. Make the smallest change that solves it in the
                source modules, and add or update a test in lean.test.cjs. Never edit osb.user.js, osb.meta.js,
                vendor/, notes/, .github/, SECURITY.md or LICENSE, never add a network call or a new host, and do not bump
-               the version: a later job builds, tests and opens the PR, and merging releases it. Then write
+               the version: a later job builds, tests and opens the PR; the maintainers release it later. Then write
                .issue/result.md as:
                  line 1: PR
                  line 2: a plain-English PR title

@@ -8,7 +8,7 @@ OSB sends data only to the hosts listed in [AGENTS.md](AGENTS.md), and to `api.o
 
 ## The Claude automation and its tokens
 
-Pull request reviews (`claude-review.yml`), issue fixes (`claude-fix.yml`) and the release notes (the `notes` job of `release.yml`) run on Claude Code in GitHub Actions. They need one Claude credential. This section is for the maintainers who hold it.
+Pull request reviews (`claude-review.yml`) and issue fixes (`claude-fix.yml`) run on Claude Code in GitHub Actions. They need one Claude credential. This section is for the maintainers who hold it.
 
 ### Which secret to set, and how to switch
 
@@ -17,7 +17,7 @@ Pull request reviews (`claude-review.yml`), issue fixes (`claude-fix.yml`) and t
 | `CLAUDE_CODE_OAUTH_TOKEN` | a Claude Code token of the operator's Claude subscription | whenever it is set (the default) |
 | `ANTHROPIC_API_KEY` | an Anthropic API key, billed per use | only when `CLAUDE_CODE_OAUTH_TOKEN` is not set |
 
-Every Claude job chooses with the same rule: the subscription token if it is set, otherwise the API key, otherwise the job skips the Claude step with a notice (the release then writes its notes from the PR title and body). The choice is made from whether each secret is set; neither value is printed. Only the chosen secret is passed to the Claude step.
+Every Claude job chooses with the same rule: the subscription token if it is set, otherwise the API key, otherwise the job skips the Claude step with a notice. The choice is made from whether each secret is set; neither value is printed. Only the chosen secret is passed to the Claude step.
 
 - To switch to the API key, add `ANTHROPIC_API_KEY` and delete `CLAUDE_CODE_OAUTH_TOKEN`.
 - To switch back, add `CLAUDE_CODE_OAUTH_TOKEN` again. Keeping both is allowed; the subscription token wins.
@@ -61,8 +61,7 @@ In Settings, Advanced Security (called Code security on some plans), enable **Se
 | `ci.yml` | build and test the PR's code | read any secret; write to the repository (`contents: read`) |
 | `claude-review.yml` | read main, the PR's text and diff (saved as files), and post inline comments and one summary comment | check out or run the PR's code; use a shell, the network or `gh`; write files; approve, request changes or merge; see a token outside its own step |
 | `claude-fix.yml` | read the issue, edit the checkout in its `fix` job, build and test the patch in a separate `test` job, and open a PR from a `publish` job | run the agent's code where a Claude token or a write token is present; change protected files; merge |
-| `merge-approved.yml` | squash-merge a PR that a maintainer with write access approved at its head commit, after `test` passed and Claude did not say HOLD, then start the release | merge without a human approval; merge a PR that changes `.github/`, `SECURITY.md` or `LICENSE`; read a Claude token |
-| `release.yml` | write notes with Claude in a read-only job, then build, test, commit the version and publish the release from main | run the PR's code; let the notes agent write files, use a shell or see a write token |
+| `merge-approved.yml` | squash-merge a PR that a maintainer with write access approved at its head commit, after `test` passed and Claude did not say HOLD | merge without a human approval; merge a PR that changes `.github/`, `SECURITY.md` or `LICENSE`; read a Claude token; publish a release, create a tag or push a version |
 | `upstream-sync.yml` | read the upstream public repository and open or update one issue | run upstream code; push, merge or read a Claude token |
 
 Protected files, which the fix bot refuses: `.github/`, `vendor/`, `notes/`, `SECURITY.md`, `LICENSE`, `osb.user.js`, `osb.meta.js` and anything outside the source, test and docs allowlist in `claude-fix.yml`. `merge-approved.yml` never merges a PR that changes `.github/`, `SECURITY.md` or `LICENSE`.
@@ -73,7 +72,7 @@ Protected files, which the fix bot refuses: `.github/`, `vendor/`, `notes/`, `SE
 2. **Gates.** An outside pull request or issue reaches Claude only after a maintainer adds `ok-to-review` or `ok-to-fix`. The label covers the commit and the text present when it was added: the review stops when the head moved, and the fix agent gets the issue text from the labelling event.
 3. **Least privilege.** Every workflow starts with `permissions: {}` and each job asks for the minimum. The token is given to the Claude step's input only, never as job or workflow `env`. No workflow uses `secrets: inherit`.
 4. **Tool limits.** The agent may use `Read`, `Glob` and `Grep` inside the checkout. `.git`, the home folder's dot files, `/proc`, `/sys`, `/dev` and the runner's temp folder are denied, and `Bash`, `WebFetch` and `WebSearch` are denied. Only the fix agent may edit files, inside the checkout and outside `.git` and `.github`. The action's subprocess hardening is on (`allowed_non_write_users` with `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`): credentials are removed from the environment of any subprocess and git uses a credential helper instead of a token in `.git/config`.
-5. **Token guard.** `.github/scripts/token-guard.mjs` runs as a plain step after every Claude step. It checks every comment, review comment, review, issue and pull request changed since the job started (the fix and notes jobs: their output files before they leave the job) for the exact token values, fragments of 20 characters, their base64 and hex forms, and the `sk-ant-` shape. On a match it deletes the comment, or replaces the body and closes the issue or pull request, fails the run, and files a private vulnerability report. It never prints a value. GitHub keeps an edit history for bodies, so after any match rotate the tokens.
+5. **Token guard.** `.github/scripts/token-guard.mjs` runs as a plain step after every Claude step. It checks every comment, review comment, review, issue and pull request changed since the job started (the fix job: its output files before they leave the job) for the exact token values, fragments of 20 characters, their base64 and hex forms, and the `sk-ant-` shape. On a match it deletes the comment, or replaces the body and closes the issue or pull request, fails the run, and files a private vulnerability report. It never prints a value. GitHub keeps an edit history for bodies, so after any match rotate the tokens.
 6. **Supply chain.** Every action is pinned to a full commit SHA with its version in a comment, and `actions/checkout` never keeps credentials.
-7. **Environment.** The tokens live in the `claude` environment, limited to the `main` branch. For `pull_request_target` and `issues` runs GitHub evaluates that rule against the default branch, so the jobs can use it. Add yourself as a **required reviewer** of the environment if you want to approve every Claude run by hand: each run, including the notes of every release, then waits for your click.
-8. **Limits.** One review per pull request, one fix per issue and one release at a time, job and step timeouts, and per run `--max-turns` and `--max-budget-usd` (review: 80 turns, USD 5; fix: 120 turns, USD 10; notes: 30 turns, USD 1).
+7. **Environment.** The tokens live in the `claude` environment, limited to the `main` branch. For `pull_request_target` and `issues` runs GitHub evaluates that rule against the default branch, so the jobs can use it. Add yourself as a **required reviewer** of the environment if you want to approve every Claude run by hand: each run then waits for your click.
+8. **Limits.** One review per pull request, one fix per issue, job and step timeouts, and per run `--max-turns` and `--max-budget-usd` (review: 80 turns, USD 5; fix: 120 turns, USD 10).

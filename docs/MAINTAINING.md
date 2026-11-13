@@ -9,8 +9,7 @@ OSB lives at `github.com/corevider/osb`. It is a fork of `opensro-bot-lean`. Thi
 | `ci.yml` | every pull request, or by hand | builds, syntax-checks and tests the PR; checks the userscript header | plain `pull_request` event: no secrets, read-only token, even for forks |
 | `claude-review.yml` | a PR by an `OWNER`, `MEMBER` or `COLLABORATOR`; any other PR after a maintainer adds the label `ok-to-review`; or by hand | a plain step saves the PR's text and diff; the agent reads them and main, leaves inline comments and returns a summary that ends with `VERDICT: MERGE` or `VERDICT: HOLD` | `pull_request_target` with main checked out, never the PR's code; the agent has no shell, network or write access and cannot approve or merge; the token guard checks what it posted |
 | `claude-fix.yml` | an issue by an `OWNER`, `MEMBER` or `COLLABORATOR`; any other issue after a maintainer adds the label `ok-to-fix`; or by hand | the agent edits the code for the issue; a separate job builds and tests the patch; a third job opens a PR | the agent has no shell, network or token; its code runs only in a job without secrets; changes under `.github/`, `vendor/` and `notes/` are refused; the PR still needs a maintainer's approval |
-| `merge-approved.yml` | a maintainer approves a PR from a branch of this repository, or by hand with a PR number | merges when the approval covers the current head commit, the `test` check passed and Claude did not say `HOLD`; never touches PRs that change `.github/` | runs no PR code; only reads a human approval |
-| `release.yml` | a PR is merged, or by hand with a PR number | next patch version, notes, build, tests, a commit to `main`, a GitHub release with `osb.user.js` and `osb.meta.js` | runs on `main`, not on the PR; the notes agent can only read and return the notes, which the token guard checks |
+| `merge-approved.yml` | a maintainer approves a PR from a branch of this repository, or by hand with a PR number | merges when the approval covers the current head commit, the `test` check passed and Claude did not say `HOLD`; never touches PRs that change `.github/`; publishes no release | runs no PR code; only reads a human approval |
 | `upstream-sync.yml` | every Monday 06:17 UTC, or by hand | compares upstream's `main` with the commit recorded in `UPSTREAM.json` and opens or updates one issue that lists the new commits and every URL in their added lines | `contents: read` and `issues: write` only; fetches a public repository, runs none of its code, merges and pushes nothing |
 
 Each workflow file starts with a comment that says why it is safe. Keep that comment true when you change the file.
@@ -24,7 +23,7 @@ The author association of a PR is what GitHub reports: `OWNER`, `MEMBER` (organi
 The Claude jobs take their token from the GitHub Environment `claude`. Create it once: Settings, Environments, New environment, name `claude`.
 
 - Deployment branches and tags: **Selected branches and tags**, add the rule `main`.
-- Optional: add yourself under **Required reviewers**. Every Claude run, including the notes of each release, then waits until you approve it in the run's page.
+- Optional: add yourself under **Required reviewers**. Every Claude run then waits until you approve it in the run's page.
 - Environment secrets, one of:
 
 | Secret | Used by |
@@ -32,15 +31,11 @@ The Claude jobs take their token from the GitHub Environment `claude`. Create it
 | `CLAUDE_CODE_OAUTH_TOKEN` | the default: the operator's subscription token, made with `claude setup-token` on the operator's own computer |
 | `ANTHROPIC_API_KEY` | only when `CLAUDE_CODE_OAUTH_TOKEN` is not set: a CI-only API key in a Console workspace with a low spend limit |
 
-Both are read by `claude-review.yml`, `claude-fix.yml` and the notes job of `release.yml`. Without either, the review and fix workflows skip their Claude step and the release writes notes from the PR title and body. SECURITY.md says how to create, switch and rotate them.
+Both are read by `claude-review.yml` and `claude-fix.yml`. Without either, those workflows skip their Claude step. SECURITY.md says how to create, switch and rotate them.
 
 If the environment ever does not work for a run (the job fails with a deployment protection error), the fallback is repository secrets with the same names. The gates and the token guard stay the same, but any workflow on `main` could then read them.
 
-One repository secret may be needed:
-
-| Secret | Needed | Used by |
-| --- | --- | --- |
-| `RELEASE_TOKEN` | only if branch protection blocks the release push | `release.yml` pushes the version commit with it. A fine-grained token with `Contents: read and write` on this repository, from an account on the bypass list of the `main` rules. |
+No other repository secret is needed. `RELEASE_TOKEN` is no longer used by any workflow: if it exists, revoke the token and delete the secret.
 
 Also install the Claude GitHub App on the repository (run `/install-github-app` in Claude Code, or install it from github.com/apps/claude). Create the labels `ok-to-review` and `ok-to-fix` once. In Settings, Advanced Security, enable secret scanning, push protection and private vulnerability reporting.
 
@@ -54,23 +49,22 @@ Set this after the first push (Settings, Rules, Rulesets, New branch ruleset, ta
 2. Require status checks to pass: add **`test`** (the job of `ci.yml`; it appears in the list after the first run). Require branches to be up to date.
 3. Block force pushes and deletion of `main`.
 4. Do not give write access to people you do not trust with the secrets: a collaborator can change a workflow on a branch of this repository and read the secrets that workflow gets.
-5. The release commit is pushed to `main` by the workflow. If the rules block it, add `github-actions` (or the account of `RELEASE_TOKEN`) to the bypass list. Allow bypass for pull requests only if you can limit it to that actor. If the ruleset has no way to bypass for `github-actions`, create `RELEASE_TOKEN` as described above.
+5. No workflow pushes to `main`, so the rules need no bypass for `github-actions`. Only the maintainers push the release commit, from their own checkout. Remove any bypass entry that an earlier setup added for `github-actions` or for the account of `RELEASE_TOKEN`.
 
 Also in Settings, Actions, General: set "Fork pull request workflows from outside collaborators" to **Require approval for all outside collaborators**, and set the default workflow permissions to **Read repository contents** (every workflow here declares its own permissions).
 
 ## Releasing
 
-Releases are automatic. Merge a PR that changes the bot (anything outside `.github/`, `docs/`, `notes/` and `*.md`) and `release.yml` does the rest:
+Releases are made by the maintainers from their own build, never by a workflow. A merged pull request is not released by itself: it ships with the next release.
 
-1. next patch version from `build-lean.py` (`2.0.0` then `2.0.1`, and so on);
-2. `notes/<version>.md` from Claude, or from the PR title and body without a Claude token;
-3. both version strings bumped, the build, `node --check` and the tests;
-4. one commit to `main` with `build-lean.py`, `osb.user.js`, `osb.meta.js` and the notes;
-5. the GitHub release `v<version>` with `osb.user.js` and `osb.meta.js` as assets, and a comment on the PR.
+For each release:
 
-Do not release a merged PR by hand as well. If a release failed, fix the cause and run `release.yml` again from the Actions tab with the PR number.
+1. bump both version strings in `build-lean.py` (userscript `@version` and runtime `VERSION`) and add `notes/<version>.md`;
+2. build, run `node --check osb.user.js` and `node lean.test.cjs`, and test the build in a live game;
+3. copy `diagnostics-vocabulary.json` into OSB Manager and the server;
+4. commit the sources, the notes and both generated files together, tag `v<version>`, and create the GitHub release with `osb.user.js` and `osb.meta.js` attached.
 
-To change the version by hand (for example a new minor version), open a PR that changes both version strings in `build-lean.py` and adds `notes/<version>.md`. Release it by hand: build, run the tests, commit the sources and both generated files together, tag `v<version>`, and create the release with the two files attached. The PR itself must not be released by the workflow as well: label it, or merge it with the release notes already written, and run the workflow only if the version is still unpublished.
+No workflow commits a version, creates a tag or creates a release, so a release never collides with a pull request that was merged in the meantime.
 
 Users update through Tampermonkey: the `@updateURL` and `@downloadURL` point to `osb.meta.js` and `osb.user.js` on `main`, and the bot's own update check reads the same files.
 

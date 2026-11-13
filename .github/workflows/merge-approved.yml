@@ -12,8 +12,8 @@ name: Merge approved PR
 #      newest review asks for changes;
 #   3. the `test` check of ci.yml succeeded on that commit;
 #   4. the latest Claude verdict comment, if there is one, is not HOLD.
-# It then squash-merges with --match-head-commit, so a commit pushed after the checks is never merged, and starts release.yml
-# (a merge made with GITHUB_TOKEN raises no events).
+# It then squash-merges with --match-head-commit, so a commit pushed after the checks is never merged. It publishes no
+# release and pushes no version: the maintainers release from their own build, and a merged PR ships with the next release.
 #
 # Why this is safe: no PR code is checked out or run, no secret besides GITHUB_TOKEN is used, and the decision rests
 # on a human approval that this workflow only reads.
@@ -44,7 +44,6 @@ jobs:
       contents: write
       pull-requests: write
       checks: read
-      actions: write
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       PR: ${{ github.event.pull_request.number || inputs.pr }}
@@ -82,4 +81,3 @@ jobs:
           [ "$verdict" != HOLD ] || { echo "The Claude review says HOLD."; exit 1; }
 
           gh pr merge "$PR" --repo "$GITHUB_REPOSITORY" --squash --match-head-commit "$head"
-          gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref main -f pr="$PR"
