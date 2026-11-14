@@ -169,7 +169,7 @@ const Assist = {
 }
 {
   const avoids = Hunt.ksAvoids;
-  Hunt.ksAvoids = function (e, ...rest) { return avoids.call(this, e, ...rest) || Assist.taken(e); };
+  Hunt.ksAvoids = function (e, ...rest) { return avoids.call(this, e, ...rest) || Controller.guard('Party assist', () => Assist.taken(e)) === true; };
   const classOffset = Hunt.classOffset;
   Hunt.classOffset = function (e, attacking) { return classOffset.call(this, e, attacking) + (attacking ? 0 : Controller.guard('Party assist', () => Assist.share(e)) || 0); };
   const valid = Protect.valid;

@@ -6571,6 +6571,8 @@ test('party assist: for classes without the tick each member goes first for the 
   s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30, 'a party list without this character'); assert.equal(s.f.Hunt.running, true);
   s = assistFixture(); s.mob(30, 135); mine(s); s.f.Assist.share = () => { throw new Error('boom'); };
   s.f.Controller.tick(); assert.equal(s.f.Hunt.running, true, 'an error in the sharing never stops hunting'); assert.equal(s.f.Hunt.targetGid, 30);
+  s = assistFixture(); s.mob(30, 135); mine(s); s.f.Assist.taken = () => { throw new Error('boom'); };
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.running, true, 'an error in the ownership check never stops hunting'); assert.equal(s.f.Hunt.targetGid, 33, 'and a target is still picked');
   s = assistFixture(); s.f.Settings.profile.hunt.classModes.champion = 'prefer'; s.mob(30, 135, 1); mine(s);
   s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30, 'a preferred class still comes before the sharing');
 });
