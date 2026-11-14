@@ -3,7 +3,7 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const source = fs.readFileSync(__dirname + '/osb.user.js', 'utf8');
 const isolated = source.slice(0, source.lastIndexOf('installWorkerHook();')) +
-  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Assets, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Protect, Town, Travel, Quest, QuestData, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, SellStar, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, Equip, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, LevelSpot, ScrollBuff, boot, Ticker, Sound, LeanMap, Telemetry, Rotations, Leveling, UniqueHunt, UniqueNests, SpawnData, UniqueState, UniqueTracker, UniqueList, Emergency, Safety, HuntArea, MonsterClasses, Diag, StopCodes, Perf};\n})();';
+  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Assets, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Protect, Assist, Town, Travel, Quest, QuestData, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, SellStar, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, Equip, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, LevelSpot, ScrollBuff, boot, Ticker, Sound, LeanMap, Telemetry, Rotations, Leveling, UniqueHunt, UniqueNests, SpawnData, UniqueState, UniqueTracker, UniqueList, Emergency, Safety, HuntArea, MonsterClasses, Diag, StopCodes, Perf};\n})();';
 function fixture(document, sharedStorage) {
   let time = 100000;
   const storage = sharedStorage || new Map(), commands = [], notices = [], intervals = [], timers = [];
@@ -6484,6 +6484,292 @@ test('protect party members: settings persist, travel in shares and backups, and
   f.Protect.toggle('other', true); assert.deepEqual(plain(p.names), ['Mate', 'Left', 'other']); f.Protect.toggle('OTHER', false); assert.deepEqual(plain(p.names), ['Mate', 'Left']);
   assert.equal(f.Protect.chosen('mate'), true, 'names match without case');
 });
+function assistFixture(leader = 5) {
+  const f = fixture(); f.Hunt.start(); f.Combat.fight = () => {};
+  f.World.gp.social = { localName: 'Me', leader, members: [{ id: 5, name: 'Lead', status: 10, region: 1, x: 150, z: 100 }, { id: 6, name: 'Mate', status: 10, region: 1, x: 90, z: 120 }, { id: 1, name: 'Me', status: 10 }] };
+  f.World.ents.set(5, { gid: 5, kind: 'player', name: 'Lead', regionId: 1, x: 150, y: 0, z: 100, appearanceState: [0] });
+  f.World.ents.set(6, { gid: 6, kind: 'player', name: 'Mate', regionId: 1, x: 90, y: 0, z: 120, appearanceState: [0] });
+  const mob = (gid, x, rarity = 0, name = rarity === 4 ? 'Ogre' : 'Wolf') => { const e = { gid, kind: 'monster', name, rarity, regionId: 1, x, y: 0, z: 100, attackFlags: 16, appearanceState: [0] }; f.World.ents.set(gid, e); return e; };
+  const hit = (caster, target) => f.World.onCast({ caster, target, results: [{ target }] });
+  const fighting = gid => { mob(gid, 130, 0, 'Bear'); f.Hunt.targetGid = gid; f.Hunt.targetSince = 100000; f.World.gp.target = gid; };
+  const selected = gid => f.commands.some(c => c.kind === 'select' && c.gid === gid);
+  const a = f.Settings.profile.party.assist; a.enabled = true;
+  return { f, mob, hit, fighting, selected, a, member: name => f.World.gp.social.members.find(m => m.name === name) };
+}
+test('party assist: off by default, and off records nothing and changes no target', () => {
+  const { f, mob, hit, fighting, selected, a } = assistFixture();
+  assert.equal(f.DEFAULT_PROFILE.party.assist.enabled, false);
+  assert.deepEqual(Object.keys(f.DEFAULT_PROFILE.party.assist.classes).filter(k => f.DEFAULT_PROFILE.party.assist.classes[k]), ['giant', 'partyGiant']);
+  a.enabled = false; fighting(30); mob(31, 160, 4); hit(5, 31);
+  f.Controller.tick();
+  assert.equal(f.Hunt.targetGid, 30); assert.equal(selected(31), false); assert.equal(f.Assist.hits.size, 0);
+  assert.equal(f.Assist.status(), 'Party assist off.');
+});
+test('party assist: a member switches to the ticked-class monster the leader hits, and to no other class', () => {
+  let s = assistFixture(); s.fighting(30); s.mob(31, 160, 4); s.hit(5, 31);
+  s.f.Controller.tick();
+  assert.equal(s.f.Hunt.targetGid, 31); assert.equal(s.selected(31), true);
+  assert.match(s.f.Assist.status(), /Assisting Lead on Ogre/);
+  s.f.World.gp.target = 31; s.mob(32, 170); s.hit(5, 32); s.f.advance(300); s.f.Controller.tick();
+  assert.equal(s.f.Hunt.targetGid, 31, 'the leader turning to a normal monster does not pull the member off the giant');
+  s = assistFixture(); s.fighting(30); s.mob(32, 160); s.hit(5, 32);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30, 'Normal is not ticked'); assert.equal(s.selected(32), false);
+  s = assistFixture(); s.fighting(30); s.a.classes.normal = true; s.mob(32, 160); s.hit(5, 32);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 32, 'ticked Normal is followed');
+  s = assistFixture(); s.fighting(30); s.mob(31, 160, 4); s.hit(6, 31);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30, 'a member who is not the leader is not followed');
+  s = assistFixture(); s.fighting(30); s.mob(31, 160, 4); s.f.Settings.profile.hunt.classModes.giant = 'avoid'; s.hit(5, 31);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 31, 'an avoided class is still assisted when ticked');
+  s = assistFixture(); s.fighting(30); s.mob(31, 160, 4);
+  s.f.World.ents.set(8, { gid: 8, kind: 'cos', ownerGid: 5, regionId: 1, x: 150, y: 0, z: 100 }); s.hit(8, 31);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 31, 'the leader pet counts as the leader');
+});
+test('party assist: for classes without the tick a monster a party member fights is left to them', () => {
+  let s = assistFixture(); s.mob(30, 110); s.mob(33, 180); s.hit(6, 30);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 33, 'the free wolf, not the nearer one Mate fights');
+  s = assistFixture(); s.mob(30, 110); s.mob(33, 180); s.hit(5, 30);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 33, 'the leader counts like any member');
+  s = assistFixture(); s.a.enabled = false; s.mob(30, 110); s.mob(33, 180); s.hit(6, 30);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30, 'switch off: as before');
+  s = assistFixture(); s.mob(30, 110); s.hit(6, 30);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 0, 'nothing free: wait'); assert.equal(s.selected(30), false);
+  s.f.advance(6100); s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30, 'Mate stopped hitting it 6 seconds ago');
+  s = assistFixture(); s.mob(30, 110); s.mob(33, 180); s.hit(6, 30); s.hit(30, 1);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30, 'it attacks us');
+  s = assistFixture(); s.mob(30, 110); s.mob(33, 180); s.hit(1, 30); s.hit(6, 30);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30, 'we hit it first');
+  s = assistFixture(); s.fighting(30); s.mob(33, 180); s.hit(6, 30); s.f.advance(300);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30, 'a fight already started is not dropped');
+  s = assistFixture(); s.mob(31, 110, 4); s.mob(33, 180); s.hit(6, 31);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 31, 'a ticked class is shared');
+  s = assistFixture(); s.f.World.ents.set(9, { gid: 9, kind: 'player', name: 'Stranger', regionId: 1, x: 170, y: 0, z: 100 });
+  s.f.Settings.profile.hunt.avoidKs = false; s.mob(30, 110); s.mob(33, 180); s.hit(9, 30);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30, 'a stranger is not a party member: the other-players rule decides');
+  s = assistFixture(); const p = s.f.Settings.profile.party.protect; p.enabled = true; p.names = ['Mate'];
+  s.fighting(30); s.mob(32, 150); s.hit(32, 6); s.hit(6, 32);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 32, 'protecting a member still goes for the monster they fight');
+});
+test('party assist: for classes without the tick each member goes first for the monsters it is nearest to', () => {
+  const mine = s => { const e = s.mob(33, 100); e.z = 40; return e; };
+  let s = assistFixture(); s.mob(30, 135); mine(s);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 33, 'Lead is nearer to the other wolf, before any hit');
+  s = assistFixture(); s.a.enabled = false; s.mob(30, 135); mine(s);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30, 'switch off: the nearest, as before');
+  s = assistFixture(); s.mob(30, 135);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30, 'nothing of our own: better than standing idle');
+  s = assistFixture(); s.mob(30, 135); mine(s); s.hit(30, 1);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30, 'it attacks us');
+  s = assistFixture(); s.mob(31, 135, 4); mine(s);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 31, 'a ticked class is shared');
+  s = assistFixture(); s.mob(30, 135); mine(s); s.f.World.ents.get(5).appearanceState = [2];
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30, 'a dead member owns nothing');
+  s = assistFixture(); s.mob(30, 135); mine(s); s.f.World.ents.delete(5);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30, 'a member out of view owns nothing');
+  s = assistFixture(); s.f.World.gp.social = { members: [] }; s.mob(30, 135); mine(s);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30, 'solo');
+  s = assistFixture(); s.f.World.gp.social = { localName: 'Me', members: [{ id: 5, name: 'Lead', status: 10 }] }; s.mob(30, 135); mine(s);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30, 'a party list without this character'); assert.equal(s.f.Hunt.running, true);
+  s = assistFixture(); s.mob(30, 135); mine(s); s.f.Assist.share = () => { throw new Error('boom'); };
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.running, true, 'an error in the sharing never stops hunting'); assert.equal(s.f.Hunt.targetGid, 30);
+  s = assistFixture(); s.mob(30, 135); mine(s); s.f.Assist.taken = () => { throw new Error('boom'); };
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.running, true, 'an error in the ownership check never stops hunting'); assert.equal(s.f.Hunt.targetGid, 33, 'and a target is still picked');
+  s = assistFixture(); s.f.Settings.profile.hunt.classModes.champion = 'prefer'; s.mob(30, 135, 1); mine(s);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30, 'a preferred class still comes before the sharing');
+});
+test('party assist: the monster the leader selected wins over monsters its area skill also hits', () => {
+  const { f, mob, hit, fighting } = assistFixture();
+  fighting(30); mob(31, 160, 4); mob(32, 170, 4, 'Troll');
+  f.World.onCast({ caster: 5, target: 32, results: [{ target: 31 }, { target: 32 }] });
+  f.Controller.tick(); assert.equal(f.Hunt.targetGid, 32, 'the selected one, not the first one hit');
+  f.World.gp.target = 32; f.advance(300);
+  f.World.onCast({ caster: 5, target: 0, results: [{ target: 31 }, { target: 32 }] });
+  f.Controller.tick(); assert.equal(f.Hunt.targetGid, 32, 'an area skill with no selected monster keeps the member on its target');
+  f.advance(300); f.World.onCast({ caster: 5, target: 31, results: [{ target: 31 }, { target: 32 }] });
+  f.Controller.tick(); assert.equal(f.Hunt.targetGid, 31, 'the leader selected the other giant');
+});
+test('party assist: the leader keeps its own targeting and joins a member on a ticked monster when it has no target', () => {
+  let s = assistFixture(1); s.fighting(30); s.mob(31, 160, 4); s.hit(6, 31);
+  s.f.Controller.tick();
+  assert.equal(s.f.Hunt.targetGid, 30, 'the leader finishes its own target'); assert.match(s.f.Assist.status(), /You lead/);
+  s = assistFixture(1); s.mob(30, 110); s.mob(31, 180, 4); s.hit(6, 31);
+  s.f.Controller.tick();
+  assert.equal(s.f.Hunt.targetGid, 31, 'no target: the giant a member fights, before the nearer wolf');
+  assert.match(s.f.Assist.status(), /joining Mate on Ogre/);
+});
+test('party assist: every member works out the same leader from the party list', () => {
+  const view = (local, change = () => {}) => {
+    const f = fixture(); f.Settings.profile.party.assist.enabled = true;
+    const members = [['A', 5], ['B', 6], ['C', 7], ['D', 8]].map(([name, id]) => ({ id, name, status: 10, region: 1, x: 100 + id, z: 100 }));
+    f.World.gp.social = { localName: local, leader: 5, members };
+    change(f.World.gp.social);
+    return f.Assist.leader();
+  };
+  assert.deepEqual(['B', 'C', 'D'].map(n => view(n)), ['A', 'A', 'A'], 'the game leader');
+  assert.equal(view('A'), 'A', 'the leader knows it leads');
+  const dead = s => { s.members[0].status = 0; };
+  assert.deepEqual(['B', 'C', 'D'].map(n => view(n, dead)), ['B', 'B', 'B'], 'leader dead: the next member of the list');
+  const gone = s => { s.members.shift(); };
+  assert.deepEqual(['B', 'C', 'D'].map(n => view(n, gone)), ['B', 'B', 'B'], 'leader left and the leader id is stale');
+  const handed = s => { s.members.shift(); s.leader = 7; };
+  assert.deepEqual(['B', 'C', 'D'].map(n => view(n, handed)), ['C', 'C', 'C'], 'the game handed the party to C');
+  const twoDown = s => { s.members[0].status = 0; s.members[1].status = 0; };
+  assert.deepEqual(['C', 'D'].map(n => view(n, twoDown)), ['C', 'C']);
+  const away = s => { s.members[0].x = 9000; };
+  assert.deepEqual(['B', 'C', 'D'].map(n => view(n, away)), ['B', 'B', 'B'], 'leader far away on the party list');
+  const otherWorld = s => { s.members[0].war = 7; };
+  assert.equal(view('C', otherWorld), 'B', 'leader in another world instance');
+  assert.equal(view('B', s => { s.members = [s.members[1]]; }), '', 'alone: no leader');
+  assert.equal(view('B', s => { delete s.members; }), '', 'no party state');
+});
+test('party assist: members apart follow the leader in their own reach, and hits recorded before the game clock is known still expire', () => {
+  const view = (x, reach) => {
+    const f = fixture(); const a = f.Settings.profile.party.assist; a.enabled = true; a.leaderRange = reach;
+    f.World.gp.pose = { regionId: 1, x, y: 0, z: 100 };
+    f.World.gp.social = { localName: 'B', leader: 5, members: [{ id: 5, name: 'A', status: 10, region: 1, x: 100, z: 100 }, { id: 6, name: 'B', status: 10 }, { id: 7, name: 'C', status: 10, region: 1, x: 1300, z: 100 }] };
+    return f.Assist.leader();
+  };
+  assert.equal(view(1000, 100), 'A', '90 m from the leader with a 100 m reach');
+  assert.equal(view(1200, 100), 'B', '110 m away: this member leads itself');
+  const s = assistFixture(); s.f.World.simNow = () => null;
+  s.fighting(30); s.mob(31, 160, 4); s.hit(5, 31); s.f.advance(6100);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30, 'expired on the same clock it was recorded with');
+  const p = assistFixture(); p.fighting(30); p.mob(31, 160, 4); p.hit(5, 31); p.f.Assist.leader();
+  const pose = p.f.World.pose; p.f.World.pose = () => null;
+  assert.equal(p.f.Assist.pick(p.f.Hunt.currentTarget()), null);
+  assert.equal(p.f.Assist.hits.get('lead').size, 1, 'a tick without a position keeps what was recorded'); assert.equal(p.f.Assist.acting, 'Lead');
+  p.f.World.pose = pose;
+});
+test('party assist: a member ticked in the Protect party members list never leads', () => {
+  const view = (local, names) => {
+    const f = fixture(); f.Settings.profile.party.assist.enabled = true; f.Settings.profile.party.protect.names = names;
+    f.World.gp.social = { localName: local, leader: 5, members: [['A', 5], ['B', 6], ['C', 7], ['D', 8]].map(([name, id]) => ({ id, name, status: 10, region: 1, x: 100 + id, z: 100 })) };
+    return f.Assist.leader();
+  };
+  assert.deepEqual(['B', 'C', 'D'].map(n => view(n, ['a'])), ['B', 'B', 'B'], 'the game leader is protected: the next member, any letter case');
+  assert.deepEqual(['C', 'D'].map(n => view(n, ['A', 'B'])), ['C', 'C']);
+  assert.equal(view('D', ['A', 'B', 'C']), 'D', 'everyone else is protected: this character leads itself');
+  assert.equal(view('B', ['Gone']), 'A', 'a name that is not in the party changes nothing');
+  let s = assistFixture(); s.f.Settings.profile.party.protect.names = ['Lead']; s.fighting(30); s.mob(31, 160, 4); s.mob(32, 170, 4, 'Troll'); s.hit(5, 31); s.hit(6, 32);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 32, 'the protected game leader is not followed, Mate is');
+  s = assistFixture(); assert.equal(s.f.Assist.leader(), 'Lead'); s.f.Protect.toggle('Lead', true);
+  assert.equal(s.f.Assist.leader(), 'Mate', 'ticked while leading: replaced at once');
+  s.f.Protect.toggle('Lead', false); assert.equal(s.f.Assist.leader(), 'Mate'); s.f.advance(3100); assert.equal(s.f.Assist.leader(), 'Lead', 'unticked: leads again');
+  s = assistFixture(); s.f.Settings.profile.party.protect.all = true;
+  assert.equal(s.f.Assist.leader(), 'Lead', 'All party members alone excludes nobody: only ticked names count');
+});
+test('party assist: a dead leader is replaced at once, a leader out of reach after 3 seconds, and it leads again on return', () => {
+  let s = assistFixture(); const f = s.f;
+  assert.equal(f.Assist.leader(), 'Lead');
+  f.World.ents.delete(5); s.member('Lead').x = 5000;
+  assert.equal(f.Assist.leader(), 'Lead', 'not at once: the edge of the range must not flip-flop');
+  f.advance(2000); assert.equal(f.Assist.leader(), 'Lead');
+  f.advance(1100); assert.equal(f.Assist.leader(), 'Mate');
+  s.member('Lead').x = 150;
+  assert.equal(f.Assist.leader(), 'Mate'); f.advance(3100); assert.equal(f.Assist.leader(), 'Lead', 'back in reach');
+  s.member('Lead').status = 0;
+  assert.equal(f.Assist.leader(), 'Mate', 'dead: at once');
+  s = assistFixture(); assert.equal(s.f.Assist.leader(), 'Lead');
+  s.f.World.ents.get(5).appearanceState = [2];
+  assert.equal(s.f.Assist.leader(), 'Mate', 'seen dead before the party list says so');
+  s = assistFixture(); assert.equal(s.f.Assist.leader(), 'Lead');
+  s.f.World.gp.social.members.splice(0, 1);
+  assert.equal(s.f.Assist.leader(), 'Mate', 'left the party: at once');
+  s = assistFixture(); s.f.World.ents.delete(5); const lead = s.member('Lead'); delete lead.region; delete lead.x; delete lead.z;
+  assert.equal(s.f.Assist.leader(), 'Mate', 'no position on the party list and not in view');
+  s = assistFixture(); s.f.World.ents.delete(5); s.f.World.ents.delete(6); s.member('Lead').status = 0; s.member('Mate').x = 5000;
+  assert.equal(s.f.Assist.leader(), 'Me', 'nobody else in reach: this character leads itself');
+});
+test('party assist: the new leader is followed after the old one dies', () => {
+  const { f, mob, hit, fighting, member } = assistFixture();
+  fighting(30); mob(31, 160, 4); mob(32, 170, 4, 'Troll'); hit(6, 32); hit(5, 31);
+  f.Controller.tick(); assert.equal(f.Hunt.targetGid, 31);
+  f.World.gp.target = 31; member('Lead').status = 0; f.World.ents.delete(31); f.Hunt.targetGid = 0; f.World.gp.target = 0;
+  f.advance(300); hit(6, 32); f.Controller.tick();
+  assert.equal(f.Hunt.targetGid, 32, 'Mate leads now'); assert.match(f.Assist.status(), /Assisting Mate on Troll/);
+});
+test('party assist: solo or without party state nothing happens', () => {
+  for (const social of [{ members: [] }, { localName: 'Me', members: [{ id: 1, name: 'Me', status: 10 }] }, undefined, { localName: 'Me' }]) {
+    const { f, mob, hit, fighting } = assistFixture();
+    fighting(30); mob(31, 160, 4); hit(5, 31); f.World.gp.social = social;
+    f.Controller.tick();
+    assert.equal(f.Hunt.targetGid, 30); assert.equal(f.Controller.mode !== 'error', true);
+  }
+});
+test('party assist: old hits, despawned, far, outside the area, banned and skipped monsters are not followed', () => {
+  let s = assistFixture(); s.fighting(30); s.mob(31, 160, 4); s.hit(5, 31); s.f.advance(6100);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30, 'the hit is older than 6 seconds');
+  s = assistFixture(); s.fighting(30); const giant = s.mob(31, 160, 4); s.hit(5, 31); s.f.bus.emit('despawn', giant);
+  assert.equal(s.f.Assist.hits.get('lead').size, 0);
+  s = assistFixture(); s.fighting(30); s.a.range = 5; s.mob(31, 200, 4); s.hit(5, 31);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30, '10 m away with a 5 m limit');
+  s.a.range = 15; s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 31);
+  s = assistFixture(); s.fighting(30); s.f.Settings.profile.hunt.radius = 100; s.a.range = 100; s.mob(31, 250, 4); s.hit(5, 31);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30, 'outside the hunting area');
+  s = assistFixture(); s.fighting(30); s.mob(31, 160, 4); s.hit(5, 31); s.f.Hunt.ban.set(31, 100000 + 60000);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30, 'banned');
+  s = assistFixture(); s.fighting(30); s.f.Settings.profile.hunt.exclude = 'ogre'; s.mob(31, 160, 4); s.hit(5, 31);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30, 'on Skip these mobs');
+  s = assistFixture(); s.fighting(30); s.mob(31, 160, 4); s.f.World.ents.set(9, { gid: 9, kind: 'player', name: 'Stranger', regionId: 1, x: 170, y: 0, z: 100 });
+  s.hit(9, 31); s.hit(5, 31);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30, 'a stranger fights it too');
+});
+test('party assist: paused on a town trip, with Attack monsters off and on low HP', () => {
+  let s = assistFixture(); s.fighting(30); s.mob(31, 160, 4); s.hit(5, 31); s.f.Town.trip = { phase: 'recall' };
+  assert.equal(s.f.Assist.pick(s.f.Hunt.currentTarget()), null); assert.match(s.f.Assist.message, /town trip/);
+  s.f.Town.trip = null; s.f.Hunt.tick(); assert.equal(s.f.Hunt.targetGid, 31);
+  s = assistFixture(); s.f.Settings.profile.hunt.attack = false; s.mob(31, 160, 4); s.hit(5, 31);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 0); assert.equal(s.f.Hunt.state, 'support only'); assert.match(s.f.Assist.status(), /Attack monsters is off/);
+  s = assistFixture(); s.f.World.gp.inventory.push({ slot: 16, refObjId: 8, typeFlags: 2284, quantity: 50 });
+  s.f.World.gp.vitals = [{ gid: 1, hp: 30, mp: 100, maxHp: 100, maxMp: 100 }];
+  s.fighting(30); s.mob(31, 160, 4); s.hit(5, 31);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30); assert.match(s.f.Assist.status(), /own safety/);
+});
+test('party assist: a nearly dead target is finished first, and protecting a member comes before assisting', () => {
+  let s = assistFixture(); s.fighting(30); s.f.World.gp.vitals = [{ gid: 30, hp: 20, maxHp: 100 }]; s.mob(31, 160, 4); s.hit(5, 31);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 30, 'below 25% HP');
+  s.f.World.gp.vitals = [{ gid: 30, hp: 60, maxHp: 100 }]; s.f.advance(300); s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 31);
+  s = assistFixture(); const p = s.f.Settings.profile.party.protect; p.enabled = true; p.names = ['Mate'];
+  s.fighting(30); s.mob(31, 160, 4); s.mob(32, 150); s.hit(5, 31); s.hit(32, 6);
+  s.f.Controller.tick(); assert.equal(s.f.Hunt.targetGid, 32, 'the monster hitting Mate first');
+});
+test('party assist: an error inside it never stops hunting, and resets clear its state', () => {
+  const { f, mob, hit, fighting } = assistFixture();
+  fighting(30); mob(31, 160, 4); hit(5, 31);
+  const pick = f.Assist.pick; f.Assist.pick = () => { throw new Error('boom'); };
+  f.Controller.tick(); assert.equal(f.Hunt.running, true); assert.equal(f.Hunt.targetGid, 30);
+  f.Assist.pick = pick; f.Assist.leader();
+  assert.equal(f.Assist.hits.size, 1); assert.equal(f.Assist.acting, 'Lead');
+  f.bus.emit('reset'); assert.equal(f.Assist.hits.size, 0); assert.equal(f.Assist.acting, '');
+  hit(5, 31); f.bus.emit('phase', 'login'); assert.equal(f.Assist.hits.size, 0);
+  hit(5, 31); f.bus.emit('profile'); assert.equal(f.Assist.hits.size, 0);
+});
+test('party assist: saved settings are cleaned and profiles saved before it load with it off', () => {
+  const f = fixture();
+  const old = f.botProfile({ party: { autoRecruit: true } });
+  assert.equal(old.party.autoRecruit, true); assert.deepEqual(plain(old.party.assist), plain(f.DEFAULT_PROFILE.party.assist));
+  const odd = f.botProfile({ party: { assist: { enabled: 'yes', range: 999, leaderRange: 1, classes: { giant: false, normal: true, bogus: true, elite: 'x' } } } }).party.assist;
+  assert.equal(odd.enabled, false); assert.equal(odd.range, 100); assert.equal(odd.leaderRange, 10);
+  assert.deepEqual(plain(odd.classes), { normal: true, champion: false, party: false, giant: false, partyChampion: false, partyGiant: true, elite: false, unique: false, titan: false });
+  assert.equal(f.botProfile({ party: { assist: { classes: 'x' } } }).party.assist.classes.giant, true);
+});
+test('party assist: the Party page has the switch and the Combat class rows have the Assist tick', () => {
+  const document = { createElement(tag) {
+    const events = {};
+    return { tag, children: [], className: '', value: '', dataset: {}, style: {}, attributes: {},
+      setAttribute(k, v) { this.attributes[k] = v; }, append(...children) { this.children.push(...children); }, replaceChildren(...children) { this.children = children; },
+      addEventListener(name, fn) { events[name] = fn; }, fire(name, arg) { events[name]?.(arg); }, querySelectorAll() { return []; } };
+  } };
+  const f = fixture(document); f.UI.draw = () => {}; f.UI.refreshers = [];
+  const party = document.createElement('div'); f.UI.section_partyAssist(party);
+  assert.equal(party.children[0].children[0].textContent, 'Assist the party leader');
+  const host = document.createElement('div'); f.UI.section_combatMonsters(host);
+  const rows = host.children[0].children.filter(n => n.className === 'class-mode'), tick = row => row.children[4], a = f.Settings.profile.party.assist;
+  assert.equal(tick(rows[3]).textContent, 'Assist'); assert.equal(tick(rows[3]).attributes['aria-label'], 'Assist Giant');
+  assert.equal(tick(rows[3]).attributes['aria-pressed'], 'true'); assert.equal(tick(rows[0]).attributes['aria-pressed'], 'false');
+  tick(rows[0]).fire('click'); assert.equal(a.classes.normal, true); assert.equal(tick(rows[0]).className, 'cell on');
+  tick(rows[3]).fire('click'); assert.equal(a.classes.giant, false); assert.equal(tick(rows[3]).className, 'cell');
+  assert.equal(f.Settings.profile.hunt.classModes.giant, 'ignore', 'the class choice is untouched');
+});
 test('protect party members: the Party page lists members, keeps those who left greyed out and saves the ticks', () => {
   const document = { createElement(tag) {
     const events = {};
@@ -10653,7 +10939,7 @@ test('monster classes: the Combat page lists the nine classes in order and keeps
   assert.deepEqual(rows.map(r => r.attributes['aria-label']), ['Normal', 'Champion', 'Party normal', 'Giant', 'Party champion', 'Party giant', 'Elite', 'Unique', 'Titan']);
   assert.deepEqual(rows[5].children[0].children.slice(0, 2).map(i => i.style.backgroundImage), ['var(--s-tw_party)', 'var(--s-tw_giant)'], 'icons as on the rotation tabs');
   assert.equal(rows[8].children[0].children[0].style.backgroundImage, 'var(--s-tw_titan)');
-  const buttons = row => row.children.slice(1);
+  const buttons = row => row.children.slice(1, 4);
   assert.deepEqual(buttons(rows[0]).map(b => b.textContent), ['Prefer', 'Ignore', 'Avoid']);
   assert.ok(buttons(rows[0]).every(b => b.title), 'every choice has a tooltip');
   assert.deepEqual(buttons(rows[0]).map(b => b.attributes['aria-pressed']), ['false', 'true', 'false']);

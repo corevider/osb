@@ -138,7 +138,8 @@ const DEFAULT_PROFILE = {
   mall: { on: false, budgetSilk: 0, hp: { on: false, low: 10, target: 1000 }, mp: { on: false, low: 10, target: 1000 }, damageInc: { on: false, low: 5, target: 20 }, damageAbs: { on: false, low: 5, target: 20 }, reverse: { on: false, low: 1, target: 5 } },
   party: { autoAcceptMatching: false, autoRecruit: false, joinMain: false, mainName: '', leaveIfNotLeader: false, onlyWhileRunning: false, acceptNames: '', autoInvite: false, inviteNames: '', inviteAnyone: false, inviteRadius: 300, autoRes: false, acceptRes: false, acceptResAny: false, resNames: '', reviveWaitS: 20, resRadius: 300, resWaitS: 31, resMax: 0, title: 'Hunting party', min: 1, max: 90, purpose: 0, expShare: true, itemShare: true,
     support: { enabled: false, whileStopped: false, range: 30, heal: { id: 0, group: 0, pct: 60, self: false }, group: { id: 0, group: 0, pct: 60, count: 2 }, buffs: [] },
-    protect: { enabled: false, all: false, names: [], range: 40, whileNoAttack: false } },
+    protect: { enabled: false, all: false, names: [], range: 40, whileNoAttack: false },
+    assist: { enabled: false, classes: { normal: false, champion: false, party: false, giant: true, partyChampion: false, partyGiant: true, elite: false, unique: false, titan: false }, range: 40, leaderRange: 100 } },
   wardrobe: { on: true, phantom: true, realAnim: true, hideAvatars: false,
     eq: {}, av: {}, pet: { atk: 0, pick: 0, mount: 0 }, presets: {}, undo: null },
   macro: {
@@ -274,6 +275,11 @@ function botProfile(input) {
   for (const key of ['enabled', 'all', 'whileNoAttack']) protect[key] = protect[key] === true;
   protect.range = Number.isFinite(protect.range) ? clamp(Math.round(protect.range), 5, 100) : DEFAULT_PROFILE.party.protect.range;
   protect.names = [...new Set((Array.isArray(protect.names) ? protect.names : []).filter(n => typeof n === 'string').map(n => n.trim().slice(0, 32)).filter(Boolean))].slice(0, 50);
+  const assist = result.party.assist, assistDefaults = DEFAULT_PROFILE.party.assist, assistClasses = assist.classes && typeof assist.classes === 'object' ? assist.classes : {};
+  assist.enabled = assist.enabled === true;
+  assist.range = Number.isFinite(assist.range) ? clamp(Math.round(assist.range), 5, 100) : assistDefaults.range;
+  assist.leaderRange = Number.isFinite(assist.leaderRange) ? clamp(Math.round(assist.leaderRange), 10, 500) : assistDefaults.leaderRange;
+  assist.classes = Object.fromEntries(MONSTER_CLASS_KEYS.map(key => [key, typeof assistClasses[key] === 'boolean' ? assistClasses[key] : assistDefaults.classes[key]]));
   // New categories inherit the old Other items switch, preserving existing selection.
   const pickup = input.hunt?.pickup;
   for (const key of ['elixirs', 'powders', 'alchemy']) {
