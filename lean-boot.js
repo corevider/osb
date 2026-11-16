@@ -16,7 +16,7 @@ function boot() {
   if (Setup.isNew()) UI.current = 'Setup';
   UI.mount(); Stats.init(); Sound.init(); Updates.start(); Diagnostics.start(); Diag.start(); Telemetry.start();
   const unlockSound = e => {
-    if (e.isTrusted && (Settings.profile.hunt.pickup.petFullSound || Sound.soxOn() || Sound.anyOn() || UniqueHunt.active)) Sound.unlock();
+    if (e.isTrusted && (Settings.profile.hunt.pickup.petFullSound || Sound.soxOn() || Sound.anyOn() || Settings.profile.alchemy.sound === true || UniqueHunt.active)) Sound.unlock();
   };
   W.addEventListener('pointerdown', unlockSound, true);
   W.addEventListener('keydown', unlockSound, true);

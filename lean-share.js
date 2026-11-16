@@ -77,6 +77,7 @@ const ProfileShare = {
     const rotations = { ...profile.macro?.rotations };
     for (const key of ['partyChampion', 'partyGiant']) rotations[key] = this.clone(source.macro.rotations[key] || []);
     profile.macro = { ...profile.macro, rotations };
+    profile.hunt = { ...profile.hunt, classes: { ...profile.hunt?.classes, giantParty: source.hunt.classes.giantParty } };
     return JSON.stringify({ app: SHARE.apps[0], format: SHARE.format, version: VERSION, profile }, null, share ? 0 : 2);
   },
   // Text <-> bytes <-> base64 without relying on browser-only helpers.

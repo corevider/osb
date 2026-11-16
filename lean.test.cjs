@@ -3,7 +3,7 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const source = fs.readFileSync(__dirname + '/osb.user.js', 'utf8');
 const isolated = source.slice(0, source.lastIndexOf('installWorkerHook();')) +
-  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Assets, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Protect, Assist, Town, Travel, Quest, QuestData, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, SellStar, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, Equip, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, LevelSpot, ScrollBuff, boot, Ticker, Sound, LeanMap, Telemetry, Rotations, Leveling, UniqueHunt, UniqueNests, SpawnData, UniqueState, UniqueTracker, UniqueList, Emergency, Safety, HuntArea, MonsterClasses, Diag, StopCodes, Perf};\n})();';
+  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Assets, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Protect, Assist, Town, Travel, Quest, QuestData, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, SellStar, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, Search, Equip, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, LevelSpot, ScrollBuff, boot, Ticker, Sound, LeanMap, Telemetry, Rotations, Leveling, UniqueHunt, UniqueNests, SpawnData, UniqueState, UniqueTracker, UniqueList, Emergency, Safety, HuntArea, MonsterClasses, Diag, StopCodes, Perf};\n})();';
 function fixture(document, sharedStorage) {
   let time = 100000;
   const storage = sharedStorage || new Map(), commands = [], notices = [], intervals = [], timers = [];
@@ -1705,6 +1705,36 @@ test('delta gameplay events merge onto the last state and keep the bot in the wo
   f.World.applyEvent({kind:'gameplay',state:{localGid:gid}});
   assert.equal(f.World.gp.target, undefined, 'a full state still replaces the old one');
 });
+test('delta gameplay events rebuild the skill catalog only when a new catalog arrives', () => {
+  const f = fixture(); let builds = 0;
+  f.bus.on('catalog', () => builds++);
+  f.World.applyEvent({kind:'gameplay',state:{target:777},delta:true});
+  assert.equal(builds, 0, 'a delta without skillCatalog keeps the old catalog');
+  const catalog = [...f.World.catalog.values(), { id: 99001, group: 99001, level: 1, name: 'New skill', active: true }];
+  f.World.applyEvent({kind:'gameplay',state:{skillCatalog:catalog},delta:true});
+  assert.equal(builds, 1); assert.ok(f.World.skill(99001));
+  f.World.applyEvent({kind:'gameplay',state:{target:778},delta:true});
+  assert.equal(builds, 1);
+  f.World.applyEvent({kind:'gameplay',state:{...f.World.gp, skillCatalog:[...catalog]}});
+  assert.equal(builds, 2, 'a full state with a fresh catalog still rebuilds');
+});
+test('skill catalog survives null deltas and rebuilds after a world reset or character switch', () => {
+  const f = fixture(); let builds = 0;
+  f.bus.on('catalog', () => builds++);
+  const catalog = [{ id: 99001, group: 99001, level: 1, name: 'A', active: true }, { id: 99002, group: 99001, level: 2, name: 'A2', active: true }];
+  f.World.applyEvent({kind:'gameplay',state:{skillCatalog:catalog},delta:true});
+  assert.equal(builds, 1);
+  f.World.applyEvent({kind:'gameplay',state:{skillCatalog:null},delta:true});
+  assert.equal(builds, 1); assert.ok(f.World.skill(99002), 'a null catalog in a delta keeps the old one');
+  f.World.applyEvent({kind:'reset'});
+  f.World.applyEvent({kind:'gameplay',state:{...f.World.gp, skillCatalog:structuredClone(catalog)}});
+  assert.equal(builds, 2, 'a reconnect delivers a cloned catalog and rebuilds');
+  f.World.applyEvent({kind:'bootstrap',value:{character:{name:'Other'}}});
+  f.World.applyEvent({kind:'gameplay',state:{...f.World.gp, skillCatalog:[{ id: 99100, group: 99100, level: 3, name: 'B', active: true }]}});
+  assert.equal(builds, 3); assert.ok(f.World.skill(99100)); assert.ok(!f.World.skill(99001), 'the old character skills are gone');
+  f.World.applyEvent({kind:'gameplay',state:{skillCatalog:[{ id: 99100, group: 99100, level: 4, name: 'B', active: true }]},delta:true});
+  assert.equal(builds, 4); assert.equal(f.World.skill(99100).level, 4, 'a levelled skill arrives as a new catalog and is applied');
+});
 test('delta gameplay events keep the inventory and rebuild the skill catalog only when sent', () => {
   const f = fixture(), inv = f.World.gp.inventory, calls = [];
   const rebuild = f.World.rebuildCatalog.bind(f.World);
@@ -2704,6 +2734,69 @@ test('party support group heal, self heal and the stopped switch', () => {
   f.Hunt.stop(); f.commands.length = 0; f.advance(2000); f.Controller.tick(); assert.deepEqual(casts(f), [], 'hunting stopped');
   c.whileStopped = true; f.advance(2000); f.Controller.tick(); assert.deepEqual(casts(f), ['skill 2001 1'], 'unless allowed while stopped');
 });
+test('party support MP heal, group MP heal and self MP restore', () => {
+  const f = fixture(), c = support(f);
+  c.enabled = true;
+  f.World.gp.social.members[1].status = 0x45;
+  c.mpHeal = { id: 2001, group: 900, pct: 60, self: false };
+  f.advance(1000); f.Controller.tick();
+  assert.deepEqual(casts(f), ['select 60', 'skill 2001 60'], 'Tank at 40% MP is restored first');
+  f.World.gp.social.members[2].status = 0x43;
+  c.mpHeal = { id: 0, group: 0, pct: 60, self: false };
+  c.mpGroup = { id: 2003, group: 902, pct: 60, count: 2 };
+  f.commands.length = 0; f.advance(2000); f.Controller.tick();
+  assert.deepEqual(casts(f), ['skill 2003 none'], 'two below 60% MP: the area MP restore, no target');
+  c.mpGroup = { id: 0, group: 0, pct: 60, count: 2 };
+  c.mpHeal = { id: 2001, group: 900, pct: 60, self: true };
+  f.World.gp.social.members[1].status = 0xa9;
+  f.World.gp.social.members[2].status = 0x99;
+  f.World.gp.vitals = [{ gid: 1, hp: 100, maxHp: 100, mp: 30, maxMp: 100 }];
+  f.commands.length = 0; f.advance(2000); f.Controller.tick();
+  assert.deepEqual(casts(f), ['skill 2001 1'], 'restore my own MP at 30%');
+});
+test('party MP heals come after the HP heals and before buffs', () => {
+  const f = fixture(), c = support(f);
+  c.enabled = true;
+  f.World.gp.social.members[1].status = 0x45;
+  c.heal = { id: 2001, group: 900, pct: 60, self: false };
+  c.mpHeal = { id: 2002, group: 901, pct: 60, self: false };
+  c.buffs = [{ id: 2003, group: 902 }];
+  f.advance(1000); f.Controller.tick();
+  assert.deepEqual(casts(f), ['select 60', 'skill 2001 60'], 'Tank at 50% HP: the HP heal first');
+  f.World.gp.social.members[1].status = 0x4a; f.World.hpPctOf = () => null;
+  f.commands.length = 0; f.advance(2000); f.Controller.tick();
+  assert.deepEqual(casts(f), ['select 60', 'skill 2002 60'], 'HP fine, MP at 40%: the MP heal before any buff');
+  assert.match(f.Support.message, /restore MP Tank \(40%\)/);
+  f.World.gp.social.members[1].status = 0xaa; f.World.gp.social.members[2].status = 0xaa;
+  f.commands.length = 0; f.advance(2000); f.Controller.tick();
+  assert.ok(!casts(f).some(x => x.startsWith('skill 2001') || x.startsWith('skill 2002')), 'nobody needs HP or MP');
+  assert.ok(casts(f).some(x => x.startsWith('skill 2003')), 'the buffs go out once nobody needs MP');
+});
+test('party MP heal settings load from old files, stay off until chosen and travel in share codes', async () => {
+  const f = fixture();
+  const old = f.botProfile({ party: { support: { enabled: true, heal: { id: 5, group: 5, pct: 70, self: true } } } }).party.support;
+  assert.deepEqual(JSON.parse(JSON.stringify(old.mpHeal)), { id: 0, group: 0, pct: 60, self: false });
+  assert.deepEqual(JSON.parse(JSON.stringify(old.mpGroup)), { id: 0, group: 0, pct: 60, count: 2 });
+  assert.equal(old.heal.pct, 70, 'the HP heal is untouched');
+  const g = fixture(), c = support(g);
+  c.enabled = true; g.World.gp.social.members[1].status = 0x15;
+  g.advance(1000); g.Controller.tick();
+  assert.deepEqual(casts(g), [], 'no MP skill chosen: nothing is cast');
+  Object.assign(f.Settings.profile.party.support.mpHeal, { id: 2001, group: 900, pct: 50, self: true });
+  const h = fixture(); h.ProfileShare.pending = await h.ProfileShare.preview(await f.ProfileShare.encode(f.ProfileShare.text(true)));
+  assert.equal(h.ProfileShare.apply(), true);
+  assert.deepEqual(JSON.parse(JSON.stringify(h.Settings.profile.party.support.mpHeal)), { id: 2001, group: 900, pct: 50, self: true });
+});
+test('party support restores only its own MP when solo with Heal my MP too', () => {
+  const f = fixture(), c = support(f);
+  c.enabled = true; f.World.gp.social = null;
+  c.mpHeal = { id: 2001, group: 900, pct: 60, self: true };
+  f.World.gp.vitals = [{ gid: 1, hp: 100, maxHp: 100, mp: 20, maxMp: 100 }];
+  f.advance(1000); f.Controller.tick();
+  assert.deepEqual(casts(f), ['skill 2001 1']);
+  c.mpHeal.self = false; f.commands.length = 0; f.advance(2000); f.Controller.tick();
+  assert.deepEqual(casts(f), []); assert.equal(f.Support.message, 'Not in a party.');
+});
 test('res travel defaults to 30m, approaches, casts and returns before resuming hunting', () => {
   const f = resurrectionTravel(); assert.equal(f.Settings.profile.party.resRadius, 300);
   f.Controller.tick(); assert.equal(f.Resurrect.trip.phase, 'approach'); assert.equal(f.commands.at(-1).kind, 'move');
@@ -3368,6 +3461,163 @@ test('anti-stuck can be switched off and does not run while hunting is stopped',
   assert.equal(f.AntiStuck.recoveries, 0); f.Settings.profile.hunt.antiStuck.enabled = true; f.Hunt.stop(); idleFor(f, 400000);
   assert.equal(f.AntiStuck.recoveries, 0);
 });
+test('the hunt-area search defaults off and survives profile import', () => {
+  const f = fixture();
+  assert.equal(f.Settings.profile.hunt.search.enabled, false);
+  assert.equal(f.Settings.profile.hunt.search.range, 90);
+  const saved = f.botProfile({ hunt: { search: { enabled: true, range: 70 } } });
+  assert.equal(saved.hunt.search.enabled, true); assert.equal(saved.hunt.search.range, 70);
+  const fresh = f.botProfile({}).hunt.search;
+  assert.equal(fresh.enabled, false); assert.equal(fresh.range, 90);
+  const old = f.botProfile({ hunt: { radius: 500, returnToCenter: true } }).hunt.search;
+  assert.deepEqual([old.enabled, old.range], [false, 90], 'settings from before the sweep load with it off');
+  const odd = f.botProfile({ hunt: { search: { enabled: 'yes', range: 5000 } } }).hunt.search;
+  assert.deepEqual([odd.enabled, odd.range], [false, 100], 'wrong types and ranges are fixed on load');
+  assert.equal(f.botProfile({ hunt: { search: { range: 'x' } } }).hunt.search.range, 90);
+});
+test('the hunt-area search travels in share codes and backups', async () => {
+  const f = fixture(); Object.assign(f.Settings.profile.hunt.search, { enabled: true, range: 60 });
+  const g = fixture(); g.ProfileShare.pending = await g.ProfileShare.preview(await f.ProfileShare.encode(f.ProfileShare.text(true)));
+  assert.equal(g.ProfileShare.apply(), true);
+  assert.deepEqual([g.Settings.profile.hunt.search.enabled, g.Settings.profile.hunt.search.range], [true, 60]);
+  assert.equal(f.botProfile(JSON.parse(f.ProfileShare.text(false)).profile).hunt.search.enabled, true);
+});
+test('search waypoints reach the four hunt-area edges and return through the centre', () => {
+  const f = fixture();
+  const H = f.Settings.profile.hunt;
+  H.center = { regionId: 1, x: 500, y: 7, z: 500 }; H.radius = 400; H.search.range = 100;
+  f.Search.reset();
+  const steps = [];
+  for (let i = 0; i < 8; i++) { steps.push(f.Search.dest(H)); f.Search.step++; }
+  const xy = p => [p.x, p.z];
+  assert.deepEqual(steps.map(xy), [[500, 900], [500, 500], [900, 500], [500, 500], [100, 500], [500, 500], [500, 100], [500, 500]]);
+  assert.equal(steps[0].regionId, 1); assert.equal(steps[0].y, 7);
+});
+test('search waypoints stay in the dungeon region using local coordinates', () => {
+  const f = fixture();
+  const H = f.Settings.profile.hunt;
+  H.center = { regionId: 0x8001, x: 1000, y: 3, z: 1000 }; H.radius = 1000; H.search.range = 90;
+  f.Search.reset();
+  const north = f.Search.dest(H);
+  assert.equal(north.regionId, 0x8001);
+  assert.equal(north.x, 1000); assert.equal(north.z, 1900); assert.equal(north.y, 3);
+});
+test('search sweep walks north, centre, east, centre, west, centre, south, centre and repeats', () => {
+  const f = fixture();
+  const H = f.Settings.profile.hunt;
+  H.center = { regionId: 1, x: 500, y: 0, z: 500 };
+  f.World.gp.pose = { regionId: 1, x: 500, y: 0, z: 500 };
+  H.search.enabled = true;
+  f.Hunt.start();
+  const expected = [[500, 860], [500, 500], [860, 500], [500, 500], [140, 500], [500, 500], [500, 140], [500, 500]];
+  const seen = [];
+  for (let i = 0; i < 16; i++) {
+    f.advance(2600); f.commands.length = 0; f.Hunt.tick();
+    const move = f.commands.find(c => c.kind === 'move');
+    if (move) { seen.push([move.destination.x, move.destination.z]); f.World.gp.pose.x = move.destination.x; f.World.gp.pose.z = move.destination.z; }
+  }
+  assert.deepEqual(seen, expected);
+  assert.equal(f.Hunt.state, 'search', 'the sweep keeps the search state');
+  f.advance(2600); f.commands.length = 0; f.Hunt.tick();
+  const again = f.commands.find(c => c.kind === 'move');
+  assert.deepEqual([again.destination.x, again.destination.z], [500, 860], 'repeats from the north after a full cycle');
+});
+test('with the search off, a distant hunter still returns to the centre', () => {
+  const f = fixture();
+  const H = f.Settings.profile.hunt;
+  H.center = { regionId: 1, x: 500, y: 0, z: 500 };
+  f.World.gp.pose = { regionId: 1, x: 1000, y: 0, z: 500 };
+  H.search.enabled = false; H.returnToCenter = true;
+  f.Hunt.start();
+  f.advance(2600); f.Hunt.tick();
+  const move = f.commands.find(c => c.kind === 'move');
+  assert.deepEqual([move.destination.x, move.destination.z], [500, 500]);
+  assert.equal(f.Hunt.state, 'return');
+  f.World.gp.pose.x = 600; f.commands.length = 0; f.advance(2600); f.Hunt.tick();
+  assert.equal(f.commands.some(c => c.kind === 'move'), false, 'inside half the radius it waits at the spot, as before');
+});
+test('a support character does not sweep the area', () => {
+  const f = fixture();
+  const H = f.Settings.profile.hunt;
+  H.center = { regionId: 1, x: 500, y: 0, z: 500 };
+  f.World.gp.pose = { regionId: 1, x: 1000, y: 0, z: 500 };
+  H.search.enabled = true; H.attack = false;
+  f.Hunt.start();
+  f.advance(2600); f.Hunt.tick();
+  const move = f.commands.find(c => c.kind === 'move');
+  assert.deepEqual([move.destination.x, move.destination.z], [500, 500], 'returns to centre, never sweeps north');
+  assert.equal(f.Hunt.state, 'return');
+});
+test('reaching a sweep waypoint counts as progress for the anti-stuck watchdog', () => {
+  const f = fixture();
+  const H = f.Settings.profile.hunt;
+  H.center = { regionId: 1, x: 500, y: 0, z: 500 };
+  f.World.gp.pose = { regionId: 1, x: 500, y: 0, z: 500 };
+  H.search.enabled = true;
+  f.Search.reset();
+  f.AntiStuck.idleMs = 123000;
+  f.World.gp.pose.z = 860;
+  f.Search.tick(f.Hunt);
+  assert.equal(f.AntiStuck.idleMs, 0);
+  assert.equal(f.Search.step, 1, 'moved on to the centre leg');
+});
+test('the search sweep stays inside a polygon hunting area', () => {
+  const f = fixture(), H = f.Settings.profile.hunt;
+  H.center = { regionId: 1, x: 500, y: 0, z: 500 }; H.radius = 2000; H.search.enabled = true;
+  H.polygon = { on: true, corners: [{ regionId: 1, x: 300, y: 0, z: 300 }, { regionId: 1, x: 1100, y: 0, z: 300 }, { regionId: 1, x: 1100, y: 0, z: 700 }, { regionId: 1, x: 300, y: 0, z: 700 }] };
+  f.Search.reset();
+  const points = [];
+  for (let i = 0; i < 8; i++) { points.push(f.Search.dest(H)); f.Search.step++; }
+  assert.deepEqual(points.map(p => [Math.round(p.x), Math.round(p.z)]), [[500, 680], [500, 500], [1040, 500], [500, 500], [320, 500], [500, 500], [500, 320], [500, 500]], 'each leg goes 90% of the way to the polygon edge, not the hunt radius');
+  const shape = f.HuntArea.polygon(H);
+  assert.ok(points.every(p => f.HuntArea.contains(shape, p)), 'every waypoint is inside the polygon');
+  H.polygon.corners = [{ regionId: 1, x: 300, y: 0, z: 300 }, { regionId: 1, x: 1100, y: 0, z: 300 }, { regionId: 1, x: 300, y: 0, z: 1100 }];
+  f.World.gp.pose = { regionId: 1, x: 500, y: 0, z: 500 }; f.Search.waypoint = { regionId: 1, x: 500, y: 0, z: 680 };
+  f.Search.tick(f.Hunt);
+  assert.equal(f.Search.step, 0, 'a new polygon restarts the sweep'); assert.notEqual(f.Search.waypoint.z, 680);
+  assert.ok(f.HuntArea.contains(f.HuntArea.polygon(H), f.Search.waypoint));
+});
+test('the search sweep waits at a hunting spot outside the polygon instead of sweeping from it', () => {
+  const f = fixture(), H = f.Settings.profile.hunt;
+  H.center = { regionId: 1, x: 2000, y: 0, z: 2000 }; H.search.enabled = true;
+  H.polygon = { on: true, corners: [{ regionId: 1, x: 300, y: 0, z: 300 }, { regionId: 1, x: 1100, y: 0, z: 300 }, { regionId: 1, x: 300, y: 0, z: 1100 }] };
+  f.World.gp.pose = { regionId: 1, x: 2000, y: 0, z: 2000 };
+  f.Hunt.start();
+  for (let i = 0; i < 4; i++) { f.advance(2600); f.Hunt.tick(); }
+  assert.equal(f.commands.some(c => c.kind === 'move'), false); assert.equal(f.Search.step, 0);
+  assert.equal(f.Search.last, null, 'no sweep leg is counted as progress');
+  f.Search.reset(); f.AntiStuck.idleMs = 5000; f.Search.tick(f.Hunt);
+  assert.equal(f.AntiStuck.idleMs, 5000, 'standing still is not counted as sweep progress');
+});
+test('the search sweep never runs while luring or while hunting around a followed member', () => {
+  const f = fixture(), H = f.Settings.profile.hunt;
+  H.center = { regionId: 1, x: 500, y: 0, z: 500 }; H.search.enabled = true;
+  f.World.gp.pose = { regionId: 1, x: 500, y: 0, z: 500 };
+  Object.assign(f.Settings.profile.lure, { enabled: true, points: [{ regionId: 1, x: 900, y: 0, z: 500 }] });
+  assert.equal(f.Search.on(H), false, 'luring');
+  let lured = 0; f.Lure.tick = () => { lured++; };
+  f.Hunt.start(); f.advance(2600); f.Hunt.tick();
+  assert.equal(lured, 1, 'the lure owns the idle tick'); assert.equal(f.Search.waypoint, null);
+  f.Settings.profile.lure.enabled = false;
+  assert.equal(f.Search.on(H), true);
+  f.HuntArea.aroundMember++;
+  try {
+    assert.equal(f.Search.on(H), false, 'following');
+    f.commands.length = 0; f.advance(2600); f.Hunt.tick();
+    assert.equal(f.commands.some(c => c.kind === 'move'), false, 'beside the member it waits, as before');
+  } finally { f.HuntArea.aroundMember--; }
+});
+test('the search sweep starts again from the north when the hunting spot moves', () => {
+  const f = fixture(), H = f.Settings.profile.hunt;
+  H.center = { regionId: 1, x: 500, y: 0, z: 500 }; H.search.enabled = true;
+  f.World.gp.pose = { regionId: 1, x: 500, y: 0, z: 500 };
+  f.Search.tick(f.Hunt); assert.equal(f.Search.waypoint.z, 860);
+  f.Search.step = 2; f.Search.waypoint = f.Search.dest(H);
+  H.center = { regionId: 1, x: 700, y: 0, z: 700 }; f.World.gp.pose = { regionId: 1, x: 700, y: 0, z: 700 };
+  f.Search.tick(f.Hunt);
+  assert.equal(f.Search.step, 0); assert.deepEqual([f.Search.waypoint.x, f.Search.waypoint.z], [700, 1060]);
+});
+
 test('SoX-only filters equipment to Star, Moon and Sun gear and leaves other categories alone', () => {
   const f = fixture(), P = f.Settings.profile.hunt.pickup; f.World.charName = 'Tester';
   const gear = (gid, ref) => { const e = f.drop(gid, 44); e.refObjId = ref; e.name = 'Sword'; return e; };
@@ -3406,6 +3656,33 @@ test('SoX pickups are counted and announced once; gold, unknown items and stoppe
   assert.equal(f.Stats.session.sox, 2); assert.equal(chimes.length, 1); assert.equal(f.notices.some(n => /SoX/.test(n)), false);
   f.Settings.profile.hunt.pickup.soxSeals.star = true; f.Hunt.stop(); pick(901); assert.equal(f.Stats.session.sox, 2);
   f.Hunt.start(); f.Stats.reset(); assert.equal(f.Stats.session.sox, 0);
+});
+test('SoX pickups are counted per seal and the paused-session log line carries the totals', () => {
+  const f = fixture();
+  f.Sound.play = () => true;
+  f.Items.data.set(901, { name: 'Star sword', icon: '', code: 'ITEM_CH_SWORD_01_A_RARE' });
+  f.Items.data.set(902, { name: 'Moon sword', icon: '', code: 'ITEM_CH_SWORD_01_B_RARE' });
+  f.Items.data.set(903, { name: 'Sun sword', icon: '', code: 'ITEM_CH_SWORD_01_C_RARE' });
+  const pick = ref => f.Stats.pickup({ ref, name: 'Sword', gold: false, petGid: 0, before: 0 });
+  f.Hunt.start(); pick(903); pick(903); pick(902); pick(901);
+  const d = f.Stats.display();
+  assert.deepEqual([d.sox, d.sun, d.moon, d.star], ['4', '2', '1', '1']);
+  f.Hunt.stop();
+  const entry = f.Log.lines.filter(e => e.code === 'session-summary').at(-1);
+  assert.match(f.Activity.userMessage(entry), /SoX 4 \(Sun 2, Moon 1, Star 1\)/);
+  assert.equal(entry.text, 'Session paused; totals retained.');
+  f.Stats.reset(); assert.deepEqual([f.Stats.session.sun, f.Stats.session.moon, f.Stats.session.star], [0, 0, 0]);
+});
+test('per-seal SoX counts still count with every seal chime unticked', () => {
+  const f = fixture(); let chimes = 0;
+  f.Sound.play = kind => { if (kind === 'sox') chimes++; return true; };
+  Object.assign(f.Settings.profile.hunt.pickup.soxSeals, { star: false, moon: false, sun: false });
+  f.Items.data.set(903, { name: 'Sun sword', icon: '', code: 'ITEM_CH_SWORD_01_C_RARE' });
+  f.Hunt.start(); f.Stats.pickup({ ref: 903, name: 'Sword', gold: false, petGid: 0, before: 0 });
+  assert.equal(chimes, 0);
+  assert.deepEqual([f.Stats.session.sox, f.Stats.session.sun], [1, 1]);
+  const values = f.Stats.display();
+  assert.deepEqual(Object.keys(values).filter(k => ['sox', 'sun', 'moon', 'star'].includes(k)), ['sox', 'star', 'moon', 'sun']);
 });
 test('SoX chime is a distinct audible alert and unknown sounds stay silent', () => {
   const f = fixture(), notes = [];
@@ -3719,6 +3996,31 @@ function traceFixture(offset = 500, member = {}) {
   return f;
 }
 const moves = f => f.commands.filter(c => c.kind === 'move');
+function caveTrace(offset, region = 0x8005) {
+  const f = traceFixture(offset), pose = f.World.gp.pose;
+  Object.assign(pose, { regionId: region, x: 3000, y: 0, z: 9000 });
+  for (const m of f.World.gp.social.members) Object.assign(m, { region, x: m.name === 'Leader' ? 3000 + offset : 3000, z: m.name === 'Archer' ? 9200 : 9000 });
+  f.Settings.profile.hunt.center = { regionId: region, x: -2000, y: 0, z: 9000 };
+  return f;
+}
+test('following works inside a cave: the move keeps the cave region and its own coordinates', () => {
+  const f = caveTrace(500), region = 0x8005;
+  assert.equal(f.Trace.tick(), true); assert.equal(f.Trace.code, 'walking');
+  const m = moves(f); assert.equal(m.length, 1);
+  assert.equal(m[0].destination.regionId, region, 'a cave region id is never rebuilt from sector arithmetic');
+  assert.ok(m[0].destination.x > 3100 && m[0].destination.x < 3500 && m[0].destination.z === 9000, 'the point stays on the line to the leader in cave coordinates');
+  const near = caveTrace(100); near.Trace.tick(); assert.equal(near.huntedAround.length, 1, 'close enough: hunts around the member');
+  const other = caveTrace(500); other.World.gp.social.members[1].region = 0x8006; assert.equal(other.Trace.tick(), false); assert.equal(other.Trace.code, 'other-area');
+});
+test('following in a cave walks straight without waiting for outdoor collision data', () => {
+  const f = caveTrace(500);
+  let asked = 0; f.Navigation.scene = {}; f.Navigation.next = () => { asked++; return { point: null, waiting: true }; };
+  assert.equal(f.Trace.tick(), true);
+  assert.equal(asked, 0, 'the outdoor route finder is not asked inside a cave');
+  assert.equal(moves(f).length, 1); assert.equal(moves(f)[0].destination.regionId, 0x8005);
+  const sector = f.Trace.beside({ regionId: 1, x: 1900, y: 0, z: 100 }, { regionId: 1, x: 100, y: 0, z: 100 }, 300);
+  assert.deepEqual([sector.regionId, Math.round(sector.x)], [1, 1600], 'outdoors the sector arithmetic is unchanged');
+});
 test('following walks to a party member who is too far away and keeps the saved hunting spot', () => {
   const f = traceFixture(500), spot = JSON.stringify(f.Settings.profile.hunt.center), pose = f.World.gp.pose;
   assert.equal(f.Trace.tick(), true); assert.equal(f.huntedAround.length, 0, 'it walks, it does not hunt yet');
@@ -8976,6 +9278,78 @@ function alchemyFixture(powder = false) {
   return { ...f, result };
 }
 
+test('alchemy plays the sound only when a confirmed success reaches the target +', () => {
+  const f = alchemyFixture(); const played = [];
+  f.Sound.play = kind => { played.push(kind); return true; };
+  f.Settings.profile.alchemy.sound = true; f.Settings.profile.alchemy.target = 2;
+  f.Alchemy.start(); f.Controller.tick();
+  f.result(0x10, 1); assert.deepEqual(played, [], 'a success below the target is silent');
+  f.advance(2000); f.Controller.tick(); f.result(0x10, 2);
+  assert.deepEqual(played, ['alchemy'], 'the target + plays once');
+  assert.equal(f.Alchemy.run, null, 'and the run stops there');
+  const failed = alchemyFixture(); const silent = [];
+  failed.Sound.play = kind => { silent.push(kind); return true; };
+  failed.Settings.profile.alchemy.sound = true;
+  failed.Alchemy.start(); failed.Controller.tick(); failed.result(0x20, 0);
+  assert.deepEqual(silent, [], 'a failure is silent');
+  const off = alchemyFixture(); const quiet = [];
+  off.Sound.play = kind => { quiet.push(kind); return true; };
+  off.Settings.profile.alchemy.target = 1;
+  off.Alchemy.start(); off.Controller.tick(); off.result(0x10, 1);
+  assert.deepEqual(quiet, [], 'the switch is off by default');
+  assert.equal(off.Settings.profile.alchemy.sound, false);
+});
+
+test('the alchemy sound switch is off on old files, kept in profiles and share codes, and must be a boolean', async () => {
+  const f = fixture();
+  assert.equal(f.botProfile({ alchemy: { target: 5 } }).alchemy.sound, false, 'an old file');
+  assert.equal(f.botProfile({ alchemy: { sound: 'yes' } }).alchemy.sound, false, 'a wrong type');
+  assert.equal(f.botProfile({ alchemy: { sound: true } }).alchemy.sound, true);
+  f.Settings.profile.alchemy.sound = true;
+  const g = fixture(); g.ProfileShare.pending = await g.ProfileShare.preview(await f.ProfileShare.encode(f.ProfileShare.text(true)));
+  assert.equal(g.ProfileShare.apply(), true); assert.equal(g.Settings.profile.alchemy.sound, true, 'share round trip');
+  assert.equal(f.botProfile(JSON.parse(f.ProfileShare.text(false)).profile).alchemy.sound, true, 'backup round trip');
+});
+
+test('the alchemy sound accepts a custom file like the SoX chime and restarts instead of stacking it', () => {
+  const f = fixture(), starts = [], stops = [];
+  assert.ok(f.Sound.customKinds.includes('alchemy'));
+  f.Sound.ctx = { destination: {}, createBufferSource: () => ({ connect() {}, disconnect() {}, start() { starts.push(this); }, stop() { stops.push(this); } }),
+    createGain: () => ({ gain: {}, connect() {}, disconnect() {} }) };
+  f.Sound.playBuffer({}, 'alchemy'); f.Sound.playBuffer({}, 'alchemy');
+  assert.equal(starts.length, 2); assert.equal(stops.length, 1);
+  assert.deepEqual(stops, [starts[0]], 'the first one is stopped');
+  f.Sound.playBuffer({}, 'sox'); assert.equal(stops.length, 1, 'another alert does not cut it short');
+  starts[1].onended(); assert.equal(f.Sound.sources.alchemy, undefined, 'a finished sound is forgotten');
+  f.Sound.playBuffer({}, 'alchemy'); f.Sound.clearCustom('alchemy'); assert.equal(stops.length, 2, 'Clear stops a playing file');
+});
+
+test('the alchemy chime is audible and distinct from the other alerts', () => {
+  const f = fixture(), notes = [];
+  f.Sound.ctx = { state: 'running', currentTime: 0, destination: {},
+    createOscillator: () => ({ frequency: {}, connect() {}, disconnect() {}, start() { notes.push(this.frequency.value); }, stop() {} }),
+    createGain: () => ({ gain: { setValueAtTime() {}, linearRampToValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() {}, disconnect() {} }) };
+  assert.equal(f.Sound.play('alchemy'), true); assert.equal(notes.length, 5);
+  assert.notDeepEqual(notes, f.Sound.tones.sox.notes);
+  assert.equal(f.Sound.play('good'), false); assert.equal(notes.length, 5);
+});
+
+test('a custom alchemy sound is checked, kept in local storage only under its own key, and never reaches settings', async () => {
+  const { f, played, file } = soundFixture(), key = 'sroBotLean:v1:sound:alchemy';
+  await assert.rejects(f.Sound.setCustom('alchemy', file(1024 * 1024 + 1)), /larger than 1 MB/); assert.equal(f.storage.has(key), false);
+  await f.Sound.setCustom('alchemy', file(1024 * 1024, 'win.mp3')); assert.equal(played.decoded, 1, 'decoded before it is kept');
+  assert.ok(f.storage.has(key)); assert.equal(f.storage.has('sroBotLean:v1:sound:sox'), false, 'the SoX sound is untouched');
+  assert.equal(f.Sound.custom('alchemy').name, 'win.mp3');
+  f.Settings.profile.alchemy.sound = true;
+  const keep = JSON.stringify(f.Settings.profile) + f.ProfileShare.text(true) + f.ProfileShare.text(false);
+  assert.ok(!keep.includes('AAAA') && !keep.includes('win.mp3'), 'not in the profile, share code or backup');
+  played.oscillators = 0; f.Sound.play('alchemy'); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(played.oscillators, 0); assert.equal(played.buffers.length, 1, 'the file plays instead of the chime');
+  played.oscillators = 0; f.Sound.play('sox'); assert.equal(played.oscillators, 4, 'the SoX chime keeps its own sound');
+  f.Sound.clearCustom('alchemy'); assert.equal(f.storage.has(key), false);
+  played.oscillators = 0; f.Sound.play('alchemy'); assert.equal(played.oscillators, 5, 'the chime is back after Clear');
+});
+
 test('alchemy takes up to 9999 enhancement attempts', () => {
   let f = alchemyFixture(); f.Settings.profile.alchemy.limit = 9999; f.Alchemy.start();
   assert.ok(f.Alchemy.run, f.Alchemy.message); assert.equal(f.Alchemy.run.cfg.limit, 9999);
@@ -10907,7 +11281,9 @@ test('monster classes: party normal, party champion and party giant are classes 
   assert.equal(f.Hunt.chooseTarget(), null);
   M.partyChampion = 'ignore';
   assert.equal(f.Hunt.chooseTarget()?.gid, 42);
-  assert.equal(f.MonsterClasses.classes(M).party, true, 'the old party switch is on while any party class is not Avoid');
+  assert.equal(f.MonsterClasses.classes(M).party, true, 'the old party switch is on while party normal or party champion is not Avoid');
+  M.partyChampion = 'avoid'; M.partyGiant = 'ignore';
+  assert.deepEqual([f.MonsterClasses.classes(M).party, f.MonsterClasses.classes(M).giantParty], [false, true], 'the party giant has its own old switch, as upstream');
 });
 test('monster classes: titan follows its own choice and keeps the Unique rotation', () => {
   const { f, mob } = preferredFixture([]), M = f.Settings.profile.hunt.classModes;
@@ -10925,25 +11301,25 @@ test('monster classes: old settings become Ignore and Avoid, never Prefer, and d
   const f = fixture();
   const modes = h => plain(f.botProfile({ hunt: h }).hunt.classModes);
   assert.deepEqual(modes({ classes: { normal: true, party: false, unique: false } }),
-    { normal: 'ignore', champion: 'ignore', party: 'avoid', giant: 'ignore', partyChampion: 'avoid', partyGiant: 'avoid', elite: 'avoid', unique: 'avoid', titan: 'avoid' });
+    { normal: 'ignore', champion: 'ignore', party: 'avoid', giant: 'ignore', partyChampion: 'avoid', partyGiant: 'ignore', elite: 'avoid', unique: 'avoid', titan: 'avoid' });
   assert.deepEqual(modes({ classes: { normal: false, champion: false, giant: false, party: true, elite: true, unique: true, titan: true } }),
-    { normal: 'avoid', champion: 'avoid', party: 'ignore', giant: 'avoid', partyChampion: 'ignore', partyGiant: 'ignore', elite: 'ignore', unique: 'ignore', titan: 'ignore' });
+    { normal: 'avoid', champion: 'avoid', party: 'ignore', giant: 'avoid', partyChampion: 'ignore', partyGiant: 'avoid', elite: 'ignore', unique: 'ignore', titan: 'ignore' }, 'the party giant follows the old Giants switch, not the Party one');
   assert.deepEqual(modes({ radius: 300 }), plain(f.DEFAULT_PROFILE.hunt.classModes), 'no classes at all: the defaults');
   const loaded = f.botProfile({ hunt: { classes: { normal: true }, classModes: { normal: 'prefer', giant: 'bogus', extra: 'avoid' } } }).hunt;
   assert.equal(loaded.classModes.normal, 'prefer', 'saved modes win over the old switches');
   assert.equal(loaded.classModes.giant, 'ignore', 'a damaged value is the default'); assert.equal('extra' in loaded.classModes, false);
-  assert.deepEqual(plain(loaded.classes), { normal: true, champion: true, giant: true, party: false, elite: false, unique: false, titan: false }, 'the old switches follow the modes');
+  assert.deepEqual(plain(loaded.classes), { normal: true, champion: true, giant: true, giantParty: true, party: false, elite: false, unique: false, titan: false }, 'the old switches follow the modes');
   f.storage.set('sroBotLean:v1:backup:profile:default', JSON.stringify({ at: 1, profile: { hunt: { classes: { party: true, normal: false } } } }));
   assert.equal(f.ProfileShare.undo(), true);
   assert.deepEqual([f.Settings.profile.hunt.classModes.normal, f.Settings.profile.hunt.classModes.partyGiant], ['avoid', 'ignore'], 'an old backup');
 });
 test('monster classes: share codes and backups carry the modes, and old shares migrate', async () => {
   const f = fixture(), H = f.Settings.profile.hunt;
-  f.MonsterClasses.set(H, 'champion', 'prefer'); f.MonsterClasses.set(H, 'partyGiant', 'ignore'); f.MonsterClasses.set(H, 'normal', 'avoid');
+  f.MonsterClasses.set(H, 'champion', 'prefer'); f.MonsterClasses.set(H, 'partyChampion', 'ignore'); f.MonsterClasses.set(H, 'partyGiant', 'avoid'); f.MonsterClasses.set(H, 'normal', 'avoid');
   const g = fixture(); g.ProfileShare.pending = await g.ProfileShare.preview(await f.ProfileShare.encode(f.ProfileShare.text(true)));
   assert.equal(g.ProfileShare.apply(), true);
   assert.deepEqual(plain(g.Settings.profile.hunt.classModes), plain(H.classModes), 'share round trip');
-  assert.equal(g.Settings.profile.hunt.classes.party, true); assert.equal(g.Settings.profile.hunt.classes.normal, false);
+  assert.equal(g.Settings.profile.hunt.classes.party, true); assert.equal(g.Settings.profile.hunt.classes.normal, false); assert.equal(g.Settings.profile.hunt.classes.giantParty, false);
   const backup = JSON.parse(f.ProfileShare.text(false)).profile.hunt;
   assert.equal(backup.classModes.champion, 'prefer', 'the backup holds the modes'); assert.equal(backup.classes.party, true, 'and the old switches');
   assert.deepEqual(plain(f.botProfile(JSON.parse(f.ProfileShare.text(false)).profile).hunt.classModes), plain(H.classModes), 'and loads them back');
@@ -10976,8 +11352,12 @@ test('monster classes: the Combat page lists the nine classes in order and keeps
   buttons(rows[3])[2].fire('click');
   assert.equal(H.classModes.giant, 'avoid'); assert.equal(H.classes.giant, false, 'Avoid turns the old switch off');
   buttons(rows[5])[1].fire('click');
-  assert.equal(H.classModes.partyGiant, 'ignore'); assert.equal(H.classes.party, true, 'any party class not Avoid turns the old party switch on');
-  buttons(rows[5])[2].fire('click'); assert.equal(H.classes.party, false);
+  buttons(rows[5])[2].fire('click');
+  assert.equal(H.classModes.partyGiant, 'avoid'); assert.equal(H.classes.giantParty, false, 'Avoid turns the old Giant party switch off');
+  buttons(rows[5])[1].fire('click');
+  assert.equal(H.classModes.partyGiant, 'ignore'); assert.equal(H.classes.giantParty, true); assert.equal(H.classes.party, false, 'the party giant has its own old switch');
+  buttons(rows[2])[1].fire('click'); assert.equal(H.classes.party, true, 'party normal not Avoid turns the old party switch on');
+  buttons(rows[2])[2].fire('click'); assert.equal(H.classes.party, false);
   buttons(rows[8])[0].fire('click'); assert.equal(H.classModes.titan, 'prefer'); assert.equal(H.classes.titan, true);
   f.Settings.profile = f.botProfile({ hunt: { classModes: { normal: 'avoid' } } }); f.UI.refreshers.forEach(r => r());
   assert.equal(buttons(rows[0])[2].attributes['aria-pressed'], 'true', 'redrawn from the loaded profile');
@@ -11000,6 +11380,63 @@ test('monster classes: the lure taunts a Prefer class first and never an Avoid c
   assert.equal(f.Lure.nearest(point)?.gid, 52, 'the Prefer champion first');
   M.champion = 'avoid'; M.normal = 'avoid';
   assert.equal(f.Lure.nearest(point), null, 'only Avoid classes: nothing to pull');
+});
+test('a party giant is hunted with the default settings, and its own class choice turns it off', () => {
+  const f = fixture(), M = f.Settings.profile.hunt.classModes;
+  const mob = (gid, rarity, aux) => f.World.ents.set(gid, { gid, kind: 'monster', name: 'Mob' + gid, rarity, rarityAuxIcon: aux, regionId: 1, x: 100 + gid, y: 0, z: 100, level: 5, attackFlags: 16, appearanceState: [0] }).get(gid);
+  const giant = mob(60, 4, 1), party = mob(61, 0, 1);
+  f.Hunt.running = true; f.Hunt.state = 'search';
+  assert.equal(f.MonsterClasses.of(giant), 'partyGiant');
+  assert.equal(f.Hunt.classAllowed(giant), true, 'party giant on by default');
+  assert.equal(f.Hunt.classAllowed(party), false, 'ordinary party monster still off');
+  assert.equal(f.Hunt.chooseTarget()?.gid, 60);
+  M.partyGiant = 'avoid';
+  assert.equal(f.Hunt.classAllowed(giant), false, 'the Party giant choice skips it');
+  M.party = 'ignore';
+  assert.equal(f.Hunt.classAllowed(giant), false, 'Party normal no longer decides for giants');
+  assert.equal(f.Hunt.classAllowed(party), true);
+});
+test('a party giant is treated alike by hunting, the lure, party assist and Setup', () => {
+  const f = fixture(), point = { regionId: 1, x: 1000, y: 0, z: 1000 };
+  f.Settings.profile.lure.radius = 30;
+  f.World.ents.set(70, { gid: 70, kind: 'monster', name: 'Cave Giant', rarity: 4, rarityAuxIcon: 1, level: 5, regionId: 1, x: 1005, y: 0, z: 1000, attackFlags: 16, appearanceState: [0] });
+  const giant = f.World.ents.get(70);
+  assert.equal(f.Hunt.classMode(giant), 'ignore');
+  assert.equal(f.Lure.nearest(point)?.gid, 70, 'the lure pulls a party giant by default');
+  assert.equal(f.Settings.profile.party.assist.classes[f.MonsterClasses.of(giant)], true, 'party assist ticks party giants by default');
+  f.Settings.profile.hunt.classModes.partyGiant = 'avoid';
+  assert.equal(f.Lure.nearest(point), null, 'and never pulls one that hunting avoids');
+  for (const key of ['levelup', 'drops']) {
+    f.Setup.choose(key); f.ProfileShare.apply();
+    assert.equal(f.Settings.profile.hunt.classModes.partyGiant, 'ignore', key + ' preset kills party giants as giants');
+    f.Settings.profile.hunt.classModes.partyGiant = 'avoid';
+  }
+});
+test('party giant settings: old files follow the Giants choice, newer ones keep theirs', async () => {
+  const f = fixture();
+  const giantParty = hunt => f.botProfile({ hunt }).hunt.classModes.partyGiant;
+  assert.equal(giantParty({ classes: { giant: true, party: false } }), 'ignore', 'old switches: follows Giants');
+  assert.equal(giantParty({ classes: { giant: false, party: true } }), 'avoid');
+  assert.equal(giantParty({ classes: { giant: true, giantParty: false } }), 'avoid', 'the Giant party switch of newer upstream settings wins');
+  assert.equal(giantParty({ classes: { normal: true }, classModes: { giant: 'prefer', partyGiant: 'avoid' } }), 'prefer', 'saved modes from before the change: an Avoid party giant takes the Giant choice');
+  assert.equal(giantParty({ classes: { normal: true }, classModes: { giant: 'avoid' } }), 'avoid', 'a share code that left the old default out');
+  assert.equal(giantParty({ classes: { normal: true }, classModes: { giant: 'bogus' } }), 'ignore');
+  assert.equal(giantParty({ classes: { normal: true }, classModes: { giant: 'avoid', partyGiant: 'prefer' } }), 'prefer', 'a party giant chosen by hand is kept');
+  assert.equal(giantParty({ classes: { giantParty: false }, classModes: { giant: 'ignore', partyGiant: 'avoid' } }), 'avoid', 'settings saved after the change keep Avoid');
+  const H = f.Settings.profile.hunt;
+  f.MonsterClasses.set(H, 'giant', 'avoid');
+  assert.equal(H.classModes.partyGiant, 'ignore'); assert.equal(H.classes.giantParty, true);
+  const share = JSON.parse(f.ProfileShare.text(true)).profile.hunt;
+  assert.equal(share.classes.giantParty, true, 'share codes always say the party giant is known');
+  assert.equal('partyGiant' in (share.classModes || {}), false, 'the default itself is not shared');
+  const g = fixture(); g.ProfileShare.pending = await g.ProfileShare.preview(await f.ProfileShare.encode(f.ProfileShare.text(true)));
+  assert.equal(g.ProfileShare.apply(), true);
+  assert.deepEqual([g.Settings.profile.hunt.classModes.giant, g.Settings.profile.hunt.classModes.partyGiant], ['avoid', 'ignore'], 'share round trip');
+  assert.equal(f.botProfile(JSON.parse(f.ProfileShare.text(false)).profile).hunt.classModes.partyGiant, 'ignore', 'backup round trip');
+  const saved = JSON.parse(JSON.stringify(f.Settings.profile));
+  assert.equal(f.botProfile(saved).hunt.classModes.partyGiant, 'ignore', 'saved profile round trip');
+  const oldShare = JSON.stringify({ app: 'osb', format: 2, version: '2.0.17', profile: { hunt: { classModes: { giant: 'avoid' }, classes: { giant: false } } } });
+  assert.equal((await fixture().ProfileShare.preview(oldShare)).next.hunt.classModes.partyGiant, 'avoid', 'an OSB 2.0.17 share code follows its Giants choice');
 });
 async function updateTests() {
   async function check(name, fn) { await fn(); passed++; console.log('PASS ' + name); }

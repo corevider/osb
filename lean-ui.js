@@ -316,7 +316,7 @@ const UI = {
   makeSide() {
     const side = el('aside', null, 'side wide-only'); this.sideFields = {};
     const session = this.group('Session');
-    for (const [key, label] of [['time', 'Hunting time'], ['rate', 'XP / hour'], ['xp', 'XP gained'], ['gold', 'Net gold'], ['kills', 'Kills'], ['deaths', 'Deaths'], ['sox', 'SoX found'], ['items', 'Items picked up'], ['potions', 'Potions used']])
+    for (const [key, label] of [['time', 'Hunting time'], ['rate', 'XP / hour'], ['xp', 'XP gained'], ['gold', 'Net gold'], ['kills', 'Kills'], ['deaths', 'Deaths'], ['sox', 'SoX found'], ['sun', 'Seal of Sun'], ['moon', 'Seal of Moon'], ['star', 'Seal of Star'], ['items', 'Items picked up'], ['potions', 'Potions used']])
       this.sideFields[key] = this.readout(session, label, 'Session');
     session.append(this.button('Reset session', () => Stats.reset()));
     const supplies = this.group('Supplies');
@@ -356,7 +356,7 @@ const UI = {
       this.cstatFields.spot.textContent = Number.isFinite(away) ? Math.round(away / 10) + ' m away' : spot ? 'another region' : 'not saved';
     }
     const s = Stats.display();
-    for (const key of ['time', 'rate', 'xp', 'gold', 'kills', 'deaths', 'sox', 'items', 'potions']) this.sideFields[key].textContent = s[key];
+    for (const key of ['time', 'rate', 'xp', 'gold', 'kills', 'deaths', 'sox', 'sun', 'moon', 'star', 'items', 'potions']) this.sideFields[key].textContent = s[key];
     const pet = live ? Loot.pet() : null, center = Settings.profile.hunt.center, distance = center && live ? dist2D(World.pose(), center) : Infinity;
     this.sideFields.hp.textContent = live ? n(Potion.count('hp')) : '—';
     this.sideFields.mp.textContent = live ? n(Potion.count('mp')) : '—';
@@ -753,6 +753,7 @@ const UI = {
         this.tipped(this.check('Use a polygon area', () => HuntArea.cfg().on, v => HuntArea.cfg().on = v), 'Off by default. Hunts only inside the corners drawn on the Map page instead of the hunt radius. Needs 3 to 32 corners and edges that do not cross; otherwise the hunt radius is used.'),
         this.number('Chase distance (m)', () => H().chase / 10, v => H().chase = v * 10, 10, 300),
         this.check('Return when idle', () => H().returnToCenter, v => H().returnToCenter = v),
+        this.tipped(this.check('Search the hunting area', () => H().search.enabled, v => H().search.enabled = v), 'Off by default. With no monster in view, walk the hunting area north, back to the spot, east, back, west, back, south and back, so monsters beyond the view distance are found. With a polygon area the sweep stays inside the polygon. It never runs while luring or following a party member.'),
         this.check('Walking back may use teleports and ferries (beta; pays their fee)', () => H().travel !== false, v => H().travel = v),
         el('p', 'Beta: a long walk back is first checked against the game map, and teleports and ferries are used where walking cannot get there. If a route looks wrong, send the log.', 'muted'),
         this.check('Avoid other players’ targets', () => H().avoidKs, v => H().avoidKs = v),
@@ -934,15 +935,18 @@ const UI = {
         el('p', 'Short chimes, one per switch, all off by default (the player one uses the player alert detection). A click in the game unlocks the sound when the browser blocked it. The pet and SoX chimes above preview the sound.', 'muted')));
   },
   soxSoundPicker() {
+    return this.soundPicker('sox', 'SoX', 'Pick an audio file (at most 1 MB) to play instead of the built-in chime for every ticked seal. It is checked by playing it, kept only in this browser and never sent anywhere. It is not part of your settings, share codes or backups.');
+  },
+  soundPicker(kind, label, tip, onSet) {
     const file = el('input'); file.type = 'file'; file.accept = 'audio/*,.mp3,.wav,.ogg,.m4a'; file.hidden = true;
-    const name = () => Sound.custom('sox')?.name;
-    const status = el('p', name() ? 'SoX sound: ' + name() : 'SoX sound: built-in chime', 'muted');
-    const choose = this.button('Choose SoX sound…', () => file.click()), clear = this.button('Clear SoX sound', () => { Sound.clearCustom('sox'); this.draw(); });
-    choose.title = 'Pick an audio file (at most 1 MB) to play instead of the built-in chime for every ticked seal. It is checked by playing it, kept only in this browser and never sent anywhere. It is not part of your settings, share codes or backups.';
+    const name = () => Sound.custom(kind)?.name, title = label[0].toUpperCase() + label.slice(1);
+    const status = el('p', title + ' sound: ' + (name() || 'built-in chime'), 'muted');
+    const choose = this.button('Choose ' + label + ' sound…', () => file.click()), clear = this.button('Clear ' + label + ' sound', () => { Sound.clearCustom(kind); this.draw(); });
+    choose.title = tip;
     clear.title = 'Go back to the built-in chime.'; clear.hidden = !name();
     file.addEventListener('change', async () => {
       const chosen = file.files?.[0]; file.value = ''; if (!chosen) return;
-      try { await Sound.setCustom('sox', chosen); UI.toast('SoX sound set to ' + chosen.name + '.'); Sound.test('sox'); this.draw(); }
+      try { await Sound.setCustom(kind, chosen); onSet?.(); UI.toast(title + ' sound set to ' + chosen.name + '.'); Sound.test(kind); this.draw(); }
       catch (e) { UI.toast('Could not use that sound: ' + e.message + '.', 'warn'); }
     });
     const box = el('div'); box.append(file, this.row(choose, clear), status);
@@ -1263,7 +1267,13 @@ const UI = {
         this.select('Group heal skill', skillOptions(() => Support.areaSkills()), () => Support.skillOf(S().group) || 0, pick(() => S().group)),
         this.number('Group heal below (%)', () => S().group.pct, v => S().group.pct = v, 10, 95),
         this.number('Group heal when this many are low', () => S().group.count, v => S().group.count = v, 2, 8),
-        el('p', 'Casts only on members you can see within the support range; it never walks to them. Order: group heal, then a heal on the lowest member, then missing buffs, one cast at a time. HP is exact for members in view. Your own potions still come first.', 'muted')));
+        this.select('MP heal skill', skillOptions(() => Support.friendlySkills()), () => Support.skillOf(S().mpHeal) || 0, pick(() => S().mpHeal)),
+        this.number('MP heal below (%)', () => S().mpHeal.pct, v => S().mpHeal.pct = v, 10, 95),
+        this.check('Heal my MP too', () => S().mpHeal.self, v => S().mpHeal.self = v),
+        this.select('Group MP heal skill', skillOptions(() => Support.areaSkills()), () => Support.skillOf(S().mpGroup) || 0, pick(() => S().mpGroup)),
+        this.number('Group MP heal below (%)', () => S().mpGroup.pct, v => S().mpGroup.pct = v, 10, 95),
+        this.number('Group MP heal when this many are low', () => S().mpGroup.count, v => S().mpGroup.count = v, 2, 8),
+        el('p', 'Casts only on members you can see within the support range; it never walks to them. Order: group heal, then a heal on the lowest member, then the group MP heal, then an MP heal on the lowest member, then missing buffs, one cast at a time. HP is exact for members in view; MP of other members comes from the party window in steps of 10% and is exact for yourself. Your own potions still come first.', 'muted')));
   },
   section_partyProtect(host) {
     const c = () => Settings.profile.party.protect;

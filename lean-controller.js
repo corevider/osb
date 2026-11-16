@@ -10,6 +10,7 @@ Hunt.start = function (...args) {
   if (Quest.trip) return UI.toast('Wait for the quest visit to finish (or stop the bot).', 'warn');
   if (World.gp?.stall?.phase && World.gp.stall.phase !== 'none') return UI.toast('Close the stall before hunting.', 'warn');
   Lure.reset();
+  Search.reset();
   return startHunting.apply(this, args);
 };
 Hunt.lootAllowed = e => Loot.allowed(e);
@@ -209,13 +210,7 @@ Hunt.tick = function () {
   const target = guard || (attack ? this.threat(current) || assist || this.preferredSwitch(current) || current || this.chooseTarget() : null);
   if (target) { this.engage(target); return; }
   this.targetGid = 0; this.state = !attack ? 'support only' : Loot.active?.petGid ? 'loot' : 'search';
-  if (H.returnToCenter && H.center && HuntArea.strayed(H, World.pose()) && now() - this.lastMoveAt > 2500) {
-    // Hunting from town (dead at login and woken in town): the town cycle's own trip (services, then reverse or walk).
-    if (!(dist2D(World.pose(), H.center) <= Math.max(H.radius * 1.5, 600)) && Controller.townReturn()) return;
-    if (!Number.isFinite(dist2D(World.pose(), H.center))) return this.stop('hunt area is in another region');
-    if (Cmd.move(H.center)) this.lastMoveAt = now();
-    this.state = 'return';
-  }
+  if (H.center && now() - this.lastMoveAt > 2500) Search.tick(this);
 };
 
 // Stops everything, for the player and for the bot itself. A pending auto-start survives it: only the player's own

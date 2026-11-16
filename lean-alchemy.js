@@ -269,6 +269,7 @@ const Alchemy = {
     if (outcome === 0x10) p.run.successes++; else p.run.failures++;
     if (outcome === 0x40) p.run.destroyed++;
     this.note(outcome === 0x10 ? `Success: +${p.plus} → +${item.plus}` : outcome === 0x40 ? `Destroyed at +${p.plus}` : `Failed at +${p.plus}: now +${item.plus}`);
+    if (outcome === 0x10 && this.cfg().sound === true && item.plus >= p.run.cfg.target) Sound.play('alchemy');
     if (item) p.run.highest = Math.max(p.run.highest, item.plus);
     if (outcome === 0x40) { this.selected = null; this.stop('Weapon destroyed; alchemy stopped.'); this.message = 'Weapon destroyed; alchemy stopped.'; return; }
     p.run.fingerprint = this.fingerprint(item); this.selected = { slot: item.slot, fingerprint: p.run.fingerprint };
@@ -419,6 +420,12 @@ const Alchemy = {
     UI.alchemyStats = el('p', '', 'muted'); UI.alchemyLog = el('p', '', 'muted');
     results.append(UI.alchemyStats, UI.alchemyLog, UI.button('Clear results', () => { this.result = null; this.log.length = 0; this.refresh(); }));
     UI.pane.append(results);
+    const sound = UI.group('Sound');
+    sound.append(UI.check('Play a sound when the target + is reached', () => c().sound, value => c().sound = value),
+      UI.row(UI.button('Test alchemy sound', () => Sound.test('alchemy'))),
+      UI.soundPicker('alchemy', 'alchemy', 'Pick an audio file (at most 1 MB) to play instead of the built-in chime when the target + is reached. Choosing one also ticks the switch above. It is checked by playing it, kept only in this browser and never sent anywhere. It is not part of your settings, share codes or backups.', () => { c().sound = true; Settings.saveProfile(); }),
+      el('p', 'Off by default. The sound plays once, when a confirmed success reaches the target + you set; earlier successes and failures stay silent. A sound of your own (at most 1 MB) replaces the chime. A click in the game unlocks the sound when the browser blocked it.', 'muted'));
+    UI.pane.append(sound);
     this.drawAttributes();
     this.refresh();
   },

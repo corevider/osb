@@ -15,16 +15,20 @@ const CLASS_MODE_TIPS = {
 const MonsterClasses = {
   of(e) { return monsterClass(e) === 'titan' ? 'titan' : Rotations.classOf(e); },
   oldKey(key) { return PARTY_CLASS_KEYS.includes(key) ? 'party' : key; },
+  oldValue(classes, key) {
+    if (key !== 'partyGiant') return classes?.[this.oldKey(key)];
+    return typeof classes?.giantParty === 'boolean' ? classes.giantParty : classes?.giant;
+  },
   mode(e, hunt) {
     const key = this.of(e), mode = hunt?.classModes?.[key];
     if (CLASS_MODES.includes(mode)) return mode;
-    return hunt?.classes?.[this.oldKey(key)] ? 'ignore' : 'avoid';
+    return this.oldValue(hunt?.classes, key) ? 'ignore' : 'avoid';
   },
   fromOld(classes) {
     if (!classes || typeof classes !== 'object') return null;
     const out = {};
     for (const key of MONSTER_CLASS_KEYS) {
-      const old = classes[this.oldKey(key)];
+      const old = this.oldValue(classes, key);
       if (typeof old === 'boolean') out[key] = old ? 'ignore' : 'avoid';
     }
     return out;
@@ -37,13 +41,19 @@ const MonsterClasses = {
   classes(modes) {
     const out = {};
     for (const key of MONSTER_CLASS_KEYS) if (!PARTY_CLASS_KEYS.includes(key)) out[key] = modes[key] !== 'avoid';
-    out.party = PARTY_CLASS_KEYS.some(key => modes[key] !== 'avoid');
+    out.party = modes.party !== 'avoid' || modes.partyChampion !== 'avoid';
+    out.giantParty = modes.partyGiant !== 'avoid';
     return out;
   },
   sync(hunt) {
     hunt.classModes = this.clean(hunt.classModes);
     hunt.classes = this.classes(hunt.classModes);
     return hunt;
+  },
+  withPartyGiant(hunt) {
+    const modes = hunt.classModes, classes = hunt.classes;
+    if (classes && typeof classes === 'object' && 'giantParty' in classes || ['prefer', 'ignore'].includes(modes.partyGiant)) return null;
+    return { ...modes, partyGiant: CLASS_MODES.includes(modes.giant) ? modes.giant : DEFAULT_PROFILE.hunt.classModes.giant };
   },
   set(hunt, key, mode) {
     if (!MONSTER_CLASS_KEYS.includes(key) || !CLASS_MODES.includes(mode)) return false;
@@ -54,8 +64,8 @@ const MonsterClasses = {
 };
 function upgradeClassModes(input) {
   const hunt = input?.hunt;
-  if (!hunt || typeof hunt !== 'object' || hunt.classModes && typeof hunt.classModes === 'object') return input;
-  const modes = MonsterClasses.fromOld(hunt.classes);
+  if (!hunt || typeof hunt !== 'object') return input;
+  const modes = hunt.classModes && typeof hunt.classModes === 'object' ? MonsterClasses.withPartyGiant(hunt) : MonsterClasses.fromOld(hunt.classes);
   return modes ? { ...input, hunt: { ...hunt, classModes: modes } } : input;
 }
 const Rotations = {
@@ -118,7 +128,7 @@ const DEFAULT_PROFILE = {
   uniqueNests: { on: false, picks: [], maxM: 1000 },
   uniqueState: { deadTrustM: 30, tracker: false },
   stall: { title: '', greeting: '', network: true, closeWhenEmpty: true, prices: {} },
-  alchemy: { target: 3, limit: 20, elixir: 0, powder: false, use: { luck: false, steady: false, immortal: false, astral: false }, stones: { luck: 1, steady: 1, immortal: 1, astral: 1 }, stoneLimit: 0,
+  alchemy: { target: 3, limit: 20, elixir: 0, powder: false, sound: false, use: { luck: false, steady: false, immortal: false, astral: false }, stones: { luck: 1, steady: 1, immortal: 1, astral: 1 }, stoneLimit: 0,
     // The plus from which each helper is used: a failure from +5 up can destroy the item (Steady and Immortal matter from there),
     // Luck and lucky powder help at every plus, and Astral keeps +4 on a failure.
     from: { powder: 0, luck: 0, steady: 5, immortal: 5, astral: 4 },
@@ -137,7 +147,8 @@ const DEFAULT_PROFILE = {
   scroll: { damageInc: false, damageAbs: false },
   mall: { on: false, budgetSilk: 0, hp: { on: false, low: 10, target: 1000 }, mp: { on: false, low: 10, target: 1000 }, damageInc: { on: false, low: 5, target: 20 }, damageAbs: { on: false, low: 5, target: 20 }, reverse: { on: false, low: 1, target: 5 } },
   party: { autoAcceptMatching: false, autoRecruit: false, joinMain: false, mainName: '', leaveIfNotLeader: false, onlyWhileRunning: false, acceptNames: '', autoInvite: false, inviteNames: '', inviteAnyone: false, inviteRadius: 300, autoRes: false, acceptRes: false, acceptResAny: false, resNames: '', reviveWaitS: 20, resRadius: 300, resWaitS: 31, resMax: 0, title: 'Hunting party', min: 1, max: 90, purpose: 0, expShare: true, itemShare: true,
-    support: { enabled: false, whileStopped: false, range: 30, heal: { id: 0, group: 0, pct: 60, self: false }, group: { id: 0, group: 0, pct: 60, count: 2 }, buffs: [] },
+    support: { enabled: false, whileStopped: false, range: 30, heal: { id: 0, group: 0, pct: 60, self: false }, group: { id: 0, group: 0, pct: 60, count: 2 },
+      mpHeal: { id: 0, group: 0, pct: 60, self: false }, mpGroup: { id: 0, group: 0, pct: 60, count: 2 }, buffs: [] },
     protect: { enabled: false, all: false, names: [], range: 40, whileNoAttack: false },
     assist: { enabled: false, classes: { normal: false, champion: false, party: false, giant: true, partyChampion: false, partyGiant: true, elite: false, unique: false, titan: false }, range: 40, leaderRange: 100 } },
   wardrobe: { on: true, phantom: true, realAnim: true, hideAvatars: false,
@@ -169,10 +180,10 @@ const DEFAULT_PROFILE = {
   },
   hunt: {
     levelSpots: { on: false, list: [] },
-    center: null, radius: 400, chase: 700, returnToCenter: true, travel: true, attack: true,
+    center: null, radius: 400, chase: 700, returnToCenter: true, search: { enabled: false, range: 90 }, travel: true, attack: true,
     polygon: { on: false, corners: [] },
-    classes: { normal: true, champion: true, giant: true, party: false, elite: false, unique: false, titan: false },
-    classModes: { normal: 'ignore', champion: 'ignore', party: 'avoid', giant: 'ignore', partyChampion: 'avoid', partyGiant: 'avoid', elite: 'avoid', unique: 'avoid', titan: 'avoid' },
+    classes: { normal: true, champion: true, giant: true, giantParty: true, party: false, elite: false, unique: false, titan: false },
+    classModes: { normal: 'ignore', champion: 'ignore', party: 'avoid', giant: 'ignore', partyChampion: 'avoid', partyGiant: 'ignore', elite: 'avoid', unique: 'avoid', titan: 'avoid' },
     levelMin: 0, levelMax: 0, include: '', exclude: '', preferred: [], priority: 'attackers', avoidKs: true, avoidKsScope: 'all', avoidKsBelow: 50,
     targetTimeoutS: 25,
     pickup: { enabled: true, soxOnly: false, skipStar: false, gold: true, potions: true, equipment: true, elixirs: true, powders: true, magicStones: true, attrStones: true, alchemy: true, others: true,
@@ -237,6 +248,9 @@ function botProfile(input) {
   // The anti-KS scope only has the two meanings; anything else is the old full behavior.
   if (result.hunt.avoidKsScope !== 'minor') result.hunt.avoidKsScope = 'all';
   result.hunt.polygon = huntPolygon(result.hunt.polygon);
+  const search = result.hunt.search;
+  search.enabled = search.enabled === true;
+  search.range = Number.isFinite(search.range) ? clamp(Math.round(search.range), 20, 100) : DEFAULT_PROFILE.hunt.search.range;
   // The finish-steal cutoff stops at 50: above it the kill can still be won, so avoiding is pointless.
   if (!Number.isFinite(result.hunt.avoidKsBelow) || result.hunt.avoidKsBelow < 0) result.hunt.avoidKsBelow = 0;
   if (result.hunt.avoidKsBelow > 50) result.hunt.avoidKsBelow = 50;
@@ -267,6 +281,7 @@ function botProfile(input) {
   if (typeof P.petWhileStopped !== 'boolean') P.petWhileStopped = pickupDefaults.petWhileStopped;
   P.petInputHoldS = Number.isFinite(P.petInputHoldS) ? clamp(Math.round(P.petInputHoldS), 0, 30) : pickupDefaults.petInputHoldS;
   P.petIdleRadius = Number.isFinite(P.petIdleRadius) ? clamp(Math.round(P.petIdleRadius / 10) * 10, 50, 500) : pickupDefaults.petIdleRadius;
+  result.alchemy.sound = result.alchemy.sound === true;
   const party = result.party, partyDefaults = DEFAULT_PROFILE.party;
   party.autoInvite = party.autoInvite === true; party.inviteAnyone = party.inviteAnyone === true;
   if (typeof party.inviteNames !== 'string') party.inviteNames = partyDefaults.inviteNames;
@@ -349,7 +364,8 @@ const Sound = {
   tones: { 'pet-full': { notes: [659.25, 830.61, 987.77], gap: 0.18 }, sox: { notes: [783.99, 987.77, 1174.66, 1567.98], gap: 0.11 },
     player: { notes: [392, 329.63], gap: 0.25 }, died: { notes: [523.25, 415.3, 329.63], gap: 0.2 },
     levelUp: { notes: [523.25, 659.25, 783.99, 1046.5], gap: 0.12 }, unique: { notes: [880, 1108.73, 880, 1108.73], gap: 0.15 },
-    uniqueKilled: { notes: [1318.51, 1046.5, 783.99, 1046.5, 1318.51, 1567.98], gap: 0.12 } },
+    uniqueKilled: { notes: [1318.51, 1046.5, 783.99, 1046.5, 1318.51, 1567.98], gap: 0.12 },
+    alchemy: { notes: [523.25, 659.25, 830.61, 1046.5, 1318.51], gap: 0.09 } },
   // Alert chimes for events the bus already carries (SBot-style alarms); every switch is off by default.
   level: null,
   anyOn() { const s = Settings.profile.sounds; return !!(s && (s.player || s.died || s.levelUp || s.unique)); },
@@ -368,9 +384,10 @@ const Sound = {
     });
     bus.on('profile', () => { this.level = null; });
   },
-  customKinds: ['sox'],
+  customKinds: ['sox', 'alchemy'],
   customMaxBytes: 1024 * 1024,
   buffers: {},
+  sources: {},
   customKey(kind) { return 'sound:' + kind; },
   custom(kind) { return this.customKinds.includes(kind) ? Store.get(this.customKey(kind), null) : null; },
   setCustom(kind, file) {
@@ -391,24 +408,32 @@ const Sound = {
       reader.readAsDataURL(file);
     });
   },
-  clearCustom(kind) { Store.remove(this.customKey(kind)); delete this.buffers[kind]; },
+  clearCustom(kind) { Store.remove(this.customKey(kind)); delete this.buffers[kind]; this.stopBuffer(kind); },
+  stopBuffer(kind) {
+    const source = this.sources[kind];
+    if (!source) return;
+    delete this.sources[kind];
+    try { source.stop(); } catch {}
+  },
   async decode(dataUrl) {
     const ctx = this.ctx;
     if (!ctx) throw new Error('no audio');
     const bytes = Uint8Array.from(W.atob(dataUrl.slice(dataUrl.indexOf(',') + 1)), c => c.charCodeAt(0));
     return await ctx.decodeAudioData(bytes.buffer);
   },
-  playBuffer(buffer) {
+  playBuffer(buffer, kind = '') {
+    this.stopBuffer(kind);
     const ctx = this.ctx, source = ctx.createBufferSource(), gain = ctx.createGain();
     source.buffer = buffer; gain.gain.value = 0.8;
     source.connect(gain); gain.connect(ctx.destination);
-    source.onended = () => { source.disconnect(); gain.disconnect(); };
+    source.onended = () => { source.disconnect(); gain.disconnect(); if (this.sources[kind] === source) delete this.sources[kind]; };
+    this.sources[kind] = source;
     source.start();
   },
   playCustom(kind, custom) {
     const cached = this.buffers[kind];
-    if (cached?.data === custom.data) { this.playBuffer(cached.buffer); return; }
-    this.decode(custom.data).then(buffer => { this.buffers[kind] = { data: custom.data, buffer }; this.playBuffer(buffer); })
+    if (cached?.data === custom.data) { this.playBuffer(cached.buffer, kind); return; }
+    this.decode(custom.data).then(buffer => { this.buffers[kind] = { data: custom.data, buffer }; this.playBuffer(buffer, kind); })
       .catch(() => { this.clearCustom(kind); this.play(kind); });
   },
   play(kind) {

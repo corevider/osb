@@ -242,7 +242,10 @@ bus.on( "hunt", running => {
 		Activity.emit( { category: "session", code: "session-start", text: "Session " + Activity.session + " started; bot " + VERSION + ".", outcome: "confirmed" } );
 	} else {
 		Activity.observePotions(); Activity.flushPotions();
-		Activity.emit( { category: "session", code: "session-summary", text: "Session paused; totals retained.", outcome: "summary", details: Stats.session } );
+		const s = Stats.display();
+		const totals = "Hunting paused after " + s.time + ": " + s.kills + " kills, " + s.items + " items, SoX " + s.sox +
+			" (Sun " + s.sun + ", Moon " + s.moon + ", Star " + s.star + "), XP " + s.xp + ", gold " + s.gold + ".";
+		Activity.emit( { category: "session", code: "session-summary", text: "Session paused; totals retained.", userText: totals, outcome: "summary", details: Stats.session } );
 	}
 } );
 bus.on( "character", name => {
@@ -331,7 +334,11 @@ Activity.wrap( Settings, "saveProfile", function() {
 } );
 bus.on( "profile", () => { Activity.savedSettings = Activity.settingValues(); } );
 Activity.wrap( Loot, "gained", function( result, item ) {
-	if ( result ) Activity.emit( { category: "loot", code: "pickup-confirmed", text: "Inventory gain observed for pickup " + item.gid + ".", outcome: "confirmed" } );
+	if ( !result ) return;
+	const tier = item.gold ? 0 : Items.sox( item.ref );
+	const name = item.gold ? "gold" : item.name || Items.name( item.ref ) || "loot";
+	const seal = tier ? " (Seal of " + [ "Star", "Moon", "Sun" ][tier - 1] + ")" : "";
+	Activity.emit( { category: "loot", code: "pickup-confirmed", text: "Inventory gain observed for pickup " + item.gid + seal + ".", userText: "Picked up " + name + seal + ".", outcome: "confirmed" } );
 } );
 Activity.wrap( WalkBack, "tick", function() {
 	Activity.transition( "movement", "walk-back-state", WalkBack.active ? "Walk-back active; waiting for observed arrival." : "Walk-back inactive." );
