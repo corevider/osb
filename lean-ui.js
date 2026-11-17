@@ -570,7 +570,7 @@ const UI = {
     const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();
     if (this.current === 'Combat') {
       const subtabs = el('div', null, 'subtabs');
-      for (const name of ['Skills', 'Buffs & imbue', 'Hunt area', 'Unique hunt']) {
+      for (const name of ['Skills', 'Buffs & imbue', 'Hunt area']) {
         const tab = this.button(name, () => { this.combatTab = name; this.draw(); });
         tab.setAttribute('aria-selected', String(name === this.combatTab)); subtabs.append(tab);
       }
@@ -578,7 +578,6 @@ const UI = {
       if (this.combatTab === 'Hunt area') this.sections('combatHuntArea', 'combatPreferred', 'combatMonsters', 'combatLure', 'combatPet');
       if (this.combatTab === 'Skills') this.sections('combatRotation', 'combatOptions', 'combatBerserk', 'combatEmergency');
       if (this.combatTab === 'Buffs & imbue') this.sections('combatGear', 'combatBuffs', 'combatImbue');
-      if (this.combatTab === 'Unique hunt') this.sections('combatUnique');
     } else if (this.current === 'Loot') {
       this.sections('lootCollection', 'lootWho', 'lootBalance');
     } else if (this.current === 'Supplies') {
@@ -594,6 +593,8 @@ const UI = {
       this.drawItems();
     } else if (this.current === 'Setup') {
       Setup.draw(this.pane);
+    } else if (this.current === 'Unique') {
+      this.sections('uniqueHunt', 'uniqueList', 'uniqueSettings', 'uniqueSafety');
     } else if (this.current === 'Map') {
       LeanMap.draw(this.pane);
     } else if (this.current === 'Alchemy') {
@@ -624,7 +625,7 @@ const UI = {
         ['combatRotation'], ['combatOptions'], ['combatGear'], ['combatBuffs'], ['combatImbue']] },
       { name: 'Items/Storage', icon: 'action\\cos_cmd_inventory', pages: ['Items', 'Town'], draw() {
         this.drawItems(); this.sections('townTrip', 'townCycle', 'townAmmo'); } },
-      { name: 'Training place', icon: 'action\\icon_cha_camp', pages: ['Combat', 'Party'], sections: [['combatHuntArea', 'Training place'], ['combatPreferred'], ['partyTrace'], ['combatLure'], ['combatPet'], ['combatUnique']] },
+      { name: 'Training place', icon: 'action\\icon_cha_camp', pages: ['Combat', 'Party'], sections: [['combatHuntArea', 'Training place'], ['combatPreferred'], ['partyTrace'], ['combatLure'], ['combatPet']] },
       { name: 'Party/Autores', icon: 'action\\icon_cha_party', pages: ['Party'], sections: [
         ['partyMembers', 'Current party'], ['partyParty', 'Party settings'], ['partyHeal'], ['partyProtect'], ['partyAssist']] },
       { name: 'Player buffing', icon: 'action\\icon_cha_party', pages: ['Party'], sections: [['partyBuffs', 'Player buffing']] },
@@ -637,20 +638,24 @@ const UI = {
       { name: 'Auto trade', icon: 'action\\icon_cha_shop', pages: ['Trade'], draw() { Trade.draw(); } },
       { name: 'Wardrobe', icon: 'action\\icon_cha_shop', pages: ['Wardrobe'], draw() { LeanWardrobe.draw(this.pane); } },
       { name: 'Setup', icon: 'action\\icon_cha_camp', pages: ['Setup'], draw() { Setup.draw(this.pane); } },
+      { name: 'Unique', icon: 'action\\icon_cha_auto_attack', pages: ['Unique'], sections: [['uniqueHunt'], ['uniqueList'], ['uniqueSettings'], ['uniqueSafety']] },
     ];
   },
   // The classic tab that holds a compact page (so Setup and the checklist can open the right place).
   tabFor(page, combatTab) {
-    if (page === 'Combat') return combatTab === 'Hunt area' || combatTab === 'Unique hunt' ? 'Training place' : 'Skills';
+    if (page === 'Combat' && combatTab === 'Unique hunt') return 'Unique';
+    if (page === 'Combat') return combatTab === 'Hunt area' ? 'Training place' : 'Skills';
     return { Loot: 'Settings', Supplies: 'Settings', Town: 'Items/Storage', Quest: 'Quest', Party: 'Party/Autores', Items: 'Items/Storage', Alchemy: 'Auto alchemy', Trade: 'Auto trade', Settings: 'Extra' }[page] || page;
   },
   // Is this compact page (and optional Combat sub-tab) what the window shows right now, in either layout?
   is(page, tab) {
+    if (page === 'Combat' && tab === 'Unique hunt') { page = 'Unique'; tab = undefined; }
     if (this.classic) return !!this.classicTabs().find(t => t.name === this.ctab)?.pages.includes(page);
     return this.current === page && (!tab || this.combatTab === tab);
   },
   // Open a page (and Combat sub-tab) in whichever layout is active.
   show(page, tab) {
+    if (page === 'Combat' && tab === 'Unique hunt') { page = 'Unique'; tab = undefined; }
     this.current = page; if (tab) this.combatTab = tab;
     if (this.classic) this.ctab = this.tabFor(page, this.combatTab);
     this.draw();
@@ -675,9 +680,9 @@ const UI = {
   buildNav() {
     this.nav.replaceChildren();
     const icons = { Items: 'action\\cos_cmd_inventory', Party: 'action\\icon_cha_party', Combat: 'action\\icon_cha_auto_attack', Loot: 'action\\icon_cha_autoget', Supplies: 'action\\icon_cha_recovery', Town: 'item\\etc\\mall_return_scroll', Quest: 'action\\icon_cha_camp',
-      Alchemy: 'action\\icon_cha_alchemy', Trade: 'action\\icon_cha_shop', Wardrobe: 'action\\icon_cha_shop', Stall: 'action\\icon_cha_shop', Settings: 'action\\icon_cha_helper', Setup: 'action\\icon_cha_camp' };
+      Alchemy: 'action\\icon_cha_alchemy', Trade: 'action\\icon_cha_shop', Wardrobe: 'action\\icon_cha_shop', Stall: 'action\\icon_cha_shop', Settings: 'action\\icon_cha_helper', Setup: 'action\\icon_cha_camp', Unique: 'action\\icon_cha_auto_attack' };
     const entries = this.classic ? this.classicTabs().map(t => ({ name: t.name, icon: t.icon, open: () => { this.ctab = t.name; this.draw(); } }))
-      : ['Setup', 'Map', 'Combat', 'Party', 'Loot', 'Items', 'Supplies', 'Town', 'Quest', 'Stall', 'Alchemy', 'Trade', 'Wardrobe', 'Settings'].map(name => ({ name, icon: icons[name], open: () => { this.current = name; this.draw(); } }));
+      : ['Setup', 'Unique', 'Map', 'Combat', 'Party', 'Loot', 'Items', 'Supplies', 'Town', 'Quest', 'Stall', 'Alchemy', 'Trade', 'Wardrobe', 'Settings'].map(name => ({ name, icon: icons[name], open: () => { this.current = name; this.draw(); } }));
     // Page icons are the game's own action-bar icons; they show only in the wide and classic windows' page lists.
     for (const entry of entries) {
       const tab = this.button(entry.name, entry.open);
@@ -931,8 +936,7 @@ const UI = {
         this.check('Chime when another player comes near', () => Settings.profile.sounds.player, v => Settings.profile.sounds.player = v),
         this.check('Chime when the character dies', () => Settings.profile.sounds.died, v => Settings.profile.sounds.died = v),
         this.check('Chime on a level up', () => Settings.profile.sounds.levelUp, v => Settings.profile.sounds.levelUp = v),
-        this.check('Chime when a unique monster comes into view', () => Settings.profile.sounds.unique, v => Settings.profile.sounds.unique = v),
-        el('p', 'Short chimes, one per switch, all off by default (the player one uses the player alert detection). A click in the game unlocks the sound when the browser blocked it. The pet and SoX chimes above preview the sound.', 'muted')));
+        el('p', 'Short chimes, one per switch, all off by default (the player one uses the player alert detection). A click in the game unlocks the sound when the browser blocked it. The pet and SoX chimes above preview the sound. The chime for a unique coming into view is on the Unique page.', 'muted')));
   },
   soxSoundPicker() {
     return this.soundPicker('sox', 'SoX', 'Pick an audio file (at most 1 MB) to play instead of the built-in chime for every ticked seal. It is checked by playing it, kept only in this browser and never sent anywhere. It is not part of your settings, share codes or backups.');
@@ -1386,7 +1390,18 @@ const UI = {
         el('p', 'Works during hunting and while stopped. Walks into skill range for visible dead members within the maximum radius, casts Rebirth, then returns. During hunting the radius is measured from the saved hunt spot; while stopped it uses your starting position. Collision data is required for walking. Travel stops after 30 seconds or 12 seconds without progress per leg. The member must accept the revival. Rebirth is offered again after the wait (31 s by default: the game’s 30 s answer window plus one tick) for as long as they stay dead, up to the maximum attempts per player (0 = no limit). The count starts again when they are alive, leave the party or the list, or you press Start. Travel, shopping and manual control take priority.', 'muted')));
   },
   section_combatLure(host) { Lure.draw(host); },
-  section_combatUnique(host) { UniqueHunt.draw(host); },
+  section_uniqueHunt(host) { host.append(UniqueHunt.card()); },
+  section_uniqueList(host) { host.append(UniqueList.card()); },
+  section_uniqueSettings(host) { UniqueHunt.draw(host); },
+  section_uniqueSafety(host) {
+    const S = () => Settings.profile.hunt.safety, actions = [['stop', 'Stop'], ['town', 'Go to town and stop']];
+    const tip = (node, text) => this.tipped(node, text);
+    host.append(this.group('Safety: unique nearby',
+      tip(this.check('When a unique appears nearby', () => S().unique.on, v => S().unique.on = v), 'Never while the Unique hunt runs, and never when Unique is set to Prefer or Ignore in the monster classes, because then you hunt uniques.'),
+      tip(this.number('Unique distance (m)', () => S().unique.meters, v => S().unique.meters = v, 5, 200), 'How close a living unique must be.'),
+      tip(this.select('Unique nearby: action', actions, () => S().unique.action, v => S().unique.action = v), 'What to do when a unique is close.'),
+      el('p', 'One of the Safety triggers: it stops the bot, or takes it to town and stops, the same way as the other triggers under Settings, Safety.', 'muted')));
+  },
   section_combatPet(host) {
     const P = () => Settings.profile.pet.attack;
     host.append(this.group('Attack pet',
@@ -1436,10 +1451,7 @@ const UI = {
       tip(this.number('When the party has fewer than this many members (0 = off)', () => S().party.min, v => S().party.min = v, 0, 8), 'Only while you are in a party, or were when the bot started. It waits 10 seconds first, so a member who logs back in does not trigger it.'),
       tip(this.select('Party too small: action', actions, () => S().party.action, v => S().party.action = v), 'What to do when the party gets too small.'),
       tip(this.check('When a player attacks the character', () => S().player.on, v => S().player.on = v), 'A hit or a damaging skill from another player. Party members, your own pets and monsters never count.'),
-      tip(this.select('Player attack: action', actions, () => S().player.action, v => S().player.action = v), 'What to do when a player attacks you.'),
-      tip(this.check('When a unique appears nearby', () => S().unique.on, v => S().unique.on = v), 'Never while the Unique hunt runs, and never when Unique is set to Prefer or Ignore in the monster classes, because then you hunt uniques.'),
-      tip(this.number('Unique distance (m)', () => S().unique.meters, v => S().unique.meters = v, 5, 200), 'How close a living unique must be.'),
-      tip(this.select('Unique nearby: action', actions, () => S().unique.action, v => S().unique.action = v), 'What to do when a unique is close.')));
+      tip(this.select('Player attack: action', actions, () => S().player.action, v => S().player.action = v), 'What to do when a player attacks you.')));
   },
   section_settingsObstacles(host) {
     const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();

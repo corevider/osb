@@ -55,15 +55,70 @@ module.exports = function uniqueTests( { test, fixture } ) {
 		assert.match( f.texts(), /going for Tiger Girl \(100% HP\): nobody else is fighting it/ );
 	} );
 	test( "unique hunt: a monster that hits us is fought with self-defence on and not with it off", () => {
-		let f = setup(); mob( f, 30 ); f.UniqueHunt.start();
+		let f = setup(); f.Settings.profile.unique.selfDefenceSearch = true; mob( f, 30 ); f.UniqueHunt.start();
 		f.World.attackers.set( 30, f.World.simNow() ); f.run( 2 );
 		assert.equal( f.selected( 30 ), true );
 		f = setup(); f.Settings.profile.unique.selfDefence = false; mob( f, 30 ); f.UniqueHunt.start();
 		for ( let i = 0; i < 5; i++ ) { f.World.attackers.set( 30, f.World.simNow() ); f.run(); }
 		assert.equal( f.selected( 30 ), false );
 	} );
+	test( "unique hunt: self-defence applies only once a unique is found, unless Also while searching is on", () => {
+		const attacked = ( f, phase, goal = null ) => {
+			mob( f, 30 ); f.UniqueHunt.start();
+			f.UniqueHunt.active.phase = phase; f.UniqueHunt.active.goal = goal;
+			f.World.attackers.set( 30, f.World.simNow() );
+			const fights = f.UniqueHunt.fightsBack();
+			return { target: f.UniqueHunt.chooseTarget(), threat: f.Hunt.threat( null ), fights };
+		};
+		const gid = x => x?.gid ?? null;
+		assert.equal( setup().Settings.profile.unique.selfDefenceSearch, false, "off by default" );
+		let r = attacked( setup(), "patrol" );
+		assert.deepEqual( [ gid( r.target ), gid( r.threat ), r.fights ], [ null, null, false ], "searching: the monster that hits us is ignored" );
+		r = attacked( setup(), "chase" );
+		assert.deepEqual( [ gid( r.target ), gid( r.threat ), r.fights ], [ 30, 30, true ], "chasing a unique: it is fought" );
+		r = attacked( setup(), "collect" );
+		assert.deepEqual( [ gid( r.target ), gid( r.threat ), r.fights ], [ 30, 30, true ], "collecting the drops: it is fought" );
+		r = attacked( setup(), "patrol", { gid: 99, name: "Tiger Girl", at: 0 } );
+		assert.equal( r.fights, true, "a goal counts as found even in the patrol phase" );
+		for ( const phase of [ "patrol", "chase", "collect" ] ) {
+			const f = setup(); f.Settings.profile.unique.selfDefenceSearch = true;
+			r = attacked( f, phase );
+			assert.deepEqual( [ gid( r.target ), gid( r.threat ), r.fights ], [ 30, 30, true ], phase + " with Also while searching on" );
+		}
+		for ( const phase of [ "patrol", "chase", "collect" ] ) {
+			for ( const search of [ false, true ] ) {
+				const f = setup(); f.Settings.profile.unique.selfDefence = false; f.Settings.profile.unique.selfDefenceSearch = search;
+				r = attacked( f, phase );
+				assert.deepEqual( [ gid( r.target ), gid( r.threat ), r.fights ], [ null, null, false ], phase + " with self-defence off, search tick " + search + ": no effect" );
+			}
+		}
+	} );
+	test( "unique hunt: a unique that hits us is fought back at once while searching, and an ignored attacker does not stop the patrol", () => {
+		const f = setup(); mob( f, 30 ); f.UniqueHunt.start();
+		for ( let i = 0; i < 4; i++ ) { f.World.attackers.set( 30, f.World.simNow() ); f.run(); }
+		assert.equal( f.selected( 30 ), false, "the monster that hits us is not fought while searching" );
+		assert.equal( f.UniqueHunt.active.phase, "patrol" );
+		unique( f, 40 ); f.World.attackers.set( 40, f.World.simNow() ); f.run( 2 );
+		assert.equal( f.selected( 40 ), true, "a unique that hits us is fought at once" );
+		assert.equal( f.UniqueHunt.active.phase, "chase" );
+		assert.equal( f.UniqueHunt.fightsBack(), true, "from the moment it has a goal, self-defence applies" );
+	} );
+	test( "unique hunt: Also while searching is saved, shared and backed up, and an old profile loads with it off", () => {
+		const f = setup(), D = f.DEFAULT_PROFILE.unique;
+		assert.equal( D.selfDefenceSearch, false );
+		assert.equal( f.botProfile( { unique: { selfDefence: true } } ).unique.selfDefenceSearch, false, "an old profile loads with it off" );
+		assert.equal( f.botProfile( { unique: { selfDefenceSearch: "yes" } } ).unique.selfDefenceSearch, false, "only a boolean counts" );
+		const saved = f.botProfile( { unique: { selfDefenceSearch: true } } );
+		assert.equal( saved.unique.selfDefenceSearch, true );
+		assert.equal( f.botProfile( JSON.parse( JSON.stringify( saved ) ) ).unique.selfDefenceSearch, true, "a backup round-trips" );
+		f.Settings.profile = saved;
+		const code = JSON.parse( f.ProfileShare.text() ).profile;
+		assert.equal( code.unique.selfDefenceSearch, true, "a share code carries it" );
+		f.Settings.profile = f.botProfile( null );
+		assert.equal( f.ProfileShare.build( code ).unique.selfDefenceSearch, true );
+	} );
 	test( "unique hunt: a monster that hits us on the way interrupts the patrol walk", () => {
-		const f = setup(), s = spot( "Far", 1500 ); f.Settings.profile.unique.spots = [ s ];
+		const f = setup(), s = spot( "Far", 1500 ); f.Settings.profile.unique.spots = [ s ]; f.Settings.profile.unique.selfDefenceSearch = true;
 		f.UniqueHunt.start(); f.run();
 		assert.ok( f.WalkBack.active ); assert.match( f.UniqueHunt.status(), /walking to spot 1/ );
 		mob( f, 30, { x: 160 } ); f.World.attackers.set( 30, f.World.simNow() ); f.run( 2 );
@@ -339,9 +394,9 @@ module.exports = function uniqueTests( { test, fixture } ) {
 		const f = setup(), D = f.DEFAULT_PROFILE.unique;
 		const old = f.botProfile( { hunt: { radius: 300 } } );
 		assert.deepEqual( plain( old.unique ), plain( D ) );
-		assert.deepEqual( plain( D ), { spots: [], waitS: 0, learned: false, chase: 800, titans: false, selfDefence: true, skipBelow: 75, limitM: 60, chime: true } );
-		const saved = f.botProfile( { unique: { spots: [ spot( "Tiger Girl", 600 ), { name: "bad" }, { name: 5, regionId: 1, x: 1, z: 2 } ], waitS: 9999, learned: true, chase: 1200, titans: true, selfDefence: false, skipBelow: 60, limitM: 30, chime: false } } );
-		assert.deepEqual( plain( saved.unique ), { spots: [ spot( "Tiger Girl", 600 ), { name: "", regionId: 1, x: 1, y: 0, z: 2 } ], waitS: 600, learned: true, chase: 1200, titans: true, selfDefence: false, skipBelow: 60, limitM: 30, chime: false } );
+		assert.deepEqual( plain( D ), { spots: [], waitS: 0, learned: false, chase: 800, titans: false, selfDefence: true, selfDefenceSearch: false, skipBelow: 75, limitM: 60, chime: true } );
+		const saved = f.botProfile( { unique: { spots: [ spot( "Tiger Girl", 600 ), { name: "bad" }, { name: 5, regionId: 1, x: 1, z: 2 } ], waitS: 9999, learned: true, chase: 1200, titans: true, selfDefence: false, selfDefenceSearch: true, skipBelow: 60, limitM: 30, chime: false } } );
+		assert.deepEqual( plain( saved.unique ), { spots: [ spot( "Tiger Girl", 600 ), { name: "", regionId: 1, x: 1, y: 0, z: 2 } ], waitS: 600, learned: true, chase: 1200, titans: true, selfDefence: false, selfDefenceSearch: true, skipBelow: 60, limitM: 30, chime: false } );
 		f.Settings.profile = saved;
 		assert.equal( f.ProfileShare.strip( saved ).unique.spots.length, 2, "share codes carry the patrol spots" );
 		f.World.gp.pose = { regionId: 1, x: 321, y: 0, z: 654 };

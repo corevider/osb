@@ -1099,7 +1099,7 @@ module.exports = function telemetryTests( { test: baseTest, source } ) {
 	function trackerHarness( { page = trackerPage( TRACKER_ROWS ), spot = true, on = true } = {} ) {
 		const h = harness( { stored: { "sroBotLean:v1:updateCheck": "false" } } );
 		h.win.DOMParser = FakeDOMParser;
-		h.Settings.profile.uniqueState.tracker = on;
+		h.Settings.profile.uniqueState.tracker = on; h.Settings.profile.uniqueNests.on = false;
 		h.page = page;
 		h.server.respond = entry => entry.url === "/uniques" ? ( typeof h.page === "function" ? h.page( entry ) : h.reply( 200, null, {}, h.page ) ) : h.server.default( entry );
 		Object.assign( h.SpawnData, { loaded: true, codes: new Map( [ [ 1954, { code: "MOB_CH_TIGERWOMAN", kind: "monster" } ], [ 1982, { code: "MOB_OA_URUCHI", kind: "monster" } ], [ 2002, { code: "MOB_KK_ISYUTARU", kind: "monster" } ] ] ) } );

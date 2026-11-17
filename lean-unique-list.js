@@ -5,7 +5,7 @@ const UNIQUE_TICK_NOTE = 'The Hunt ticks choose which uniques the Unique hunt lo
 const UNIQUE_MAP_W = 300, UNIQUE_MAP_H = 200, UNIQUE_MAP_MAX_UPP = 30;
 const UniqueList = {
   list: null, header: null, refreshNote: null, refreshRow: null, box: null, canvas: null, mapInfo: null, open: '', key: '',
-  visible() { return UI.is('Setup') && !document?.hidden && !UI.minimised && !UI.root?.host?.hidden && !UI.body?.hidden; },
+  visible() { return UI.is('Unique') && !document?.hidden && !UI.minimised && !UI.root?.host?.hidden && !UI.body?.hidden; },
   rows() {
     if (!UniqueNests.loaded) return [];
     const codes = new Set(UniqueNests.uniques().map(u => u.code));
@@ -51,7 +51,7 @@ const UniqueList = {
     const trackerSwitch = UI.check('Check the game site\'s unique tracker (every 2 minutes while this page is open or the Unique hunt runs)', () => UniqueTracker.on(), v => { Settings.profile.uniqueState.tracker = v; this.refresh(); });
     const group = UI.group('Uniques', trackerSwitch, this.header, this.refreshRow, this.refreshNote, this.head(), this.list, this.box,
       el('p', UNIQUE_TICK_NOTE, 'muted'),
-      el('p', 'Ticking a unique also turns on Patrol the game\'s unique nests (Combat, Unique hunt) when it is off; unticking never turns it off. Click a name for a small map of its nests.', 'muted'));
+      el('p', 'Ticking a unique also turns on Patrol the game\'s unique nests (under Unique nests) when it is off; unticking never turns it off. Click a name for a small map of its nests.', 'muted'));
     UI.refreshers.push(() => this.refresh());
     this.refresh();
     return group;

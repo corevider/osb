@@ -99,7 +99,7 @@ module.exports = function uniqueListTests( { test, fixture } ) {
 
 	test( "unique list: ticking turns on the nest patrol with a toast, unticking leaves it on", async () => {
 		const f = await loaded();
-		assert.equal( f.Settings.profile.uniqueNests.on, false );
+		f.Settings.profile.uniqueNests.on = false;
 		f.UniqueList.toggle( "MOB_CH_TIGERWOMAN", true );
 		assert.equal( f.Settings.profile.uniqueNests.on, true, "the patrol is on" );
 		assert.deepEqual( plain( f.Settings.profile.uniqueNests.picks ), [ "MOB_CH_TIGERWOMAN" ] );
@@ -149,12 +149,13 @@ module.exports = function uniqueListTests( { test, fixture } ) {
 		assert.equal( f.UniqueList.planText( { name: "Nobody", nests: 0, outdoor: [] } ), "No nest of Nobody in the game data." );
 	} );
 
-	test( "unique list: the tracker is asked only while the Setup page is shown and visible", async () => {
+	test( "unique list: the tracker is asked only while the Unique page is shown and visible", async () => {
 		const f = await loaded(); let asks = 0;
 		f.UniqueTracker.onSetup = () => { asks++; };
 		f.UniqueList.list = {}; f.UniqueList.header = {}; f.UniqueList.refreshRow = {}; f.UniqueList.refreshNote = {}; f.UniqueList.fill = () => {};
 		f.UI.current = "Combat"; f.UniqueList.refresh(); assert.equal( asks, 0, "another page" );
-		f.UI.current = "Setup"; f.UniqueList.refresh(); assert.equal( asks, 1, "the Setup page" );
+		f.UI.current = "Setup"; f.UniqueList.refresh(); assert.equal( asks, 0, "the Setup page" );
+		f.UI.current = "Unique"; f.UniqueList.refresh(); assert.equal( asks, 1, "the Unique page" );
 		f.UI.minimised = true; f.UniqueList.refresh(); assert.equal( asks, 1, "minimised" ); f.UI.minimised = false;
 		f.UI.root = { host: { hidden: true } }; f.UniqueList.refresh(); assert.equal( asks, 1, "OSB hidden" ); f.UI.root = null;
 		f.UniqueList.refresh(); assert.equal( asks, 2 );

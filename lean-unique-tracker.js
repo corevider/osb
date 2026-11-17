@@ -15,7 +15,7 @@ const UniqueTracker = {
     setTimeout(() => { if (this.wanted()) this.read(); else this.busy = false; }, 0);
   },
   refresh() {
-    if (!this.on()) return 'The unique tracker is off (Combat, Unique hunt).';
+    if (!this.on()) return 'The unique tracker is off (Unique tab).';
     if (this.busy) return 'Reading the unique tracker…';
     const wait = this.askedAt + UNIQUE_TRACKER_REFRESH_MS - now();
     if (wait > 0) return 'Asked moments ago; try again in ' + Math.ceil(wait / 1000) + ' s.';
@@ -94,7 +94,7 @@ const UniqueTracker = {
   },
   status() {
     if (!this.on()) return 'Off.';
-    if (this.lastAt === null) return this.failures ? 'Could not be read; trying again later.' : 'Not read yet; it is read while the unique hunt runs or the Setup page is shown.';
+    if (this.lastAt === null) return this.failures ? 'Could not be read; trying again later.' : 'Not read yet; it is read while the unique hunt runs or the Unique tab is shown.';
     return 'Last read ' + UniqueState.ago(this.lastAt) + ': ' + this.lastText + '.';
   },
 };

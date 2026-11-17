@@ -124,8 +124,8 @@ function upgradeProfile(input) { return upgradeClassModes(upgradeSoxSound(Rotati
 const DEFAULT_PROFILE = {
   items: { rules: {}, balance: false, petToBag: false, autoEquip: false, gear: { primaryWeapon: null, secondaryWeapon: null, shield: null } },
   sounds: { player: false, died: false, levelUp: false, unique: false },
-  unique: { spots: [], waitS: 0, learned: false, chase: 800, titans: false, selfDefence: true, skipBelow: 75, limitM: 60, chime: true },
-  uniqueNests: { on: false, picks: [], maxM: 1000 },
+  unique: { spots: [], waitS: 0, learned: false, chase: 800, titans: false, selfDefence: true, selfDefenceSearch: false, skipBelow: 75, limitM: 60, chime: true },
+  uniqueNests: { on: true, picks: [], maxM: 1000, defaultOnApplied: true },
   uniqueState: { deadTrustM: 30, tracker: false },
   stall: { title: '', greeting: '', network: true, closeWhenEmpty: true, prices: {} },
   alchemy: { target: 3, limit: 20, elixir: 0, powder: false, sound: false, use: { luck: false, steady: false, immortal: false, astral: false }, stones: { luck: 1, steady: 1, immortal: 1, astral: 1 }, stoneLimit: 0,
@@ -216,6 +216,7 @@ function botProfile(input) {
   const result = deepMerge(DEFAULT_PROFILE, {});
   if (!input || typeof input !== 'object') return result;
   input = upgradeProfile(input);
+  const nestsMarked = !!input.uniqueNests && typeof input.uniqueNests === 'object' && 'defaultOnApplied' in input.uniqueNests;
   for (const key of ['macro', 'potion', 'hunt', 'lure', 'pet', 'scroll', 'mall', 'wardrobe', 'party', 'alchemy', 'mastery', 'statPoints', 'leveling', 'trace', 'items', 'trade', 'stall', 'quest', 'sounds', 'unique', 'uniqueNests', 'uniqueState']) {
     if (!input[key] || typeof input[key] !== 'object') continue;
     for (const field of Object.keys(DEFAULT_PROFILE[key])) {
@@ -266,12 +267,14 @@ function botProfile(input) {
   const unique = result.unique, uniqueDefaults = DEFAULT_PROFILE.unique;
   unique.spots = (Array.isArray(unique.spots) ? unique.spots : []).filter(s => s && Number.isInteger(s.regionId) && [s.x, s.y ?? 0, s.z].every(Number.isFinite))
     .slice(0, 30).map(s => ({ name: typeof s.name === 'string' ? s.name.trim().slice(0, 32) : '', regionId: s.regionId, x: s.x, y: s.y ?? 0, z: s.z }));
-  for (const key of ['learned', 'titans', 'selfDefence', 'chime']) if (typeof unique[key] !== 'boolean') unique[key] = uniqueDefaults[key];
+  for (const key of ['learned', 'titans', 'selfDefence', 'selfDefenceSearch', 'chime']) if (typeof unique[key] !== 'boolean') unique[key] = uniqueDefaults[key];
   for (const [key, min, max] of [['waitS', 0, 600], ['chase', 100, 3000], ['skipBelow', 0, 100], ['limitM', 5, 1440]]) {
     unique[key] = Number.isFinite(unique[key]) ? clamp(Math.round(unique[key]), min, max) : uniqueDefaults[key];
   }
   const nests = result.uniqueNests;
   nests.on = nests.on === true;
+  if (!nestsMarked && !unique.spots.length) nests.on = true;
+  nests.defaultOnApplied = true;
   nests.picks = [...new Set((Array.isArray(nests.picks) ? nests.picks : []).filter(c => typeof c === 'string' && /^[A-Za-z0-9_]{1,64}$/.test(c)))].slice(0, 100);
   nests.maxM = Number.isFinite(nests.maxM) ? clamp(Math.round(nests.maxM / 100) * 100, 100, 5000) : DEFAULT_PROFILE.uniqueNests.maxM;
   const stateCfg = result.uniqueState;

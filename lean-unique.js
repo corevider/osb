@@ -373,8 +373,13 @@ const UniqueHunt = {
     }
     return best;
   },
+  fightsBack() {
+    const cfg = this.cfg(), a = this.active;
+    if (cfg.selfDefence === false) return false;
+    return cfg.selfDefenceSearch === true || !!a && (a.phase !== 'patrol' || !!a.goal);
+  },
   defence(pose, sim) {
-    if (this.cfg().selfDefence === false) return null;
+    if (!this.fightsBack()) return null;
     let best = null;
     for (const [gid, at] of World.attackers) {
       const e = World.ents.get(gid);
@@ -626,8 +631,7 @@ const UniqueHunt = {
     UI.refreshers.push(() => { status.textContent = this.status(); });
     return UI.group('Unique hunt',
       el('p', 'Patrols your unique spots and fights only uniques, with your Unique rotation, berserk, buffs and potions. When the unique it went for dies it chimes, collects the drops and stops. Your hunting spot and settings stay as they are.', 'muted'),
-      UI.row(UI.button('Start', () => this.start()), UI.button('Stop', () => { if (!this.stop('stopped by you')) UI.toast('The unique hunt is not running.'); }),
-        UI.button('Settings', () => UI.show('Combat', 'Unique hunt'))),
+      UI.row(UI.button('Start', () => this.start()), UI.button('Stop', () => { if (!this.stop('stopped by you')) UI.toast('The unique hunt is not running.'); })),
       status);
   },
   draw(host) {
@@ -648,7 +652,7 @@ const UniqueHunt = {
     const learned = () => { const s = this.seen(); learnedNote.textContent = s.length ? 'Learned: ' + s.slice(0, 12).map(x => x.name + ' ×' + (x.count || 1)).join(', ') + (s.length > 12 ? ' and ' + (s.length - 12) + ' more' : '') + '.' : 'Learned: none yet.'; };
     learned();
     host.append(UI.group('Unique hunt',
-      el('p', 'Started from the Unique hunt card on the Setup page. It patrols these spots in order, waits at each for Wait at each spot, and loops. At the game\'s nests and learned spots it only looks around for about 2 seconds and goes on when no unique is in view. Distances count from the spot it is at, or from where you started it with no spots; never from the hunting area.', 'muted'),
+      el('p', 'Started from the Start button above. It patrols these spots in order, waits at each for Wait at each spot, and loops. At the game\'s nests and learned spots it only looks around for about 2 seconds and goes on when no unique is in view. Distances count from the spot it is at, or from where you started it with no spots; never from the hunting area.', 'muted'),
       list,
       UI.text('Spot name (optional)', () => name, v => { name = v; }, 'for example Tiger Girl'),
       UI.button('Add this spot', () => { if (this.addSpot(name)) fill(); }),
@@ -660,13 +664,14 @@ const UniqueHunt = {
       UI.number('Chase distance (m)', () => U().chase / 10, v => { U().chase = v * 10; }, 10, 300),
       UI.check('Titans too (they use the Unique rotation)', () => U().titans, v => { U().titans = v; }),
       UI.check('Fight monsters that hit me', () => U().selfDefence, v => { U().selfDefence = v; }),
+      UI.tipped(UI.check('Also while searching', () => U().selfDefenceSearch === true, v => { U().selfDefenceSearch = v; }), 'Off by default. Fighting back starts when the hunt goes for a unique and ends when it goes back to patrolling; while it searches, monsters that hit you are ignored and it walks on. Turn this on to fight them while searching too. It does nothing while Fight monsters that hit me is off.'),
       UI.number('Skip a unique others have brought below this % HP', () => U().skipBelow, v => { U().skipBelow = v; }, 0, 100, 5),
       el('p', 'The drop goes to whoever dealt the most damage. A unique others are fighting is skipped below this HP; during a fight the bot gives up when others clearly out-damage it. A unique that hits you is always fought back, and one nobody else fights is always taken.', 'muted'),
       UI.number('Stop after (min)', () => U().limitM, v => { U().limitM = v; }, 5, 1440, 5),
       UI.number('Trust a unique\'s death for (min)', () => Settings.profile.uniqueState.deadTrustM, v => { Settings.profile.uniqueState.deadTrustM = v; }, 5, 240, 5),
       UI.check('Use the game site\'s unique tracker', () => Settings.profile.uniqueState.tracker === true, v => { Settings.profile.uniqueState.tracker = v; }),
       trackerNote,
-      el('p', 'The bot remembers which uniques are alive or dead from the game\'s announcements, what it sees, its own kills and, if you turn the tracker on (it is off by default), the game site\'s unique tracker (opensro.online/uniques). Nothing is requested until you turn it on; then the page is read only while the unique hunt runs or the Setup page is shown, at most every 2 minutes (a Refresh never within 30 s), without cookies and without any data about you. It patrols only for chosen uniques not known to be dead; when every chosen unique is dead it stands where it is and waits until one appears again. Without newer news a death is trusted this long, then the unique is patrolled again.', 'muted'),
+      el('p', 'The bot remembers which uniques are alive or dead from the game\'s announcements, what it sees, its own kills and, if you turn the tracker on (it is off by default), the game site\'s unique tracker (opensro.online/uniques). Nothing is requested until you turn it on; then the page is read only while the unique hunt runs or the Unique tab is shown, at most every 2 minutes (a Refresh never within 30 s), without cookies and without any data about you. It patrols only for chosen uniques not known to be dead; when every chosen unique is dead it stands where it is and waits until one appears again. Without newer news a death is trusted this long, then the unique is patrolled again.', 'muted'),
       UI.check('Chime when a unique monster comes into view', () => Settings.profile.sounds.unique, v => { Settings.profile.sounds.unique = v; }),
       UI.button('Test in-view chime', () => Sound.test('unique')),
       UI.check('Chime when the hunted unique dies', () => U().chime, v => { U().chime = v; }),
@@ -693,7 +698,7 @@ const UniqueHunt = {
   Hunt.chooseTarget = function (...args) { return UniqueHunt.active ? UniqueHunt.chooseTarget() : chooseBeforeUnique.apply(this, args); };
   Hunt.threat = function (current) {
     if (!UniqueHunt.active) return threatBeforeUnique.call(this, current);
-    return UniqueHunt.cfg().selfDefence === false ? null : threatBeforeUnique.call(this, current);
+    return UniqueHunt.fightsBack() ? threatBeforeUnique.call(this, current) : null;
   };
   LevelSpot.tick = function () { return UniqueHunt.active ? false : levelSpotTick.apply(this, arguments); };
   Lure.on = function () { return !UniqueHunt.active && lureOn.apply(this, arguments); };

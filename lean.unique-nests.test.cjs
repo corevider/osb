@@ -194,7 +194,7 @@ module.exports = function uniqueNestTests( { test, fixture } ) {
 	} );
 	test( "unique nests: nothing is loaded while the mode is unused, and a failed load falls back with one log line", async () => {
 		const f = setup(), U = f.Settings.profile.unique;
-		U.spots = [ spot( "Mine", 600 ) ];
+		U.spots = [ spot( "Mine", 600 ) ]; f.Settings.profile.uniqueNests.on = false;
 		f.UniqueHunt.start(); f.run( 5 ); f.UniqueHunt.status(); f.UniqueHunt.stop( "stopped by you" );
 		f.Settings.profile.uniqueNests.on = true;
 		f.Hunt.start(); f.run( 5 ); f.Hunt.stop();
@@ -218,25 +218,87 @@ module.exports = function uniqueNestTests( { test, fixture } ) {
 		const asks = g.asked.length;
 		g.run( 10, 1000 ); assert.equal( g.asked.length, asks, "no retry within ten minutes" );
 	} );
+	const LEGACY_KEY = "sroBotLean:v1:profile:default";
+	const stored = ( storage, uniqueNests, spots = [] ) => { storage.set( LEGACY_KEY, JSON.stringify( { unique: { spots }, uniqueNests } ) ); return storage; };
+	const saveProfile = f => f.storage.set( LEGACY_KEY, JSON.stringify( f.Settings.profile ) );
+
+	test( "unique nests: a new profile has the patrol on, and being on asks for nothing until the hunt runs or the Unique tab needs the data", () => {
+		const idle = on => {
+			const f = setup();
+			if ( on === false ) f.Settings.profile.uniqueNests.on = false;
+			f.Hunt.start(); f.run( 20 ); f.Hunt.stop();
+			seeUnique( f, 50, { refObjId: 2006 } );
+			f.bus.emit( "notice", { key: "UIIT_MSG_APPEAR_UNIC", arguments: [ "Sand King" ], sequence: 1 } );
+			f.UniqueHunt.status(); f.UniqueHunt.mapNests();
+			f.run( 20, 1000 );
+			return f;
+		};
+		const f = idle(), off = idle( false );
+		assert.equal( f.Settings.profile.uniqueNests.on, true );
+		assert.equal( f.Settings.profile.uniqueNests.defaultOnApplied, true );
+		assert.deepEqual( plain( f.asked ), plain( off.asked ), "being on adds no request" );
+		assert.deepEqual( plain( f.asked.filter( p => p === POS || p === MANIFEST ) ), [], "no spawn table request for a user who never starts the hunt or opens the Unique tab" );
+		assert.equal( f.UniqueNests.pending, null );
+		assert.equal( f.UniqueNests.loaded, false );
+		f.UniqueHunt.start();
+		assert.deepEqual( plain( f.asked.filter( p => p === POS || p === MANIFEST ).sort() ), [ MANIFEST, POS ].sort(), "the hunt loads the nests" );
+	} );
+
+	test( "unique nests: a saved profile with the patrol off and no own spots is turned on once, and stays off after the user turns it off", () => {
+		const storage = stored( new Map(), { on: false, picks: [], maxM: 1000 } );
+		const f = setup( { storage } );
+		assert.equal( f.Settings.profile.uniqueNests.on, true, "turned on once" );
+		assert.equal( f.Settings.profile.uniqueNests.defaultOnApplied, true );
+		f.Settings.profile.uniqueNests.on = false; saveProfile( f );
+		const g = setup( { storage } );
+		assert.equal( g.Settings.profile.uniqueNests.on, false, "it stays off after the user turned it off and reloaded" );
+		const h = setup( { storage } );
+		assert.equal( h.Settings.profile.uniqueNests.on, false, "and after another reload" );
+	} );
+
+	test( "unique nests: a saved profile with own patrol spots keeps its saved choice, on or off", () => {
+		const off = setup( { storage: stored( new Map(), { on: false, picks: [], maxM: 1000 }, [ spot( "Mine", 600 ) ] ) } );
+		assert.equal( off.Settings.profile.uniqueNests.on, false );
+		assert.equal( off.Settings.profile.uniqueNests.defaultOnApplied, true );
+		const on = setup( { storage: stored( new Map(), { on: true, picks: [], maxM: 1000 }, [ spot( "Mine", 600 ) ] ) } );
+		assert.equal( on.Settings.profile.uniqueNests.on, true );
+		off.Settings.profile.unique.spots = [];
+		saveProfile( off );
+		assert.equal( setup( { storage: off.storage } ).Settings.profile.uniqueNests.on, false, "removing the spots later does not run the migration again" );
+	} );
+
+	test( "unique nests: a backup or share code with the choice marked keeps it, and an old backup with the patrol off and no spots is migrated like a saved profile", () => {
+		const f = setup();
+		const marked = f.botProfile( { uniqueNests: { on: false, picks: [], maxM: 1000, defaultOnApplied: true } } );
+		assert.equal( marked.uniqueNests.on, false );
+		assert.equal( f.botProfile( JSON.parse( JSON.stringify( marked ) ) ).uniqueNests.on, false, "a backup round-trips" );
+		assert.equal( f.botProfile( { uniqueNests: { on: false, picks: [], maxM: 1000 } } ).uniqueNests.on, true, "an old backup without the marker" );
+		f.Settings.profile = marked;
+		const code = JSON.parse( f.ProfileShare.text() ).profile;
+		assert.equal( code.uniqueNests.on, false, "a share code carries the off choice" );
+		f.Settings.profile = f.botProfile( null );
+		assert.equal( f.ProfileShare.build( code ).uniqueNests.on, false );
+	} );
+
 	test( "unique nests: the nests show on the map only when chosen and loaded", async () => {
 		const f = setup();
 		assert.deepEqual( plain( f.UniqueHunt.mapNests() ), [] );
 		f.Settings.profile.uniqueNests.on = true; await f.UniqueNests.load();
 		assert.equal( f.UniqueHunt.mapNests().length, 4 );
 	} );
-	test( "unique nests: the settings persist, travel in share codes and backups, and old files load with the source off", () => {
+	test( "unique nests: the settings persist, travel in share codes and backups, and old files load with the source on", () => {
 		const f = setup(), D = f.DEFAULT_PROFILE.uniqueNests;
-		assert.deepEqual( plain( D ), { on: false, picks: [], maxM: 1000 } );
-		assert.deepEqual( plain( f.botProfile( { unique: { spots: [ spot( "Mine", 600 ) ] } } ).uniqueNests ), plain( D ), "an old file loads with the built-in source off" );
+		assert.deepEqual( plain( D ), { on: true, picks: [], maxM: 1000, defaultOnApplied: true } );
+		assert.deepEqual( plain( f.botProfile( { unique: { spots: [ spot( "Mine", 600 ) ] } } ).uniqueNests ), plain( D ), "an old file with spots and no saved choice loads with the built-in source on" );
 		const saved = f.botProfile( { uniqueNests: { on: true, picks: [ "MOB_OA_URUCHI", "bad code!", "MOB_OA_URUCHI", 5 ], maxM: 1234 } } );
-		assert.deepEqual( plain( saved.uniqueNests ), { on: true, picks: [ "MOB_OA_URUCHI" ], maxM: 1200 } );
-		assert.equal( f.botProfile( { uniqueNests: { on: "yes", maxM: 99999 } } ).uniqueNests.on, false );
+		assert.deepEqual( plain( saved.uniqueNests ), { on: true, picks: [ "MOB_OA_URUCHI" ], maxM: 1200, defaultOnApplied: true } );
+		assert.equal( f.botProfile( { uniqueNests: { on: "yes", maxM: 99999, defaultOnApplied: true } } ).uniqueNests.on, false );
 		assert.equal( f.botProfile( { uniqueNests: { maxM: 99999 } } ).uniqueNests.maxM, 5000 );
 		f.Settings.profile = saved;
 		const shared = JSON.parse( f.ProfileShare.text() ).profile;
-		assert.deepEqual( plain( shared.uniqueNests ), { on: true, picks: [ "MOB_OA_URUCHI" ], maxM: 1200 } );
+		assert.deepEqual( plain( shared.uniqueNests ), { picks: [ "MOB_OA_URUCHI" ], maxM: 1200 }, "a share code holds only what differs from the defaults" );
 		f.Settings.profile = f.botProfile( null );
-		assert.deepEqual( plain( f.ProfileShare.build( shared ).uniqueNests ), { on: true, picks: [ "MOB_OA_URUCHI" ], maxM: 1200 }, "a share code carries the choice" );
+		assert.deepEqual( plain( f.ProfileShare.build( shared ).uniqueNests ), { on: true, picks: [ "MOB_OA_URUCHI" ], maxM: 1200, defaultOnApplied: true }, "a share code carries the choice" );
 		assert.deepEqual( plain( f.botProfile( JSON.parse( JSON.stringify( saved ) ) ).uniqueNests ), plain( saved.uniqueNests ), "a backup round-trips" );
 	} );
 	const TWINS = {

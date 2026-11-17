@@ -11577,6 +11577,7 @@ require('./lean.unique.test.cjs')({ test, fixture, townFixture });
 require('./lean.unique-nests.test.cjs')({ test, fixture });
 require('./lean.unique-state.test.cjs')({ test, fixture });
 require('./lean.unique-list.test.cjs')({ test, fixture });
+require('./lean.unique-tab.test.cjs')({ test, fixture });
 require('./lean.emergency.test.cjs')({ test, fixture });
 require('./lean.buff-gear.test.cjs')({ test, buffGearFixture, partyGear, casts, secondaryWornFixture });
 require('./lean.safety.test.cjs')({ test, fixture, townFixture });

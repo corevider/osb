@@ -251,7 +251,11 @@ async function tickProof(browser, localPort) {
     await page.getByRole('button', { name: 'Hunt area', exact: true }).click();
     await page.getByRole('button', { name: 'Set hunting spot here', exact: true }).click();
     assert.equal(await page.evaluate(() => SROLean.settings.profile.hunt.center.x), 100);
-    await page.getByRole('button', { name: 'Unique hunt', exact: true }).click();
+    assert.equal(await page.getByRole('button', { name: 'Unique hunt', exact: true }).count(), 0, 'Combat has no Unique hunt sub-tab');
+    for (const text of ['Unique nests', 'Chime when a unique monster comes into view', 'Spot name (optional)']) assert.equal(await page.locator('.pane').getByText(text).count(), 0, text + ' is not on Combat, Hunt area');
+    const navNames = await page.evaluate(() => [...document.getElementById('sro-bot-lean').shadowRoot.querySelectorAll('nav button')].map(b => b.textContent));
+    assert.equal(navNames[navNames.indexOf('Setup') + 1], 'Unique', 'the Unique tab is right after Setup');
+    await page.locator('nav').getByRole('button', { name: 'Unique', exact: true }).click();
     await page.getByLabel('Spot name (optional)', { exact: true }).fill('Tiger Girl');
     await page.getByRole('button', { name: 'Add this spot', exact: true }).click();
     assert.deepEqual(await page.evaluate(() => SROLean.settings.profile.unique.spots.map(s => s.name)), ['Tiger Girl']);
@@ -259,17 +263,24 @@ async function tickProof(browser, localPort) {
     await page.locator('fieldset', { has: page.getByRole('button', { name: 'Add this spot', exact: true }) }).screenshot({ path: __dirname + '/lean-unique-hunt.png' });
     await page.getByRole('button', { name: 'Remove', exact: true }).click();
     assert.equal(await page.evaluate(() => SROLean.settings.profile.unique.spots.length), 0);
-    await page.getByLabel("Patrol the game's unique nests", { exact: true }).check();
+    assert.equal(await page.evaluate(() => SROLean.settings.profile.uniqueNests.on), true, 'the nest patrol is on by default');
+    assert.equal(await page.getByLabel("Patrol the game's unique nests", { exact: true }).isChecked(), true);
     await page.getByLabel(/^Tiger Girl · 2 nests( · .*)?$/).check();
     assert.deepEqual(await page.evaluate(() => SROLean.settings.profile.uniqueNests.picks), ['MOB_CH_TIGERWOMAN']);
     await page.getByText('None ticked: every unique in the list.').waitFor();
-    await page.locator('fieldset', { hasText: 'Unique nests' }).screenshot({ path: __dirname + '/lean-unique-nests.png' });
+    await page.getByRole('group', { name: 'Unique nests', exact: true }).screenshot({ path: __dirname + '/lean-unique-nests.png' });
     await page.getByLabel(/^Tiger Girl · 2 nests( · .*)?$/).uncheck();
     await page.getByLabel("Patrol the game's unique nests", { exact: true }).uncheck();
-    assert.deepEqual(await page.evaluate(() => SROLean.settings.profile.uniqueNests), { on: false, picks: [], maxM: 1000 });
-    await page.getByRole('button', { name: 'Setup', exact: true }).click();
+    assert.deepEqual(await page.evaluate(() => SROLean.settings.profile.uniqueNests), { on: false, picks: [], maxM: 1000, defaultOnApplied: true });
     await page.getByText('Patrols your unique spots').waitFor();
     await page.getByText('Not running.').waitFor();
+    await page.getByText('When a unique appears nearby', { exact: true }).waitFor();
+    await page.getByLabel('Also while searching', { exact: true }).waitFor();
+    assert.equal(await page.evaluate(() => SROLean.settings.profile.unique.selfDefenceSearch), false);
+    await page.getByLabel('Also while searching', { exact: true }).check();
+    assert.equal(await page.evaluate(() => SROLean.settings.profile.unique.selfDefenceSearch), true);
+    await page.getByLabel('Also while searching', { exact: true }).uncheck();
+    await page.getByLabel('Chime when a unique monster comes into view', { exact: true }).waitFor();
     await page.locator('fieldset', { hasText: 'Patrols your unique spots' }).screenshot({ path: __dirname + '/lean-unique-card.png' });
     await page.evaluate(() => { document.cookie = 'osbprobe=1; path=/'; });
     const uniques = page.locator('fieldset', { hasText: 'Click a name for a small map' });
@@ -277,7 +288,7 @@ async function tickProof(browser, localPort) {
     assert.equal(await uniques.getByRole('button', { name: 'Refresh', exact: true }).isVisible(), false, 'Refresh is hidden while the tracker is off');
     await uniques.getByText('Refresh needs the unique tracker switch above.').waitFor();
     await page.waitForTimeout(1500);
-    assert.equal(trackerAsks.length, 0, 'off by default: nothing is requested while the Setup page is shown');
+    assert.equal(trackerAsks.length, 0, 'off by default: nothing is requested while the Unique tab is shown');
     assert.equal(await page.evaluate(() => SROLean.settings.profile.uniqueState.tracker), false);
     await uniques.getByText('Hunt', { exact: true }).waitFor();
     assert.equal(await uniques.getByLabel('Hunt Tiger Girl', { exact: true }).getAttribute('title'), 'Look for this unique in the Unique hunt');
@@ -287,7 +298,7 @@ async function tickProof(browser, localPort) {
     await uniques.getByRole('button', { name: tigerRow }).waitFor();
     await uniques.getByText(/^Updated \d+ s ago from the unique tracker/).waitFor();
     const asksOnSetup = trackerAsks.length;
-    assert.ok(asksOnSetup >= 1, 'the Setup page reads the tracker once the user turned it on');
+    assert.ok(asksOnSetup >= 1, 'the Unique tab reads the tracker once the user turned it on');
     const listed = () => page.evaluate(() => [...document.getElementById('sro-bot-lean').shadowRoot.querySelectorAll('.unique-row')].map(r => [r.querySelector('.unique-title').textContent, r.querySelector('.unique-pill').textContent, r.querySelector('.unique-pill').className.replace('unique-pill ', '')]));
     assert.deepEqual(await listed(), [['Tiger Girl', 'Slain', 'unique-dead'], ['Cerberus', 'Alive', 'unique-alive'], ['Uruchi', 'Not up', 'unique-notup'], ['Isyutaru', 'Unknown', 'unique-unknown']], 'by level, lowest first, unknown last');
     const pillColours = await page.evaluate(() => [...document.getElementById('sro-bot-lean').shadowRoot.querySelectorAll('.unique-pill')].map(p => getComputedStyle(p).backgroundColor));
@@ -311,15 +322,22 @@ async function tickProof(browser, localPort) {
     assert.deepEqual(await page.evaluate(() => SROLean.settings.profile.uniqueNests.picks), []);
     assert.equal(await page.evaluate(() => SROLean.settings.profile.uniqueNests.on), true, 'unticking leaves the patrol on');
     await page.locator('fieldset', { hasText: 'Patrols your unique spots' }).getByRole('button', { name: 'Start', exact: true }).click();
-    await page.getByRole('button', { name: 'Combat', exact: true }).click();
-    await page.getByRole('button', { name: 'Unique hunt', exact: true }).click();
+    await page.locator('nav').getByRole('button', { name: 'Setup', exact: true }).click();
+    await page.getByText('Ready to hunt?').waitFor();
+    assert.deepEqual(await page.locator('.pane > fieldset > legend').allTextContents(), ['Ready to hunt?', 'Checklist', 'Starter settings', 'Zero-setup leveling'], 'Zero-setup leveling is last on Setup');
+    for (const text of ['Patrols your unique spots', 'Click a name for a small map', 'Unique tracker:']) assert.equal(await page.locator('.pane').getByText(text).count(), 0, text + ' is not on Setup');
+    await page.locator('nav').getByRole('button', { name: 'Loot', exact: true }).click();
+    assert.equal(await page.locator('.pane').getByText('Chime when a unique monster comes into view').count(), 0, 'the unique chime is not under Loot');
+    await page.locator('nav').getByRole('button', { name: 'Settings', exact: true }).click();
+    await page.getByText('Stop after this many deaths (0 = off)').waitFor();
+    assert.equal(await page.locator('.pane').getByText('When a unique appears nearby').count(), 0, 'the unique trigger is not under Safety');
+    await page.locator('nav').getByRole('button', { name: 'Unique', exact: true }).click();
     await page.getByText(/^Unique tracker: Last read (less than a minute|\d+ min) ago: 1 alive, 1 slain, 2 unknown\.$/).waitFor();
     assert.ok(trackerAsks.length >= 1 && trackerAsks.every(a => a.url === '/uniques' && a.method === 'GET' && a.cookie === ''), 'plain GETs of /uniques without cookies: ' + JSON.stringify(trackerAsks));
     await page.getByLabel("Patrol the game's unique nests", { exact: true }).check();
     await page.getByLabel('Tiger Girl · 2 nests · slain on the unique tracker (first seen less than a minute ago)', { exact: true }).waitFor();
-    await page.locator('fieldset', { hasText: 'Unique nests' }).screenshot({ path: __dirname + '/lean-unique-tracker.png' });
+    await page.getByRole('group', { name: 'Unique nests', exact: true }).screenshot({ path: __dirname + '/lean-unique-tracker.png' });
     await page.getByLabel("Patrol the game's unique nests", { exact: true }).uncheck();
-    await page.getByRole('button', { name: 'Setup', exact: true }).click();
     await page.locator('fieldset', { hasText: 'Patrols your unique spots' }).getByRole('button', { name: 'Stop', exact: true }).click();
     await page.getByText('Stopped by you.', { exact: true }).waitFor();
     assert.equal((await page.evaluate(() => JSON.stringify(localStorage))).includes('Sample Hero'), false, 'the last killer is never stored');
@@ -706,7 +724,7 @@ async function tickProof(browser, localPort) {
     assert.equal(Math.round((await host.boundingBox()).width), 840, 'the classic window is 840 px wide');
     assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('sroLean:ui')).classic), true);
     const classicTabs = await page.evaluate(() => [...document.getElementById('sro-bot-lean').shadowRoot.querySelectorAll('nav button')].map(b => b.textContent));
-    assert.deepEqual(classicTabs, ['Settings', 'Skills', 'Items/Storage', 'Training place', 'Party/Autores', 'Player buffing', 'Quest', 'Auto alchemy', 'Stall', 'Extra', 'Map', 'Auto trade', 'Wardrobe', 'Setup']);
+    assert.deepEqual(classicTabs, ['Settings', 'Skills', 'Items/Storage', 'Training place', 'Party/Autores', 'Player buffing', 'Quest', 'Auto alchemy', 'Stall', 'Extra', 'Map', 'Auto trade', 'Wardrobe', 'Setup', 'Unique']);
     for (const name of ['Start / stop · F8', 'Return & hunt', 'Stop all', 'Start training', 'Stop training', 'Save settings', 'Hide client']) {
       assert.equal(await page.getByRole('button', { name, exact: true }).isVisible(), true, name + ' is in the classic frame');
     }
@@ -729,6 +747,15 @@ async function tickProof(browser, localPort) {
       assert.deepEqual(await frameBoxes(), frameAtStart, 'the frame does not move on the ' + name + ' tab');
       if (['Settings', 'Skills', 'Training place', 'Party/Autores', 'Extra'].includes(name)) await page.screenshot({ path: __dirname + '/lean-classic-' + name.toLowerCase().replace(/[^a-z]+/g, '-') + '.png' });
     }
+    await page.locator('nav').getByRole('button', { name: 'Training place', exact: true }).click();
+    for (const text of ['Unique nests', 'Spot name (optional)']) assert.equal(await page.locator('.pane').getByText(text).count(), 0, text + ' is not on Training place');
+    await page.locator('nav').getByRole('button', { name: 'Setup', exact: true }).click();
+    assert.equal(await page.locator('.pane').getByText('Patrols your unique spots').count(), 0, 'Setup holds no unique card');
+    await page.locator('nav').getByRole('button', { name: 'Unique', exact: true }).click();
+    for (const text of ['Patrols your unique spots', 'Click a name for a small map', 'Spot name (optional)', 'Unique nests', 'When a unique appears nearby']) await page.getByText(text).first().waitFor();
+    await page.getByLabel('Chime when a unique monster comes into view', { exact: true }).waitFor();
+    await page.evaluate(() => SROLean.ui.show('Combat', 'Unique hunt'));
+    assert.equal(await page.locator('nav').getByRole('button', { name: 'Unique', exact: true }).getAttribute('aria-selected'), 'true', 'the old Unique hunt link opens the Unique tab');
     // Headings use SBot's wording, and the pane scrolls on its own while the frame stays.
     await page.locator('nav').getByRole('button', { name: 'Settings', exact: true }).click();
     for (const heading of ['Autopotion settings', 'Buy settings', 'Back town settings', 'Pick settings', 'Attack preferences', 'Berserk settings', 'Emergency skills', 'Safety']) {
