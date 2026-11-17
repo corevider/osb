@@ -50,6 +50,7 @@ Settings are saved per character.
 
 - [Full manual](docs/manual.md)
 - [Obstacle recovery](OBSTACLE-RECOVERY.md)
+- [OSB live](live/README.md): an optional phone dashboard for your bots. It is separate from the bot, you start it yourself, and it runs on your own machine.
 - Help, suggestions, bug reports: [GitHub issues](https://github.com/corevider/osb/issues). **Settings → Send bug report** prepares a report you can copy or save, or send to the OSB team after a confirmation.
 - [Contributing](CONTRIBUTING.md): what a pull request needs (AI coding agents: [AGENTS.md](AGENTS.md))
 - [Maintaining OSB](docs/MAINTAINING.md): secrets, branch protection, releases and upstream ports
