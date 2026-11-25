@@ -14,11 +14,12 @@ const allowed = given => {
 
 let tunnelUrl = '';
 const TOPIC = 'osblive-' + crypto.createHash('sha256').update(CODE).digest('hex').slice(0, 32);
+const sign = url => crypto.createHmac('sha256', CODE).update(url).digest('hex');
 function announce() {
-  fetch('https://ntfy.sh/' + TOPIC, { method: 'POST', body: tunnelUrl }).then(r => { if (!r.ok) throw Error(r.status); })
+  fetch('https://ntfy.sh/' + TOPIC, { method: 'POST', body: tunnelUrl + ' ' + sign(tunnelUrl) }).then(r => { if (!r.ok) throw Error(r.status); })
     .catch(() => console.log('  Could not reach ntfy.sh: OSB Manager will not find the new address by itself until the next try in 6 hours.'));
 }
-const HEADER = ['==UserScript==', '@name         OSB live reporter', '@namespace    osb-live', '@version      1.5.0',
+const HEADER = ['==UserScript==', '@name         OSB live reporter', '@namespace    osb-live', '@version      1.6.0',
   '@description  Sends the bot\'s live stats to the OSB live hub on this machine. Read-only: never sends game commands.',
   '@match        https://opensro.online/play*', '@run-at       document-idle', '@grant        GM_xmlhttpRequest', '@grant        unsafeWindow',
   '@connect      127.0.0.1', '@connect      trycloudflare.com', '@connect      ntfy.sh', '@noframes', '==/UserScript==']
@@ -74,11 +75,15 @@ http.createServer((req, res) => {
   process.exit(1);
 }).listen(PORT, '127.0.0.1', () => {
   const base = 'http://127.0.0.1:' + PORT;
-  console.log('OSB live hub running. Keep this window open; Ctrl-C stops it.\n  Dashboard:        ' + base + '/#' + CODE + '\n  Install reporter: ' + base + '/install/' + CODE + '/reporter.user.js');
-  if (process.env.TUNNEL !== 'off') tunnel();
+  const phone = process.argv.includes('--phone');
+  console.log('OSB live hub running. Keep this window open; Ctrl-C stops it.\n  Dashboard:        ' + base + '/#' + CODE + '\n  Install reporter: ' + base + '/install/' + CODE + '/reporter.user.js'
+    + (phone ? '' : '\n  Local only: nothing leaves this machine. For a phone link, start the hub with --phone (see README.md).'));
+  if (phone) tunnel();
 });
 
 function tunnel() {
+  console.log('  Phone link on: your reports and the dashboard page pass through a Cloudflare quick tunnel (trycloudflare.com),\n'
+    + '  the tunnel address, signed with your code, is posted to ntfy.sh, and its name is looked up on 1.1.1.1.');
   const t = require('node:child_process').spawn('cloudflared', ['tunnel', '--url', 'http://127.0.0.1:' + PORT], { stdio: ['ignore', 'ignore', 'pipe'] });
   let linked = false;
   t.on('error', () => console.log('  Phone link:       not available, cloudflared is not installed (see README.md)'));

@@ -63,10 +63,18 @@ let hub = HUB, lookedAt = 0;
 function relocate() {
   if (Date.now() - lookedAt < 120000) return;
   lookedAt = Date.now();
-  fetch('https://ntfy.sh/' + TOPIC + '/raw?poll=1&since=12h').then(r => r.text()).then(text => {
-    const found = text.trim().split('\n').pop();
-    if (/^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/.test(found)) hub = found;
-  }).catch(() => {});
+  fetch('https://ntfy.sh/' + TOPIC + '/raw?poll=1&since=12h').then(r => r.text()).then(signedHub).then(found => { if (found) hub = found; }).catch(() => {});
+}
+
+async function signedHub(text) {
+  const bytes = value => new TextEncoder().encode(value);
+  const key = await crypto.subtle.importKey('raw', bytes(CODE), { name: 'HMAC', hash: 'SHA-256' }, false, ['verify']);
+  for (const line of text.trim().split('\n').reverse()) {
+    const [url, mac] = line.trim().split(' ');
+    if (!/^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/.test(url) || !/^[0-9a-f]{64}$/.test(mac || '')) continue;
+    if (await crypto.subtle.verify('HMAC', key, Uint8Array.from(mac.match(/../g), h => parseInt(h, 16)), bytes(url))) return url;
+  }
+  return null;
 }
 
 if (typeof window === 'undefined') module.exports = { snapshot };
