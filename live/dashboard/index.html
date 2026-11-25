@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#0f1216">
+<title>OSB live</title>
+<style>
+  :root { color-scheme:dark; --bg:#0f1216; --card:#181d24; --deep:#12161c; --line:#27303b; --text:#e8ecf1; --dim:#8a96a6; --ok:#3fb97a; --warn:#e0a93b; --bad:#e5534b; --badText:#ff8a84; --hp:#d9534f; --mp:#4a8fe0; --sun:#f2b535; --sunLine:#6b5320; --moon:#a9c1e8; --moonLine:#3d4c66; --link:#8fb8f0; }
+  * { box-sizing:border-box; }
+  [hidden] { display:none !important; }
+  body { margin:0; padding:14px 16px 24px; display:flex; flex-direction:column; gap:14px; background:var(--bg); color:var(--text); font:14px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif; }
+  header { display:flex; justify-content:space-between; align-items:center; gap:12px; }
+  h1 { margin:0; font-size:18px; letter-spacing:.04em; }
+  #conn, .dim { color:var(--dim); } #conn { font-size:13px; white-space:nowrap; }
+  .lab, h3 { margin:0; color:var(--dim); font-size:11px; font-weight:400; text-transform:uppercase; letter-spacing:.05em; }
+  .badText { color:var(--badText); }
+  ul, ol { list-style:none; margin:0; padding:0; }
+
+  #totals { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; }
+  .tile { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:10px 14px; }
+  .big { font-size:20px; font-weight:600; font-variant-numeric:tabular-nums; }
+  .sub { font-size:12px; color:var(--dim); }
+
+  #filters { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .find { display:flex; align-items:center; gap:8px; flex:1 1 200px; max-width:300px; min-height:40px; padding:0 12px; background:var(--card); border:1px solid var(--line); border-radius:8px; color:var(--dim); }
+  .find input { flex:1; min-width:0; min-height:36px; background:none; border:0; color:var(--text); font:inherit; }
+  .f { min-height:40px; padding:0 14px; background:none; border:1px solid var(--line); border-radius:999px; color:#aab4c2; font:inherit; font-size:13px; cursor:pointer; }
+  .f[aria-pressed="true"] { background:var(--line); color:var(--text); }
+  .check { display:flex; align-items:center; gap:8px; min-height:40px; cursor:pointer; } .check input { width:16px; height:16px; }
+  #shown { margin-left:auto; font-size:13px; }
+
+  .wrap { background:var(--card); border:1px solid var(--line); border-radius:12px; overflow-x:auto; }
+  table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; }
+  th, td { padding:8px; text-align:left; font-weight:400; }
+  thead th { padding:10px 8px; color:var(--dim); font-size:11px; text-transform:uppercase; letter-spacing:.05em; white-space:nowrap; }
+  thead button { padding:0; background:none; border:0; color:inherit; font:inherit; text-transform:inherit; letter-spacing:inherit; cursor:pointer; }
+  thead th[aria-sort="ascending"], thead th[aria-sort="descending"] { color:var(--text); }
+  th[aria-sort="ascending"] button::after { content:" ↑"; } th[aria-sort="descending"] button::after { content:" ↓"; }
+  tbody th, tbody td { border-top:1px solid var(--line); }
+  .n { text-align:right; } .b { font-weight:600; }
+  [data-k="name"] { overflow-wrap:anywhere; }
+  .tog { display:grid; place-items:center; width:32px; height:32px; padding:0; background:none; border:1px solid var(--line); border-radius:8px; color:var(--text); cursor:pointer; }
+  .tog svg { transition:transform .15s; } .tog[aria-expanded="true"] svg { transform:rotate(90deg); }
+  .pill { padding:3px 10px; border-radius:999px; font-size:12px; font-weight:600; white-space:nowrap; background:var(--line); }
+  .pill.ok { background:var(--ok); color:#04130b; } .pill.warn { background:var(--warn); color:#1a1200; } .pill.bad { background:var(--bad); color:#fff; }
+  .st.ok { color:var(--ok); } .st.warn { color:var(--warn); } .st.bad { color:var(--badText); }
+  .meter { display:flex; align-items:center; gap:8px; min-width:110px; font-size:12px; }
+  .meter span:last-child { width:36px; text-align:right; }
+  .bar { flex:1; height:6px; border-radius:3px; background:#0c0f13; overflow:hidden; }
+  .bar i { display:block; height:100%; transform-origin:left; transform:scaleX(0); transition:transform .4s; }
+  .chip { display:inline-block; margin-right:4px; padding:1px 8px; border:1px solid; border-radius:999px; font-size:12px; font-weight:600; white-space:nowrap; }
+  .sun { color:var(--sun); } .chip.sun { border-color:var(--sunLine); } .moon { color:var(--moon); } .chip.moon { border-color:var(--moonLine); }
+
+  .more td { padding:0; background:var(--deep); }
+  .detail { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:14px 28px; padding:14px 16px 16px 56px; }
+  .detail > div { min-width:0; } h3 { margin-bottom:8px; }
+  dl { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; margin:0 0 8px; }
+  dt { color:var(--dim); font-size:11px; } dd { margin:0; overflow-wrap:anywhere; }
+  .vit { grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+  li { display:flex; gap:8px; align-items:baseline; } li span { flex:1; min-width:0; overflow-wrap:anywhere; }
+  small, time { color:var(--dim); font-size:12px; }
+  [data-k="drops"] li { font-size:13px; padding:1px 0; } [data-k="drops"] b { width:38px; }
+  [data-k="log"] li { gap:6px; font-size:12px; color:var(--dim); } [data-k="log"] li.warn, [data-k="log"] li.warn time { color:var(--warn); } [data-k="log"] li.error, [data-k="log"] li.error time { color:var(--badText); }
+  ol.short li:nth-last-child(n+5) { display:none; } ol.short li span { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .full { margin-top:6px; min-height:32px; padding:0 10px; background:none; border:1px solid var(--line); border-radius:8px; color:var(--link); font:inherit; font-size:12px; cursor:pointer; }
+  #empty, #none { margin:0; padding:26px 16px; text-align:center; color:var(--dim); }
+
+  .m { display:none; }
+  @media (max-width:700px) {
+    .d { display:none !important; } .m { display:revert; } .vit { display:grid; } tbody th { width:100%; }
+    th, td, thead th { padding:8px 6px; } .tog, .full { width:44px; height:44px; } .full { width:auto; padding:0 14px; font-size:13px; }
+    .f, .find, .check { min-height:44px; } .detail { padding:12px 12px 14px; } .meter { min-width:0; }
+  }
+</style>
+</head>
+<body>
+<header><h1>OSB live</h1><span id="conn" role="status">connecting…</span></header>
+
+<section id="totals" aria-label="All characters" hidden>
+  <div class="tile"><div class="lab">Characters</div><div class="big" data-t="chars"></div><div class="sub" data-t="charsSub" style="color:var(--warn)"></div></div>
+  <div class="tile"><div class="lab">XP / hour</div><div class="big" data-t="xph"></div><div class="sub" data-t="xpSub"></div></div>
+  <div class="tile"><div class="lab">Gold / hour</div><div class="big" data-t="goldh"></div><div class="sub" data-t="goldSub"></div></div>
+  <div class="tile"><div class="lab">Kills / hour</div><div class="big" data-t="kph"></div><div class="sub"><span data-t="kills"></span> kills · <span data-t="deaths"></span> deaths</div></div>
+  <div class="tile"><div class="lab">SoX drops</div><div style="margin-top:6px"><span class="chip sun" data-t="sun"></span><span class="chip moon" data-t="moon"></span></div></div>
+</section>
+
+<div id="filters" hidden>
+  <label class="find">
+    <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+    <input id="q" type="search" placeholder="Find character" aria-label="Find character">
+  </label>
+  <button type="button" class="f" data-f="all">All <span></span></button>
+  <button type="button" class="f" data-f="hunting">Hunting <span></span></button>
+  <button type="button" class="f" data-f="attention">Needs attention <span></span></button>
+  <label class="check"><input id="soxOnly" type="checkbox">Only with Sun or Moon drops</label>
+  <span id="shown" class="dim" role="status"></span>
+</div>
+
+<div class="wrap" id="table" hidden>
+  <table>
+    <thead><tr>
+      <th><span hidden>Details</span></th>
+      <th data-sort="name"><button type="button">Character</button></th>
+      <th class="d">Status</th>
+      <th class="d" data-sort="hp"><button type="button">HP</button></th>
+      <th class="d" data-sort="mp"><button type="button">MP</button></th>
+      <th class="n" data-sort="xph"><button type="button">XP / h</button></th>
+      <th class="n" data-sort="goldh"><button type="button">Gold / h</button></th>
+      <th class="n d" data-sort="kph"><button type="button">Kills / h</button></th>
+      <th class="n d" data-sort="deaths"><button type="button">Deaths</button></th>
+      <th class="d" data-sort="sox"><button type="button">SoX</button></th>
+      <th class="n d" data-sort="secs"><button type="button">Hunting</button></th>
+    </tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <p id="none" hidden>No character matches these filters.</p>
+</div>
+<p id="empty">Waiting for a bot to report…</p>
+
+<template id="row">
+  <tr class="main">
+    <td><button type="button" class="tog" aria-expanded="false"><svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg></button></td>
+    <th scope="row">
+      <b data-k="name"></b> <span class="dim" data-k="lv"></span>
+      <div class="sub d" data-k="bot"></div>
+      <div class="sub m"><span data-k="status" data-c="st"></span> <span data-k="chips"></span></div>
+    </th>
+    <td class="d"><span data-k="status" data-c="pill"></span></td>
+    <td class="d"><div class="meter"><div class="bar"><i data-k="hpBar" style="background:var(--hp)"></i></div><span data-k="hp"></span></div></td>
+    <td class="d"><div class="meter"><div class="bar"><i data-k="mpBar" style="background:var(--mp)"></i></div><span data-k="mp"></span></div></td>
+    <td class="n" data-k="xph"></td>
+    <td class="n b" data-k="goldh"></td>
+    <td class="n d" data-k="kph"></td>
+    <td class="n d" data-k="deaths"></td>
+    <td class="d" data-k="chips"></td>
+    <td class="n d dim" data-k="time"></td>
+  </tr>
+  <tr class="more" hidden><td colspan="11"><div class="detail">
+    <div>
+      <div class="vit m" style="margin-bottom:12px">
+        <div class="meter"><span class="dim">HP</span><div class="bar"><i data-k="hpBar" style="background:var(--hp)"></i></div><span data-k="hp"></span></div>
+        <div class="meter"><span class="dim">MP</span><div class="bar"><i data-k="mpBar" style="background:var(--mp)"></i></div><span data-k="mp"></span></div>
+      </div>
+      <h3>Session</h3>
+      <dl>
+        <div class="m"><dt>Kills / hour</dt><dd data-k="kph"></dd></div>
+        <div><dt>Kills</dt><dd data-k="kills"></dd></div>
+        <div class="m"><dt>Deaths</dt><dd data-k="deaths"></dd></div>
+        <div><dt>XP gained</dt><dd data-k="xp"></dd></div>
+        <div><dt>Net gold</dt><dd data-k="gold"></dd></div>
+        <div class="m"><dt>Hunting</dt><dd data-k="time"></dd></div>
+        <div><dt>Potions</dt><dd data-k="potions"></dd></div>
+        <div><dt>Items</dt><dd data-k="items"></dd></div>
+        <div><dt>XP to next level</dt><dd data-k="xpNext"></dd></div>
+      </dl>
+      <div class="sub" data-k="where"></div>
+      <div class="sub m" data-k="bot"></div>
+    </div>
+    <div><h3>SoX drops</h3><ul data-k="drops"></ul></div>
+    <div><h3>Log</h3><ol class="short" data-k="log" aria-label="Recent activity"></ol><button type="button" class="full" aria-expanded="false">Show full log</button></div>
+  </div></td></tr>
+</template>
+
+<script>
+const LATE_MS = 20000, STALE_MS = 90000;
+let skew = 0;
+const $ = id => document.getElementById(id);
+const store = { get(k) { try { return localStorage.getItem(k); } catch { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch {} } };
+const saved = (k, fallback) => { try { return JSON.parse(store.get(k)) ?? fallback; } catch { return fallback; } };
+const bots = new Map();
+
+function ago(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  return s < 60 ? s + 's' : s < 3600 ? Math.floor(s / 60) + 'm' : Math.floor(s / 3600) + 'h ' + Math.floor(s / 60) % 60 + 'm';
+}
+const offline = s => Date.now() - skew - s.at > STALE_MS;
+function status(s) {
+  const age = Date.now() - skew - s.at;
+  if (offline(s)) return ['Offline · ' + ago(age) + ' ago', 'bad'];
+  const late = age > LATE_MS ? ' · ' + ago(age) + ' ago' : '';
+  if (!s.inWorld) return [(s.note || 'Not in game') + late, 'warn'];
+  if (s.dead) return ['Dead' + late, 'bad'];
+  return s.running ? ['Hunting · ' + s.state + late, 'ok'] : ['Stopped' + late, 'warn'];
+}
+
+const num = v => { const t = String(v ?? '').replace(/[^\d-]/g, ''); return /\d/.test(t) ? Number(t) : null; };
+function short(n) {
+  if (n == null) return '—';
+  const a = Math.abs(n);
+  return a >= 1e9 ? +(n / 1e9).toFixed(2) + 'B' : a >= 1e6 ? +(n / 1e6).toFixed(2) + 'M' : a >= 1e3 ? +(n / 1e3).toFixed(1) + 'K' : String(Math.round(n));
+}
+const whole = n => n == null ? '—' : Math.round(n).toLocaleString('en-US');
+function metrics(s) {
+  const st = s.stats || {}, t = /^(\d+):(\d\d):(\d\d)$/.exec(st.time || '');
+  const secs = t ? t[1] * 3600 + t[2] * 60 + +t[3] : null;
+  const perHour = v => v == null || !(secs >= 30) ? null : v * 3600 / secs;
+  const xp = num(st.xp), gold = num(st.gold), kills = num(st.kills);
+  const drops = Array.isArray(s.drops) ? s.drops : null;
+  const count = seal => drops ? drops.filter(d => d.seal === seal).length : st.sun != null ? num(st[seal.toLowerCase()]) ?? 0 : null;
+  return { name: s.name.toLowerCase(), hp: s.hp, mp: s.mp, secs, xp, gold, kills, deaths: num(st.deaths),
+    xph: perHour(xp), goldh: perHour(gold), kph: perHour(kills), sun: count('Sun'), moon: count('Moon'), drops };
+}
+
+const make = (tag, text, cls) => { const el = document.createElement(tag); if (cls) el.className = cls; el.textContent = text; return el; };
+function paintStatus(bot) {
+  const [text, kind] = status(bot.snap);
+  for (const el of bot.main.querySelectorAll('[data-k="status"]')) { el.textContent = text; el.className = el.dataset.c + ' ' + kind; }
+}
+function render(bot) {
+  const s = bot.snap, st = s.stats || {}, m = bot.m = metrics(s);
+  const els = k => [bot.main, bot.more].flatMap(row => [...row.querySelectorAll('[data-k="' + k + '"]')]);
+  const put = (k, v) => els(k).forEach(el => { el.textContent = v ?? '—'; });
+  const bar = (k, pct) => { els(k + 'Bar').forEach(el => { el.style.transform = 'scaleX(' + Math.min(100, Math.max(0, pct || 0)) / 100 + ')'; }); put(k, pct == null ? '—' : pct + '%'); };
+  put('name', s.name); put('lv', s.level != null ? 'Lv ' + s.level : '');
+  paintStatus(bot);
+  put('bot', s.bot ? (st.uniques != null ? 'OSB ' : 'NIX ') + s.bot : '');
+  put('where', s.pos ? 'Region ' + s.pos.region + ' (' + s.pos.x + ', ' + s.pos.z + ')' : '');
+  bar('hp', s.hp); bar('mp', s.mp);
+  put('xph', short(m.xph)); put('goldh', short(m.goldh)); put('kph', whole(m.kph));
+  put('xp', short(m.xp) + (/partial/.test(st.xp) ? ' (partial)' : '')); put('gold', short(m.gold));
+  put('kills', st.kills); put('deaths', st.deaths); put('potions', st.potions); put('items', st.items);
+  els('deaths').forEach(el => el.classList.toggle('badText', m.deaths > 0));
+  put('time', m.secs == null ? '—' : ago(m.secs * 1000));
+  put('xpNext', s.xpPct == null ? '—' : s.xpPct + '%');
+  els('chips').forEach(el => {
+    const chips = ['Sun', 'Moon'].filter(seal => m[seal.toLowerCase()] > 0).map(seal => make('span', seal + ' ' + m[seal.toLowerCase()], 'chip ' + seal.toLowerCase()));
+    el.replaceChildren(...(chips.length || el.tagName !== 'TD' ? chips : ['—']));
+  });
+  const dropKey = JSON.stringify(m.drops);
+  if (bot.dropKey !== dropKey) {
+    bot.dropKey = dropKey;
+    els('drops')[0].replaceChildren(...(m.drops?.length ? m.drops.map(d => {
+      const li = document.createElement('li'), what = make('span', String(d.item) + ' ');
+      if (d.from) what.append(make('small', 'from ' + d.from));
+      li.append(make('b', d.seal, d.seal === 'Sun' ? 'sun' : 'moon'), what, make('time', new Date(d.at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })));
+      return li;
+    }) : [make('li', m.drops ? 'No Sun or Moon drops yet.' : 'To list Sun and Moon drops, install the reporter again from the hub\'s link.', 'dim')]));
+  }
+  const logKey = JSON.stringify(s.log || []);
+  if (bot.logKey === logKey) return;
+  bot.logKey = logKey;
+  els('log')[0].replaceChildren(...(s.log || []).map(e => {
+    const li = document.createElement('li');
+    if (e.level === 'warn' || e.level === 'error') li.className = e.level;
+    li.append(make('time', new Date(e.at).toLocaleTimeString('en-GB')), make('span', e.text));
+    return li;
+  }));
+}
+function onSnap(s) {
+  if (!s || typeof s.name !== 'string' || !Number.isFinite(s.at)) return;
+  let bot = bots.get(s.name);
+  if (!bot) {
+    const rows = $('row').content.cloneNode(true);
+    bot = { main: rows.querySelector('.main'), more: rows.querySelector('.more') };
+    bot.main.querySelector('.tog').onclick = () => { open.has(s.name) ? open.delete(s.name) : open.add(s.name); store.set('osbOpen', JSON.stringify([...open])); view(); };
+    bot.more.querySelector('.full').onclick = e => {
+      const folded = bot.more.querySelector('ol').classList.toggle('short');
+      e.target.textContent = folded ? 'Show full log' : 'Show less'; e.target.setAttribute('aria-expanded', !folded);
+    };
+    bots.set(s.name, bot); $('rows').append(rows);
+  }
+  bot.snap = s; render(bot);
+}
+
+const SORTS = ['name', 'hp', 'mp', 'xph', 'goldh', 'kph', 'deaths', 'sox', 'secs'];
+const open = new Set([].concat(saved('osbOpen', [])));
+let filter = 'all', sort = saved('osbSort', 0);
+if (!Array.isArray(sort) || !SORTS.includes(sort[0]) || Math.abs(sort[1]) !== 1) sort = ['goldh', -1];
+const hunting = b => status(b.snap)[1] === 'ok';
+const match = { all: () => true, hunting, attention: b => !hunting(b) };
+function view() {
+  const list = [...bots.values()], q = $('q').value.trim().toLowerCase(), soxOnly = $('soxOnly').checked;
+  let shown = 0;
+  for (const b of list) {
+    const show = match[filter](b) && b.m.name.includes(q) && (!soxOnly || b.m.sun + b.m.moon > 0), isOpen = open.has(b.snap.name), tog = b.main.querySelector('.tog');
+    b.main.hidden = !show; b.more.hidden = !show || !isOpen; shown += show;
+    tog.setAttribute('aria-expanded', isOpen); tog.setAttribute('aria-label', (isOpen ? 'Hide' : 'Show') + ' details for ' + b.snap.name);
+  }
+  for (const btn of document.querySelectorAll('[data-f]')) {
+    btn.setAttribute('aria-pressed', btn.dataset.f === filter); btn.lastElementChild.textContent = list.filter(match[btn.dataset.f]).length;
+  }
+  $('shown').textContent = shown + ' of ' + list.length + ' shown';
+  $('none').hidden = shown > 0 || !list.length;
+  for (const id of ['totals', 'filters', 'table']) $(id).hidden = !list.length;
+
+  const [key, dir] = sort, val = b => key === 'sox' ? (b.m.sun || 0) * 1000 + (b.m.moon || 0) : b.m[key];
+  list.sort((a, b) => {
+    const x = val(a), y = val(b);
+    return (x == null || y == null ? (x == null) - (y == null) : (x < y ? -1 : x > y ? 1 : 0) * dir) || a.m.name.localeCompare(b.m.name);
+  });
+  const rows = list.flatMap(b => [b.main, b.more]), body = $('rows');
+  if (rows.some((row, i) => body.children[i] !== row)) body.append(...rows);
+  for (const th of document.querySelectorAll('th[data-sort]')) th.setAttribute('aria-sort', th.dataset.sort !== key ? 'none' : dir > 0 ? 'ascending' : 'descending');
+
+  const on = list.filter(b => !offline(b.snap)), sum = (set, k) => set.reduce((n, b) => n + (b.m[k] || 0), 0);
+  const nHunting = list.filter(hunting).length, rest = list.length - nHunting;
+  const tot = (k, v) => { document.querySelector('[data-t="' + k + '"]').textContent = v; };
+  tot('chars', nHunting + ' hunting'); tot('charsSub', rest ? rest + ' not hunting' : '');
+  tot('xph', short(sum(on, 'xph'))); tot('xpSub', short(sum(list, 'xp')) + ' gained');
+  tot('goldh', short(sum(on, 'goldh'))); tot('goldSub', short(sum(list, 'gold')) + ' net');
+  tot('kph', whole(sum(on, 'kph'))); tot('kills', whole(sum(list, 'kills'))); tot('deaths', whole(sum(list, 'deaths')));
+  tot('sun', 'Sun ' + sum(list, 'sun')); tot('moon', 'Moon ' + sum(list, 'moon'));
+}
+$('q').oninput = $('soxOnly').onchange = view;
+for (const btn of document.querySelectorAll('[data-f]')) btn.onclick = () => { filter = btn.dataset.f; view(); };
+for (const th of document.querySelectorAll('th[data-sort]')) th.firstElementChild.onclick = () => {
+  const key = th.dataset.sort;
+  sort = sort[0] === key ? [key, -sort[1]] : [key, key === 'name' ? 1 : -1];
+  store.set('osbSort', JSON.stringify(sort)); view();
+};
+
+let code = '';
+try { code = decodeURIComponent(location.hash.slice(1)); } catch {}
+code = code || store.get('osbChannel');
+onhashchange = () => location.reload();
+if (!code) $('empty').textContent = 'Open this page with your dashboard code at the end of the link: …/#your-code';
+else {
+  (async function poll() {
+    try {
+      const r = await fetch('/state', { headers: { 'X-Code': code }, cache: 'no-store' });
+      if (r.status === 403) { $('conn').textContent = 'wrong code'; return; }
+      const { now, reports } = await r.json();
+      skew = Date.now() - now;
+      reports.forEach(onSnap);
+      for (const [name, bot] of bots) if (!reports.some(r => r.name === name)) { bot.main.remove(); bot.more.remove(); bots.delete(name); }
+      $('empty').hidden = bots.size > 0;
+      view();
+      $('conn').textContent = 'live'; store.set('osbChannel', code);
+    } catch { $('conn').textContent = 'hub unreachable, retrying…'; }
+    setTimeout(poll, 3000);
+  })();
+  setInterval(() => { bots.forEach(paintStatus); view(); }, 1000);
+}
+</script>
+</body>
+</html>
