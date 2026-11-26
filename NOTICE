@@ -1,8 +1,8 @@
 OSB is a modified version of nixxane/opensro-bot-lean
 (https://github.com/nixxane/opensro-bot-lean), which was adapted from TSK's OpenSRO Assistant.
 
-Base: nixxane/opensro-bot-lean commit 3971917d9c9891739e77798c579950e36cb759d8 (version 1.2.272),
-taken on 2026-11-15. OSB 2.0.0 started from version 1.2.212 and has since taken upstream's changes up to this commit.
+Base: nixxane/opensro-bot-lean commit eaf271c995f9c62b499b3fceebba15f48f2cc2ec (version 1.2.289),
+taken on 2026-11-26. OSB 2.0.0 started from version 1.2.212 and has since taken upstream's changes up to this commit.
 The record of the last upstream commit OSB took is UPSTREAM.json.
 
 Copyright nixxane and the contributors of opensro-bot-lean. Changes in OSB: Copyright Corevider.
@@ -40,5 +40,12 @@ Changes made by OSB (GPL-2.0-or-later, section 2a), 2026-11-02:
   monster class. The custom alchemy sound stays in this browser like the SoX sound. The sweep stays inside a polygon
   hunting area and never runs while luring. Upstream's Discord session reports, live dashboard and GitHub bug reports
   are not taken, because they send data to third parties.
+- The upstream port of 1.2.273 to 1.2.289 takes the alchemy queue, blue stones and material buying (1.2.280 to 1.2.288), the reload
+  when a reconnect hangs (1.2.273), the reload when a walk never gets collision data (1.2.275), the decline of a party
+  resurrection when a town trip is needed (1.2.274), beast-form resurrection (1.2.279), the full-bag explanation (1.2.278) and the new
+  buff scrolls (1.2.286). The collision reload stops after 5 in a row. The decline works with the any-player resurrection rule
+  and only while the bot is running. Beast-form resurrection is off by default. The full-bag check counts OSB's pet-loot sale
+  and storage from the bag. The Ko-fi link, the auto-login after a server restart (it stores the password in the browser), and the
+  live dashboard's Start, Stop and Reload commands (including their reload fix) are not taken.
 
 Each port of upstream changes updates the base commit, the version and the date above, and UPSTREAM.json.

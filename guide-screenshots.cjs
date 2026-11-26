@@ -46,6 +46,7 @@ const skills = [
 skills.push({ id: 13, group: 13, name: 'Holy Guard', icon: 'skill\\test\\skill1.ddj', level: 2, targetRequired: true, targets: 1 | 16 | 32, mp: 30, cooldownMs: 2000 },
   { id: 14, group: 14, name: 'Mending Light', icon: 'skill\\test\\skill3.ddj', level: 3, targetRequired: true, targets: 1 | 16 | 32, mp: 45, cooldownMs: 1500 });
 const potion = (slot, ref, tf, quantity, name, heal) => ({ slot, refObjId: ref, typeFlags: tf, quantity, name, tooltip: { fields: { itemParam1_29c: heal } } });
+const blueRefs = [{ paramId: 70, optionName: 'MATTR_STR' }, { paramId: 76, optionName: 'MATTR_INT' }, { paramId: 148, optionName: 'MATTR_HP' }, { paramId: 77, optionName: 'MATTR_LUCK' }];
 const gameplay = { localGid: 1, target: 0, targetPending: false, inventoryPending: false, pendingMoves: 0,
   pose: { regionId: 1, x: 100, y: 0, z: 100 },
   progression: { gold: '2480000', level: 62, experience: '1200', skillPoints: 48000, stats: { maxHp: 3200, maxMp: 1800, strength: 120, intellect: 80 },
@@ -54,7 +55,13 @@ const gameplay = { localGid: 1, target: 0, targetPending: false, inventoryPendin
     { slot: 6, refObjId: 10, typeFlags: (2 << 11) | (6 << 7) | 44, plus: 7, name: 'Main weapon' },
     potion(13, 8, 2284, 187, 'HP potion (X-Large)', 900), potion(14, 15, 4332, 342, 'MP potion (X-Large)', 600),
     potion(15, 22, (3 << 11) | 236, 64, 'Vigor potion (X-Large)', 900),
-    { slot: 18, refObjId: 300, typeFlags: 44 | (6 << 7), plus: 4, durability: 100, variance: String(19n << 20n | 7n << 5n), magic: [], quantity: 1, name: 'Dragon Blade', tooltip: { fields: { itemClass: 25 } } },
+    { slot: 18, refObjId: 300, typeFlags: 44 | (6 << 7), plus: 4, durability: 100, variance: String(19n << 20n | 7n << 5n), quantity: 1, name: 'Dragon Blade',
+      magic: [String(4n << 32n | 70n), String(1n << 32n | 77n)], magicReferences: blueRefs, tooltip: { fields: { itemClass: 25, maxMagicOptions51c: 4 } } },
+    { slot: 24, refObjId: 301, typeFlags: 44 | (1 << 7) | (3 << 11), plus: 2, durability: 100, variance: String(13n << 5n), quantity: 1, name: 'Dragon Robe',
+      magic: [], magicReferences: blueRefs, tooltip: { fields: { itemClass: 25, maxMagicOptions51c: 3 } } },
+    { slot: 19, refObjId: 3679, typeFlags: 0x0d6c, quantity: 120, name: 'Elixir (weapon)' }, { slot: 20, refObjId: 3691, typeFlags: 0x156c, quantity: 60, name: 'Lucky powder (9th degree)' },
+    { slot: 21, refObjId: 6879, typeFlags: 0x3dec, quantity: 6, name: 'Luck stone (9th degree)' }, { slot: 22, refObjId: 6687, typeFlags: 0x0dec, quantity: 14, name: 'Str stone (9th degree)' },
+    { slot: 23, refObjId: 6699, typeFlags: 0x0dec, quantity: 9, name: 'Int stone (9th degree)' },
     { slot: 16, refObjId: 200, typeFlags: 0x09ec, quantity: 5, name: 'Return scroll' }, { slot: 17, refObjId: 201, typeFlags: 0x19ec, quantity: 5, name: 'Reverse return scroll' },
   ],
   inventorySlotCount: 45, equipmentSlotCount: 13, skills: skills.map(s => s.id), vitals: [{ gid: 1, hp: 2900, mp: 1500, maxHp: 3200, maxMp: 1800 }],
@@ -123,7 +130,18 @@ const gameplay = { localGid: 1, target: 0, targetPending: false, inventoryPendin
     await jump('Potion restock'); await snap('07-restock');
     await tab('Town'); await snap('08-town-triggers');
     await jump('Scroll town cycle'); await snap('08-town-cycle');
-    await tab('Alchemy'); await page.locator('#sro-bot-lean select').first().selectOption({ index: 1 }); await page.waitForTimeout(300); await snap('09-alchemy'); await jump('Stones that help and protect'); await snap('09b-alchemy-stones'); await jump('Item attributes'); await snap('09c-alchemy-attributes');
+    await tab('Alchemy');
+    for (let n = 0; n < 2; n++) { await page.locator('#sro-bot-lean select').first().selectOption({ index: 1 }); await tab('Add'); }
+    await page.evaluate(() => {
+      const [blade, robe] = SROLean.settings.profile.alchemy.queue;
+      Object.assign(blade.goals, { target: 7, powder: true }); Object.assign(blade.goals.use, { luck: true, immortal: true });
+      blade.goals.attr.targets.NATTR_PA = 19; Object.assign(blade.goals.blue.targets, { MATTR_STR: 6, MATTR_INT: 3 });
+      robe.goals.target = 3; robe.goals.blue.targets.MATTR_HP = 30;
+      SROLean.alchemy.editRow = 0; SROLean.ui.draw();
+    });
+    await snap('09-alchemy'); await jump('Goals'); await snap('09b-alchemy-stones');
+    await tab('Attribute'); await jump('Goals'); await snap('09c-alchemy-attributes');
+    await tab('Blue'); await jump('Goals'); await snap('09d-alchemy-blue'); await tab('Plus');
     await tab('Party'); await snap('13-party'); await jump('Follow a party member'); await snap('13b-follow');
     await tab('Settings'); await snap('10-settings');
     await jump('Share and import settings'); await snap('10b-share'); await jump('Anti-stuck'); await snap('11-anti-stuck');
@@ -163,6 +181,7 @@ const gameplay = { localGid: 1, target: 0, targetPending: false, inventoryPendin
     await page.evaluate(() => SROLean.ui.setClassic(true));
     const classicTab = async name => { await page.locator('#sro-bot-lean nav').getByRole('button', { name, exact: true }).click(); await page.waitForTimeout(200); };
     await classicTab('Skills'); await snap('16-classic-skills'); await classicTab('Party/Autores'); await snap('16-classic-party');
+    await classicTab('Auto alchemy'); await snap('16-classic-alchemy');
     await page.evaluate(() => SROLean.ui.setClassic(false)); await page.setViewportSize({ width: 1280, height: 900 }); await tab('Settings');
     await page.getByRole('button', { name: 'Send bug report', exact: true }).click();
     await page.getByRole('textbox', { name: 'Report preview', exact: true }).waitFor();

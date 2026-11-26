@@ -384,6 +384,10 @@ If the character is back in a known town, far from the hunting spot, and the tow
 
 If the plain **Disconnected from the server.** box stays up and the resume and three fresh entries have not brought the character back, the bot reloads the page the same way, with the same growing wait between reloads in a row. A server that is down for hours is still retried every 30 minutes, for up to 12 hours.
 
+If the game stays on connecting, entering the world or reconnecting for 3 minutes with no error, the bot reloads the page the same way, with the same growing wait between reloads in a row and the same 12-hour limit. Hunting resumes after the reload.
+
+While the bot is working (hunting, a town trip or a walk back) and the game never sends the collision data a walk needs, the status says "Waiting for game collision data". After 3 minutes the bot reloads the page; reloads in a row wait twice as long each time, up to 30 minutes, and the count clears once collision data arrives. After 5 such reloads in a row without collision data arriving, the bot stops reloading for this cause and the status line says so; reload the game by hand. A stopped bot never reloads for this.
+
 ## Returning after death
 
 Leave **Revive in town and go back to the hunting spot** enabled under **Town → Go to town when…**. With the town cycle enabled, the bot revives, completes town services and reverses back to hunt. Hunting resumes within 30 metres of the last scroll point, or within your saved hunting area after death. Without a reverse scroll, or with **Back to the hunting spot** set to **Walk**, it walks back to the saved hunting spot instead.
@@ -640,7 +644,7 @@ The main panel's status line and Send bug report now name what the walk is waiti
 
 Before it retries, three things happen on their own. If the character stands where the collision map has no way out (on a blocked tile or right against a wall, which can happen after logging in), it first takes a short step to the nearest open ground that is not behind a wall. If a walk to a service finds no route or cannot get around an obstacle, it walks to the town start (the saved arrival point, where the return scroll lands) once and tries the service again from there. If the saved standing point itself is blocked (inside a forge or behind a fence), it tries up to six other spots around the merchant, 3 to 9 m from it, nearest to the way in first, and skips spots the collision map shows as blocked. The log says "blocked, trying another spot beside the merchant". The first spot that gets the character to the merchant replaces the saved one for the next trips, and the trip carries on. Only when every spot fails does the old rule apply: a blocked warehouse is skipped, any other blocked service stops the trip.
 
-- **"Waiting for game collision data" / "Waiting for collision coverage":** the game has not given the bot a collision map for the town you arrived in. Reload the game and try again.
+- **"Waiting for game collision data" / "Waiting for collision coverage":** the game has not given the bot a collision map for the town you arrived in. Reload the game and try again. The bot reloads the page itself after 3 minutes, up to 5 times in a row (see Reconnect).
 - **"No walkable route found":** save that service point again from open ground a few steps in front of the NPC (stop hunting, stand there, select the NPC and click its Save button).
 - **"Blocked route (no progress for 20 s)":** something is physically in the way; check the character is not stuck behind another player or object.
 

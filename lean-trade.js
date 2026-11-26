@@ -41,7 +41,7 @@ const Trade = {
     if (this.run) return;
     const c = this.cfg(), from = this.town(c.from), to = this.town(c.to);
     if (!from || !to || from.key === to.key) return this.tell('Choose two different towns that have a trade merchant.');
-    if (Hunt.running || Town.trip || WalkBack.active || Restock.trip || Restock.recording || Alchemy.run || Alchemy.pending || BuffGear.run) {
+    if (Hunt.running || Town.trip || WalkBack.active || Restock.trip || Restock.recording || Alchemy.active() || BuffGear.run) {
       return this.tell('Stop hunting and any other trip first.');
     }
     if (!World.inWorld() || World.isDead() || !World.local()) return this.tell('Enter the world with a living character first.');

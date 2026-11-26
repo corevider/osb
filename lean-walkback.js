@@ -17,7 +17,7 @@ const WalkBack = {
   active: null,
   start(resume = false) {
     if (BuffGear.run && !BuffGear.run.restoring || BuffGear.recovery && !BuffGear.autoRestore) return UI.toast('Restore or review combat gear before travelling.', 'warn');
-    if (Alchemy.run || Alchemy.pending) return UI.toast('Stop alchemy and wait for its result before travelling.', 'warn');
+    if (Alchemy.active()) return UI.toast('Stop alchemy and wait for its result before travelling.', 'warn');
     if (Town.trip) return UI.toast('Stop the town cycle before starting walk-back.', 'warn');
     if (!World.inWorld() || World.isDead()) return UI.toast('Enter the world with a living character first.', 'warn');
     const dest = Hunt.cfg().center, pose = World.pose();

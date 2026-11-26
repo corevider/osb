@@ -168,7 +168,7 @@ const ItemRules = {
     const toPet = !!this.cfg().balance && bagFree - petFree <= -2 && petFree >= 2, toBag = drain || !!this.cfg().balance && petFree - bagFree <= -2 && bagFree >= 2;
     if (!toPet && !toBag) return false;
     const key = i => (toPet ? 0 : pet.rec.gid) + ':' + i.slot + ':' + i.refObjId;
-    const movable = i => ['store', 'sell'].includes(this.get(i.refObjId)?.act) && !this.guarded(i) && !(toPet && (Town.needed(i) || Alchemy.selected && Alchemy.selected.slot === i.slot)) &&
+    const movable = i => ['store', 'sell'].includes(this.get(i.refObjId)?.act) && !this.guarded(i) && !(toPet && (Town.needed(i) || Alchemy.protects(i))) &&
       (this.balanceBan.get(key(i)) || 0) <= t;
     const anyLoot = i => drain && !toPet && !this.guarded(i) && (this.balanceBan.get(key(i)) || 0) <= t;
     const item = (toPet ? World.items().filter(i => i.slot >= equipped) : petInv).find(movable) || (!toPet && drain ? petInv.find(anyLoot) : null);

@@ -11,7 +11,7 @@ const Reconnect = {
   intent: null, attempts: 0, nextAt: 0, waitUntil: 0, backAt: 0, message: '',
   DELAYS: [4000, 10000, 20000, 30000], GIVE_UP_MS: 12 * 3600 * 1000,
   STORE_KEY: 'sro-lean-reload', LOAD_WAIT_MS: 15000, RELOAD_MAX_MS: 30 * 60000, SNAP_MS: 30 * 60000, PENDING_MS: 10 * 60000, LOGIN_GRACE_MS: 60000,
-  restored: false, failedAt: 0, failedWait: 0, expiredAt: 0, expiredWait: 0, EXPIRED_WAIT_MS: 30000, snapAt: 0, gaveUp: false,
+  restored: false, failedAt: 0, failedWait: 0, expiredAt: 0, expiredWait: 0, EXPIRED_WAIT_MS: 30000, pendingAt: 0, pendingWait: 0, PENDING_WAIT_MS: 180000, COLLISION_WAIT_MS: 180000, collisionWait: 0, collisionCount: 0, snapAt: 0, gaveUp: false,
   // What survives a page reload: the last in-world snapshot, the reloads in a row and the one reload waiting to be resumed.
   load() { try { return JSON.parse(window.localStorage.getItem(this.STORE_KEY)) || {}; } catch { return {}; } },
   save(data) { try { window.localStorage.setItem(this.STORE_KEY, JSON.stringify(data)); } catch {} },
@@ -83,8 +83,34 @@ const Reconnect = {
     this.reloadPage();
   },
 
+  NAV_KEY: 'sro-lean-reload-nav', MISSING_STALE_MS: 30000, COLLISION_RELOAD_CAP: 5, navStored: null,
+  watchCollision() {
+    const N = Navigation;
+    if (N.scene) {
+      N.missingSince = 0; this.collisionWait = 0;
+      if (this.navStored !== false) { try { window.localStorage.removeItem(this.NAV_KEY); } catch {} this.navStored = false; }
+      return;
+    }
+    if (N.error || !N.missingSince || now() - N.missingAt > this.MISSING_STALE_MS || !World.inWorld() || !this.busy()) { N.missingSince = 0; this.collisionWait = 0; return; }
+    if (!this.collisionWait) {
+      let n = 0; try { n = Number(JSON.parse(window.localStorage.getItem(this.NAV_KEY))?.count) || 0; } catch {}
+      if (n >= this.COLLISION_RELOAD_CAP) {
+        N.error = 'No collision data after ' + n + ' reloads; the bot stopped reloading for this. Reload the game by hand.';
+        N.missingSince = 0;
+        return;
+      }
+      this.collisionWait = Math.round(Math.min(this.COLLISION_WAIT_MS * 2 ** n, this.RELOAD_MAX_MS) * (1 + this.jitter()));
+      this.collisionCount = n;
+    }
+    if (now() - N.missingSince < this.collisionWait) return;
+    Log.warn('No collision data from the game after ' + this.waitText(now() - N.missingSince) + '; the character cannot walk. Reloading the page.');
+    this.message = 'No collision data from the game; reloading the page.';
+    N.missingSince = 0; this.collisionWait = 0;
+    try { window.localStorage.setItem(this.NAV_KEY, JSON.stringify({ count: this.collisionCount + 1, at: Date.now() })); this.navStored = true; } catch {}
+    this.reloadPage();
+  },
   active() { return !!this.intent; },
-  clear(message = '') { this.intent = null; this.attempts = 0; this.nextAt = this.waitUntil = this.backAt = this.expiredAt = 0; this.message = message; },
+  clear(message = '') { this.intent = null; this.attempts = 0; this.nextAt = this.waitUntil = this.backAt = this.expiredAt = this.pendingAt = 0; this.message = message; },
   // The player stopped the bot: a reconnect in progress, or a reload from the saved snapshot, must not bring hunting back.
   forgetHunting() {
     if (this.intent) this.intent.hunting = false;
@@ -112,6 +138,7 @@ const Reconnect = {
   tick() {
     if (!this.restored) this.restore();
     this.watchLoad();
+    this.watchCollision();
     this.snapshot();
     const i = this.intent;
     if (!i) return;
@@ -119,7 +146,18 @@ const Reconnect = {
     if (World.inWorld()) return this.back(i);
     this.backAt = 0;
     const phase = World.phase, error = String(World.session?.error || '');
-    if (['connecting', 'entering-world', 'reconnecting'].includes(phase)) { this.message = 'Reconnecting…'; return; }
+    if (['connecting', 'entering-world', 'reconnecting'].includes(phase)) {
+      if (!this.pendingAt) { this.pendingAt = now(); this.pendingWait = this.reloadWait(this.PENDING_WAIT_MS); }
+      else if (now() - this.pendingAt > this.pendingWait && !this.gaveUp) {
+        Log.warn('Reconnecting has not finished after ' + this.waitText(now() - this.pendingAt) + '; reloading the page.');
+        this.message = 'Reconnecting did not finish; reloading the page.';
+        this.pendingAt = 0;
+        if (this.reloadPage()) return;
+      }
+      if (!this.gaveUp) this.message = 'Reconnecting…';
+      return;
+    }
+    this.pendingAt = 0;
     if (['signed-out', 'listing-servers', 'loading-roster', 'authenticating'].includes(phase) || /authentication required/i.test(error)) {
       if (i.reloaded && now() - i.since < this.LOGIN_GRACE_MS) { this.message = 'The page was reloaded; waiting for the game to restore your login.'; return; }
       this.message = 'The login is gone (server restart?). Log in and enter your character again; the bot resumes when you are back.';

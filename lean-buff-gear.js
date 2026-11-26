@@ -219,7 +219,7 @@ const BuffGear = {
     const windowOpen = !!(gp?.returnScroll || gp?.storage || Restock.activeShop() || gp?.exchange?.open || gp?.exchange?.requesting || gp?.stall?.phase && gp.stall.phase !== 'none');
     if (this.run || !this.recovery || !World.inWorld() || World.isDead() || gp?.inventoryPending || World.isCasting()) return;
     // The automatic restore waits out travel and open game windows instead of saying so every tick; only a manual one explains itself.
-    if (windowOpen || !auto && Hunt.running || Town.trip || WalkBack.active || Restock.trip || Alchemy.run || Alchemy.pending) {
+    if (windowOpen || !auto && Hunt.running || Town.trip || WalkBack.active || Restock.trip || Alchemy.active()) {
       if (windowOpen && !auto) return UI.toast('Close the open trade, stall or shop before restoring gear.', 'warn');
       if (auto) return;
       return UI.toast('Stop hunting and travel before restoring gear.', 'warn');
@@ -249,7 +249,7 @@ const BuffGear = {
         World.gp?.pendingMoves || World.gp?.returnScroll || now() - Manual.lastAt < Hunt.cfg().manualPauseS * 1000 ||
         Town.trip || WalkBack.active || Restock.trip || Restock.recording || Resurrect.trip || now() < Resurrect.holdUntil ||
         Restock.activeShop() || World.gp?.storage || World.gp?.exchange?.open || World.gp?.exchange?.requesting || World.gp?.stall?.phase && World.gp.stall.phase !== 'none' ||
-        Alchemy.run || Alchemy.pending || Loot.active && !Loot.active.petGid || Loot.pressed());
+        Alchemy.active() || Loot.active && !Loot.active.petGid || Loot.pressed());
   },
   petWait() {
     if (!Loot.petInFlight()) return false;

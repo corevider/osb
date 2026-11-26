@@ -1,7 +1,33 @@
 {
   "repository": "https://github.com/nixxane/opensro-bot-lean.git",
   "branch": "main",
-  "commit": "3971917d9c9891739e77798c579950e36cb759d8",
-  "version": "1.2.272",
-  "date": "2026-11-15"
+  "commit": "eaf271c995f9c62b499b3fceebba15f48f2cc2ec",
+  "version": "1.2.289",
+  "date": "2026-11-26",
+  "skipped": [
+    {
+      "commit": "5ee4da1",
+      "reason": "Ko-fi funding link and badge for upstream's maintainer"
+    },
+    {
+      "commit": "9ecab72",
+      "reason": "auto-login after a server restart stores the account password in plain text in the browser"
+    },
+    {
+      "commit": "fe5ece3",
+      "reason": "Start and Stop from the live dashboard is a remote-control channel that needs upstream's live dashboard, which OSB does not have"
+    },
+    {
+      "commit": "dff97b1",
+      "reason": "follow-up to fe5ece3, the live dashboard control"
+    },
+    {
+      "commit": "26b2538",
+      "reason": "Reload from the live dashboard is a remote page reload that needs upstream's live dashboard"
+    },
+    {
+      "commit": "eaf271c",
+      "reason": "follow-up to 26b2538, the live dashboard reload"
+    }
+  ]
 }

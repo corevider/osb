@@ -74,7 +74,7 @@ const Quest = {
     if (Restock.trip || Restock.recording || Restock.activeShop()) return 'shopping is running';
     if (World.gp?.storage) return 'the storage is open';
     if (Stall.run || Trade.run) return 'a town session is running';
-    if (Alchemy.run || Alchemy.pending) return 'alchemy is running';
+    if (Alchemy.active()) return 'alchemy is running';
     if (BuffGear.run || BuffGear.recovery) return 'a buff gear swap is running';
     if (WalkBack.active || Travel.active) return 'a walk is running';
     if (Resurrect.trip) return 'a resurrect trip is running';

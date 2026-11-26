@@ -36,7 +36,7 @@ const Stall = {
     const gp = World.gp;
     if (!World.inWorld() || !gp || !World.local()) return 'Enter the game world first.';
     if (World.isDead()) return 'Stall stopped: character died.';
-    if (Alchemy.run || Alchemy.pending) return 'Stop alchemy and wait for its result first.';
+    if (Alchemy.active()) return 'Stop alchemy and wait for its result first.';
     if (BuffGear.run || BuffGear.recovery) return 'Restore or review combat gear first.';
     if (Hunt.running || Town.trip || WalkBack.active || Restock.trip || Restock.recording || Resurrect.trip || Controller.resumeAfterRevive) return 'Stop hunting, travel and route recording first.';
     if (Loot.active) return 'Stop collection and wait for its inventory transaction first.';
@@ -299,7 +299,7 @@ const Stall = {
       remove.className = 'mini'; remove.setAttribute('aria-label', 'Stop selling ' + name);
       prices.append(UI.row(
         el('span', name + (inBag ? ' · ' + inBag + ' in bag' : ' · not in bag'), 'item-name'),
-        UI.number(name + ' price (gold)', () => price, v => this.setPrice(item, v), 1, 4294967295),
+        UI.gold(name + ' price (gold)', () => price, v => this.setPrice(item, Math.max(1, v)), 4294967295),
         remove));
     }
     const unnamed = [...new Map(World.items().filter(i => this.price(i.refObjId) === 0 && i.tooltip?.fields?.canSell !== 0).map(i => [i.refObjId, i])).values()];

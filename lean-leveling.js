@@ -566,7 +566,7 @@ const Leveling = {
       UI.check('Raise my weapon mastery, learn its skills and use them', () => c().skills, v => { c().skills = v; c().prepared = ''; c().elements = ''; c().imbued = []; this.skillAt = 0; }),
       UI.select('Character build', () => [['auto', 'Auto (from my weapon)'], ...this.builds.filter(b => this.fits(b) || b.key === c().build).map(b => [b.key, b.label])], () => this.build()?.key || 'auto', v => this.setBuild(v)),
       about,
-      UI.number('Always keep this much gold', () => c().reserve, v => { c().reserve = v; }, 0, 100000000, 1000),
+      UI.gold('Always keep this much gold', () => c().reserve, v => { c().reserve = v; }, 100000000),
       status);
   },
 };

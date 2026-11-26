@@ -40,7 +40,7 @@ const UniqueHunt = {
     if (Quest.trip) return 'Wait for the quest visit to finish (or stop the bot).';
     if (Trade.run) return 'Stop auto trade first.';
     if (Stall.run || World.gp?.stall?.phase && World.gp.stall.phase !== 'none') return 'Close the stall first.';
-    if (Alchemy.run || Alchemy.pending) return 'Stop alchemy and wait for its result first.';
+    if (Alchemy.active()) return 'Stop alchemy and wait for its result first.';
     if (SellStar.run) return 'Wait for Sell Star to finish.';
     if (BuffGear.run || BuffGear.recovery && !BuffGear.autoRestore) return 'Restore or review combat gear first.';
     if (WalkBack.active || Travel.active || Restock.trip || Resurrect.trip || Controller.resumeAfterRevive) return 'Wait for the current walk or trip to finish (or stop the bot).';

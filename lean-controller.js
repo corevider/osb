@@ -3,7 +3,7 @@ const startHunting = Hunt.start;
 Hunt.start = function (...args) {
   // A swap cut short by death or a world change restores itself during hunting; only a review the player must do blocks the start.
   if (BuffGear.run && !BuffGear.run.restoring || BuffGear.recovery && !BuffGear.autoRestore) return UI.toast('Restore or review combat gear before hunting.', 'warn');
-  if (Alchemy.run || Alchemy.pending) return UI.toast('Stop alchemy and wait for its result before hunting.', 'warn');
+  if (Alchemy.active()) return UI.toast('Stop alchemy and wait for its result before hunting.', 'warn');
   if (Trade.run) return UI.toast('Stop auto trade before hunting.', 'warn');
   if (Stall.run) return UI.toast('Stop the stall session before hunting.', 'warn');
   if (SellStar.run) return UI.toast('Wait for Sell Star to finish (or stop the bot).', 'warn');
@@ -366,7 +366,7 @@ const Controller = {
         if (World.inWorld()) Potion.tick();
         if (BuffGear.tick()) { this.mode = 'buff gear'; return; }
       }
-      if (Alchemy.run || Alchemy.pending) { this.mode = 'alchemy'; return; }
+      if (Alchemy.active()) { this.mode = 'alchemy'; return; }
       if (Stall.run) { if (World.inWorld()) Potion.tick(); Stall.tick(); this.mode = 'stall'; return; }
       if (SellStar.run) { SellStar.tick(); this.mode = 'sell star'; return; }
       if (UniqueHunt.active && World.inWorld() && World.isDead()) UniqueHunt.stop('the character died');

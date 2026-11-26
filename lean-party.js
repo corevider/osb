@@ -152,18 +152,34 @@ const Party = {
     if (this.helperNearby()) this.helperSeenAt = now();
     return now() - this.helperSeenAt < 15000;
   },
+  townNeeds() { return this.accepting() && Settings.profile.party.resTownCheck && !this.declineFailed && (Hunt.running || !!Town.trip) ? Town.reviveNeeds() : []; },
   reviveDelay() {
+    if (this.townNeeds().length) return 5000;
     const wait = Math.min(600, Math.max(5, Number(Settings.profile.party.reviveWaitS) || 20)) * 1000;
     return this.accepting() && this.helping() ? wait : 5000;
   },
   // One plain sentence for the log when the character dies.
   waitNote() {
     if (!this.accepting()) return 'reviving in 5 s (Accept resurrection from party members is off).';
+    const needs = this.townNeeds();
+    if (needs.length) return `town needed (${needs.join(', ')}), reviving in town in 5 s; resurrections are declined.`;
     const wait = this.reviveDelay(), who = Settings.profile.party.acceptResAny ? 'player' : 'party member';
     return wait > 5000 ? `waiting ${Math.round(wait / 1000)} s for a ${who} to resurrect before reviving.` : `no ${who} in view, reviving in 5 s.`;
   },
   // Never revive while an offer is open or an acceptance was just sent.
-  resBusy() { return !!World.gp?.social?.resurrection || now() - this.consentAt < 4000; },
+  answerable() {
+    const c = Settings.profile.party, social = World.gp?.social, question = social?.resurrection;
+    if (!question || !this.accepting() || question.mutation && !c.acceptBeast || !Array.isArray(social.members)) return null;
+    const caster = World.ents.get(question.gid);
+    if (!caster?.name || caster.name === social.localName) return null;
+    const member = social.members.some(m => m?.name === caster.name);
+    if (member ? !c.acceptRes && !c.acceptResAny : !c.acceptResAny || caster.kind !== 'player') return null;
+    return { question, caster, member };
+  },
+  resBusy() {
+    const question = World.gp?.social?.resurrection;
+    return !!question && (!this.accepting() || !!this.answerable()) || now() - this.consentAt < 4000;
+  },
   resumeTick() {
     const r = this.resumeHunt;
     if (this.huntAtDeath && now() - this.huntAtDeath.at > 15 * 60000) this.huntAtDeath = null;
@@ -181,20 +197,34 @@ const Party = {
     Controller.resumeHunting('Resurrected');
   },
   // A dead character gets a Yes/No resurrection question from a caster's Rebirth skill. Party members are answered with
-  // the party option, any player with the any-player option, and only while dead; mutation proposals are left to the player.
+  // the party option, any player with the any-player option, and only while dead; beast-form (mutation) proposals only with the beast-form option.
+  declinedAt: 0, declineFailed: false,
   acceptResurrection() {
-    const c = Settings.profile.party, social = World.gp?.social, question = social?.resurrection;
-    if (!this.accepting() || !question || question.mutation || !World.inWorld() || !World.isDead() || !Array.isArray(social.members)) return;
-    const caster = World.ents.get(question.gid);
-    if (!caster?.name || caster.name === social.localName) return;
-    const member = social.members.some(m => m?.name === caster.name);
-    if (member ? !c.acceptRes && !c.acceptResAny : !c.acceptResAny || caster.kind !== 'player') return;
+    const social = World.gp?.social, question = social?.resurrection;
+    if (!this.accepting() || !World.inWorld() || !World.isDead()) { this.declinedAt = 0; this.declineFailed = false; return; }
+    if (this.declinedAt && question && !this.declineFailed && now() - this.declinedAt > 8000) {
+      this.declineFailed = true;
+      Log.info('The resurrection question stayed open after answering No; accepting resurrections again.');
+    }
+    if (this.declinedAt && !question) this.declinedAt = 0;
+    const offer = this.answerable();
+    if (!offer) return;
+    const needs = this.townNeeds(), { caster, member } = offer, beast = offer.question.mutation ? ' (beast form)' : '';
     if (!Cmd.spaced('resurrection-consent')) return;
-    if (Cmd.raw({ kind: 'resurrection-consent', accept: true }, 'Accept resurrection from ' + caster.name)) {
+    if (needs.length) {
+      if (this.declinedAt) return;
+      if (Cmd.raw({ kind: 'resurrection-consent', accept: false }, 'Decline resurrection from ' + caster.name)) {
+        this.declinedAt = now();
+        Log.info(`Resurrection from ${caster.name} declined: town needed (${needs.join(', ')}); reviving in town.`);
+        UI.toast('Resurrection declined: town needed; reviving in town', 'info', 4000);
+      }
+      return;
+    }
+    if (Cmd.raw({ kind: 'resurrection-consent', accept: true }, 'Accept resurrection' + beast + ' from ' + caster.name)) {
       this.consentAt = now();
       this.resumeHunt = this.huntAtDeath && !Hunt.running && now() - this.huntAtDeath.at < 15 * 60000 ? { at: now() } : null;
-      Log.info('Accepted resurrection from ' + caster.name + (member ? ' (party member).' : ' (not in the party).'));
-      UI.toast('Accepted resurrection from ' + caster.name, 'info', 3000);
+      Log.info('Accepted resurrection' + beast + ' from ' + caster.name + (member ? ' (party member).' : ' (not in the party).'));
+      UI.toast('Accepted resurrection' + beast + ' from ' + caster.name, 'info', 3000);
     }
   },
   inviteWait(tries) { return Math.min(600000, 30000 * 2 ** (tries - 1)); },

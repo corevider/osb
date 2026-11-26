@@ -84,7 +84,7 @@ const Equip = {
     if (ItemRules.guarded(item)) return true;
     const key = BuffGear.key(item);
     if (Settings.profile.macro.buffSets?.some(s => s.weapon === key || s.shield === key)) return true;
-    if (Alchemy.selected && Alchemy.item()?.slot === item.slot) return true;
+    if (Alchemy.protects(item)) return true;
     return ItemRules.get(item.refObjId)?.act === 'keep';
   },
   worn() {

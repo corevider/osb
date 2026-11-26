@@ -3,11 +3,11 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const source = fs.readFileSync(__dirname + '/osb.user.js', 'utf8');
 const isolated = source.slice(0, source.lastIndexOf('installWorkerHook();')) +
-  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Assets, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Protect, Assist, Town, Travel, Quest, QuestData, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, SellStar, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, Search, Equip, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, LevelSpot, ScrollBuff, boot, Ticker, Sound, LeanMap, Telemetry, Rotations, Leveling, UniqueHunt, UniqueNests, SpawnData, UniqueState, UniqueTracker, UniqueList, Emergency, Safety, HuntArea, MonsterClasses, Diag, StopCodes, Perf};\n})();';
+  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, AlchemyBuy, ALCHEMY_MERCHANT, goldText, parseGold, BuffGear, Icons, Assets, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Protect, Assist, Town, Travel, Quest, QuestData, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, SellStar, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, Search, Equip, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, LevelSpot, ScrollBuff, boot, Ticker, Sound, LeanMap, Telemetry, Rotations, Leveling, UniqueHunt, UniqueNests, SpawnData, UniqueState, UniqueTracker, UniqueList, Emergency, Safety, HuntArea, MonsterClasses, Diag, StopCodes, Perf};\n})();';
 function fixture(document, sharedStorage) {
   let time = 100000;
   const storage = sharedStorage || new Map(), commands = [], notices = [], intervals = [], timers = [];
-  const win = { addEventListener() {}, localStorage: { getItem: k => storage.get(k) ?? null, setItem: (k, v) => storage.set(k, v) } };
+  const win = { addEventListener() {}, localStorage: { getItem: k => storage.get(k) ?? null, setItem: (k, v) => storage.set(k, v), removeItem: k => storage.delete(k) } };
   const context = { window: win, document, performance: { now: () => time }, console,
     setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, clearTimeout() {}, clearInterval() {}, setInterval(fn, ms) { intervals.push({ fn, ms }); }, AbortController, Blob, FormData, URL, Map, Set, Date, ArrayBuffer, DataView, atob };
   vm.createContext(context); vm.runInContext(isolated, context);
@@ -2232,7 +2232,7 @@ test('a live application is accepted even when the local listing record is missi
     g.Controller.tick(); assert.equal(g.commands.length, 0);
   }
 });
-test('resurrection offers are accepted only from party members while dead, never mutation offers', () => {
+test('resurrection offers are accepted only from party members while dead, beast form only with its switch on', () => {
   const setup = (change = {}) => {
     const f = fixture(); f.Settings.profile.party.acceptRes = true; f.World.isDead = () => true;
     f.World.ents.set(77, { gid: 77, kind: 'player', name: 'Healer' }); f.World.ents.set(78, { gid: 78, kind: 'player', name: 'Stranger' });
@@ -2243,7 +2243,14 @@ test('resurrection offers are accepted only from party members while dead, never
   let f = setup(); assert.equal(f.Hunt.running, false); f.Controller.tick();
   assert.deepEqual(JSON.parse(JSON.stringify(answers(f))), [{ kind: 'resurrection-consent', accept: true }], 'answered with hunting stopped');
   f = setup({ resurrection: { gid: 78 } }); f.Controller.tick(); assert.equal(answers(f).length, 0);
-  f = setup({ resurrection: { gid: 77, mutation: true } }); f.Controller.tick(); assert.equal(answers(f).length, 0);
+  f = setup({ resurrection: { gid: 77, mutation: true } }); assert.equal(f.Settings.profile.party.acceptBeast, false, 'off by default');
+  f.Controller.tick(); assert.equal(answers(f).length, 0, 'default: a beast-form revival is left to the player');
+  f = setup({ resurrection: { gid: 77, mutation: true } }); f.Settings.profile.party.acceptBeast = true; f.Controller.tick();
+  assert.deepEqual(answers(f).map(a => a.accept), [true], 'a beast-form revival from a party member is accepted with its switch on');
+  assert.ok(f.notices.some(n => /beast form/.test(n)));
+  f = setup({ resurrection: { gid: 78, mutation: true } }); f.Settings.profile.party.acceptBeast = true; f.Controller.tick(); assert.equal(answers(f).length, 0, 'a stranger beast form is not answered without the any-player switch');
+  f = setup({ resurrection: { gid: 78, mutation: true } }); Object.assign(f.Settings.profile.party, { acceptBeast: true, acceptResAny: true }); f.Controller.tick();
+  assert.deepEqual(answers(f).map(a => a.accept), [true], 'with the any-player switch a stranger beast form follows the same rule');
   f = setup({ resurrection: { gid: 999 } }); f.Controller.tick(); assert.equal(answers(f).length, 0);
   f = setup(); f.World.isDead = () => false; f.Controller.tick(); assert.equal(answers(f).length, 0);
   f = setup(); f.Settings.profile.party.acceptRes = false; f.Controller.tick(); assert.equal(answers(f).length, 0);
@@ -5547,6 +5554,37 @@ test('battle scrolls are re-used only when their buff runs out', () => {
   f.ScrollBuff.tick();
   assert.match(f.ScrollBuff.message, /off/);
 });
+test('new live buff scrolls: the 2-minute scrolls come first and one stuck kind does not stop the others', () => {
+  const f = fixture();
+  Object.assign(f.Settings.profile.scroll, { damageAbs: true, hpUp: true });
+  f.World.applyGameplay({ ...f.World.gp, inventory: [
+    { slot: 13, refObjId: 3768, typeFlags: 3820, quantity: 5, name: '20% damage resistance scroll' },
+    { slot: 14, refObjId: 23276, typeFlags: 3820, quantity: 1, name: 'Damage Absorption Scroll' },
+    { slot: 15, refObjId: 23277, typeFlags: 3820, quantity: 1, name: 'HP 1000 Increase Scroll' }] });
+  f.Hunt.start();
+  const uses = () => f.commands.filter(c => c.kind === 'item-use').map(c => c.slot);
+  f.ScrollBuff.tick();
+  assert.deepEqual(uses(), [14], 'the Damage Absorption Scroll is used before the Item mall one');
+  f.advance(500);
+  f.World.applyGameplay({ ...f.World.gp, attachedEffects: [{ gid: 1, skill: 30538 }] });
+  f.ScrollBuff.tick();
+  assert.deepEqual(uses(), [14, 15], 'then the HP 1000 scroll');
+  for (let i = 0; i < 6; i++) { f.advance(100000); f.ScrollBuff.tick(); }
+  assert.match(f.ScrollBuff.message, /HP increase scroll was not confirmed after 3 attempts/);
+  const before = uses().length;
+  f.World.applyGameplay({ ...f.World.gp, attachedEffects: [] });
+  f.ScrollBuff.tick();
+  assert.deepEqual(uses().slice(before), [14], 'absorption keeps going while HP is set aside');
+  f.World.applyGameplay({ ...f.World.gp, attachedEffects: [{ gid: 1, skill: 3110 }] });
+  f.ScrollBuff.tick();
+  assert.equal(f.ScrollBuff.active('damageAbs'), true, 'the Item mall buff counts for the same kind');
+});
+test('the new buff scroll switches are off by default and old saved scroll settings load with them off', () => {
+  const f = fixture();
+  assert.deepEqual(JSON.parse(JSON.stringify(f.botProfile({}).scroll)), { damageInc: false, damageAbs: false, hpUp: false, mpUp: false, hit: false, dodge: false });
+  const old = f.botProfile({ scroll: { damageInc: true } }).scroll;
+  assert.equal(old.damageInc, true); assert.equal(old.hpUp, false); assert.equal(old.dodge, false);
+});
 test('reverse return scrolls have one switch: the Item mall one; an old merchant switch carries over', () => {
   const f = fixture();
   f.Settings.profile.potion.restock.reverse.on = true;
@@ -6015,6 +6053,37 @@ test('with Accept resurrection on and a helper in view the bot waits before revi
   assert.equal(rebirths(t.f), 1, 'a dead helper cannot resurrect us');
   t = deathFixture('revive'); t.f.Settings.profile.party.acceptRes = false; t.die(); t.offer(); t.f.advance(6000); t.f.Controller.tick(); assert.equal(rebirths(t.f), 0, 'an open resurrection offer is never answered by reviving');
 });
+test('an offer the bot leaves alone never keeps the character dead, whatever the beast-form switch says', () => {
+  const rebirths = f => f.commands.filter(c => c.kind === 'rebirth').length;
+  const left = (change, offer) => {
+    const t = deathFixture('revive'); Object.assign(t.f.Settings.profile.party, change);
+    t.f.World.ents.set(78, { gid: 78, kind: 'player', name: 'Stranger', appearanceState: [0] }); t.die();
+    t.f.World.gp.social = t.social({ resurrection: offer });
+    assert.equal(t.f.Party.resBusy(), false);
+    t.f.advance(25000); t.f.Controller.tick();
+    assert.equal(t.f.commands.filter(c => c.kind === 'resurrection-consent').length, 0, 'the offer is not answered');
+    assert.equal(rebirths(t.f), 1, 'the bot revives itself after the usual wait instead of staying dead');
+  };
+  left({}, { gid: 77, mutation: true });
+  left({ acceptBeast: true }, { gid: 78 });
+  left({ acceptBeast: false, acceptResAny: true }, { gid: 77, mutation: true });
+});
+test('an offer the bot will answer, or one with Accept resurrection off, still holds the revive back', () => {
+  let t = deathFixture('revive'); t.die(); t.offer(); assert.equal(t.f.Party.resBusy(), true, 'a member offer is answered, not revived over');
+  t = deathFixture('revive'); t.f.Settings.profile.party.acceptBeast = true; t.die(); t.f.World.gp.social = t.social({ resurrection: { gid: 77, mutation: true } });
+  assert.equal(t.f.Party.resBusy(), true, 'a beast-form offer with its switch on is answered');
+  t = deathFixture('revive'); Object.assign(t.f.Settings.profile.party, { acceptRes: false, acceptResAny: false }); t.die(); t.offer();
+  assert.equal(t.f.Party.resBusy(), true, 'everything off: the player answers');
+  t = deathFixture('revive'); Object.assign(t.f.Settings.profile.party, { acceptRes: false, acceptResAny: true }); t.die();
+  t.f.World.ents.set(78, { gid: 78, kind: 'player', name: 'Stranger', appearanceState: [0] }); t.f.World.gp.social = t.social({ resurrection: { gid: 78 } });
+  assert.equal(t.f.Party.resBusy(), true, 'the any-player rule: a stranger is answered');
+});
+test('the beast-form switch is off by default and old saved party settings load with it off', () => {
+  const f = fixture();
+  assert.equal(f.botProfile({}).party.acceptBeast, false);
+  assert.equal(f.botProfile({ party: { autoRes: true, acceptRes: true } }).party.acceptBeast, false);
+  assert.equal(f.botProfile({ party: { acceptBeast: true } }).party.acceptBeast, true);
+});
 test('the wait for a party resurrection before reviving in town is configurable', () => {
   const rebirths = f => f.commands.filter(c => c.kind === 'rebirth').length;
   let t = deathFixture('revive'); t.f.Settings.profile.party.reviveWaitS = 120; t.die();
@@ -6024,6 +6093,107 @@ test('the wait for a party resurrection before reviving in town is configurable'
   t = deathFixture('revive'); t.f.Settings.profile.party.reviveWaitS = 120; t.f.World.ents.delete(77); t.die();
   assert.match(t.f.Party.waitNote(), /no party member in view/);
   t.f.advance(6000); t.f.Controller.tick(); assert.equal(rebirths(t.f), 1, 'nobody around: the short 5 s wait is untouched');
+});
+function townDeathFixture(onDeath, { scroll = false, broken = false, potion = true } = {}) {
+  const t = deathFixture(onDeath), f = t.f;
+  const spot = { regionId: 1, x: 0, y: 0, z: 0 };
+  Object.assign(f.Settings.profile.potion.restock.town, { enabled: true, revive: true, arrival: spot, vendor: spot, smith: spot, gate: spot, storage: spot });
+  f.Town.supplies = () => [{ kind: 'vigor', refObjId: 990, low: 5, target: 50 }];
+  f.World.gp.inventory = [{ slot: 1, refObjId: 300, typeFlags: (1 << 7) | 44, durability: broken ? 0 : 40 },
+    ...(scroll ? [{ slot: 13, refObjId: 200, typeFlags: 0x09ec, quantity: 3 }] : []), ...(potion ? [{ slot: 14, refObjId: 990, quantity: 20 }] : [])];
+  return t;
+}
+const consentAnswers = f => JSON.parse(JSON.stringify(f.commands.filter(c => c.kind === 'resurrection-consent').map(c => c.accept)));
+test('town needed: reasons come from the return scroll, broken gear and potions, only with the town cycle on', () => {
+  let { f } = townDeathFixture('revive', { scroll: true });
+  assert.equal(f.Town.reviveNeeds().length, 0);
+  ({ f } = townDeathFixture('revive', { broken: true, potion: false }));
+  assert.deepEqual(JSON.parse(JSON.stringify(f.Town.reviveNeeds())), ['no return scroll', 'armor broken', 'out of vigor potions']);
+  f.Settings.profile.potion.restock.town.enabled = false; assert.equal(f.Town.reviveNeeds().length, 0, 'town cycle off: nothing to refill in town');
+  ({ f } = townDeathFixture('revive', { scroll: true })); f.World.gp.progression.gold = '0';
+  assert.deepEqual(JSON.parse(JSON.stringify(f.Town.reviveNeeds())), ['carry gold for potions, storage and repairs'], 'every reason the town cycle refuses');
+  ({ f } = townDeathFixture('revive')); f.Settings.profile.potion.restock.town.revive = false;
+  assert.equal(f.Town.reviveNeeds().length, 0, 'Revive in town off: nothing would bring the character to the town services');
+});
+test('town needed but Revive in town off: the resurrection is accepted as before, whatever On death says', () => {
+  for (const mode of ['wait', 'stop', 'revive']) {
+    const t = townDeathFixture(mode); t.f.Settings.profile.potion.restock.town.revive = false; t.die();
+    t.offer(); t.f.advance(300); t.f.Controller.tick();
+    assert.deepEqual(consentAnswers(t.f), [true], mode);
+    assert.equal(t.f.commands.filter(c => c.kind === 'rebirth').length, 0, mode + ': no revive in town');
+  }
+});
+test('town needed while hunting, end to end: No, revive in town, then the town cycle starts as a revival trip', () => {
+  for (const mode of ['wait', 'stop', 'revive']) {
+    const t = townDeathFixture(mode), f = t.f; f.UI.mount = () => {}; f.UI.draw = () => {}; f.UI.update = () => {}; f.Ticker.start = () => {};
+    f.boot(); f.Settings.profileKey = 'profile:Me';
+    t.die(); assert.equal(f.Hunt.running, true, mode + ': Revive in town keeps hunting on at death');
+    t.offer(); f.advance(300); f.Controller.tick(); assert.deepEqual(consentAnswers(f), [false], mode);
+    f.World.gp.social = { ...f.World.gp.social, resurrection: undefined };
+    f.advance(6000); f.Controller.tick(); assert.equal(f.commands.filter(c => c.kind === 'rebirth').length, 1, mode + ': revived at the return point');
+    f.bus.emit('phase', 'entering-world'); assert.equal(f.Controller.resumeAfterRevive, true, mode);
+    f.bus.emit('character', 'Me'); t.live(); f.World.gp.pose.x = 5000; f.advance(300); f.Controller.tick();
+    assert.equal(f.Town.trip?.revival, true, mode + ': town services as after any death in the field');
+  }
+});
+test('a No the game does not take is given up after 8 s: the offer is accepted, nothing deadlocks', () => {
+  const t = townDeathFixture('wait'); t.die(); t.offer(); t.f.advance(300); t.f.Controller.tick();
+  assert.deepEqual(consentAnswers(t.f), [false]);
+  t.f.advance(3000); t.f.Controller.tick(); assert.deepEqual(consentAnswers(t.f), [false], 'the No is sent once');
+  t.f.advance(6000); t.f.Controller.tick();
+  assert.deepEqual(consentAnswers(t.f), [false, true], 'question still open: accepted');
+  assert.ok(t.f.Log.lines.some(l => /stayed open after answering No/.test(l.text)));
+});
+test('town needed: the party resurrection is declined and the character revives in town without the long wait', () => {
+  const rebirths = f => f.commands.filter(c => c.kind === 'rebirth');
+  let t = townDeathFixture('wait'); t.f.Settings.profile.party.reviveWaitS = 120; t.die();
+  assert.match(t.f.Party.waitNote(), /town needed \(no return scroll\), reviving in town in 5 s/);
+  assert.equal(t.f.Party.reviveDelay(), 5000, 'no wait for a helper');
+  t.offer(); t.f.advance(300); t.f.Controller.tick();
+  assert.deepEqual(consentAnswers(t.f), [false], 'answered No');
+  assert.ok(t.f.Log.lines.some(l => /Resurrection from Healer declined: town needed \(no return scroll\); reviving in town\./.test(l.text)));
+  t.f.World.gp.social = { ...t.f.World.gp.social, resurrection: undefined };
+  t.f.advance(6000); t.f.Controller.tick();
+  assert.deepEqual(JSON.parse(JSON.stringify(rebirths(t.f).map(c => c.choice))), [1], 'revived at the return point');
+  t = townDeathFixture('revive', { scroll: true }); t.die(); t.offer(); t.f.advance(300); t.f.Controller.tick();
+  assert.deepEqual(consentAnswers(t.f), [true]);
+  t = townDeathFixture('revive'); t.f.Settings.profile.party.resTownCheck = false; t.die(); t.offer(); t.f.advance(300); t.f.Controller.tick();
+  assert.deepEqual(consentAnswers(t.f), [true]);
+});
+test('town needed while the bot is stopped: the offer is accepted as before and nothing revives in town', () => {
+  const rebirths = f => f.commands.filter(c => c.kind === 'rebirth').length;
+  const t = townDeathFixture('revive'); t.f.Hunt.stop(); t.die(); assert.equal(t.f.Hunt.running, false);
+  assert.deepEqual(JSON.parse(JSON.stringify(t.f.Party.townNeeds())), []);
+  t.offer(); t.f.advance(300); t.f.Controller.tick(); assert.deepEqual(consentAnswers(t.f), [true]);
+  t.f.World.gp.social = { ...t.f.World.gp.social, resurrection: undefined };
+  t.f.advance(30000); t.f.Controller.tick(); assert.equal(rebirths(t.f), 0, 'no self-revive while stopped');
+});
+test('town needed during a town trip: the offer is declined', () => {
+  const t = townDeathFixture('wait'); t.f.Hunt.stop(); t.die(); t.f.Town.trip = { phase: 'walk-vendor' };
+  assert.deepEqual(JSON.parse(JSON.stringify(t.f.Party.townNeeds())), ['no return scroll']);
+  t.offer(); t.f.advance(300); t.f.Controller.tick(); assert.deepEqual(consentAnswers(t.f), [false]);
+});
+test('town needed with only accept from any player on: a stranger and a member are both declined, and with it off nothing is answered', () => {
+  const setup = (change = {}) => {
+    const t = townDeathFixture('revive'); Object.assign(t.f.Settings.profile.party, { acceptRes: false, acceptResAny: true, ...change });
+    t.f.World.ents.set(78, { gid: 78, kind: 'player', name: 'Stranger', appearanceState: [0] }); t.die(); return t;
+  };
+  let t = setup(); assert.equal(t.f.Party.accepting(), true);
+  assert.equal(t.f.Party.reviveDelay(), 5000);
+  t.f.World.gp.social = t.social({ resurrection: { gid: 78 } }); t.f.advance(300); t.f.Controller.tick();
+  assert.deepEqual(consentAnswers(t.f), [false], 'stranger declined');
+  assert.ok(t.f.Log.lines.some(l => /Resurrection from Stranger declined/.test(l.text)));
+  t = setup(); t.offer(); t.f.advance(300); t.f.Controller.tick(); assert.deepEqual(consentAnswers(t.f), [false], 'party member declined');
+  t = setup({ acceptResAny: false }); t.f.World.gp.social = t.social({ resurrection: { gid: 78 } }); t.f.advance(300); t.f.Controller.tick();
+  assert.deepEqual(consentAnswers(t.f), [], 'a stranger with the switch off is left alone');
+  t = setup({ resTownCheck: false }); t.f.World.gp.social = t.social({ resurrection: { gid: 78 } }); t.f.advance(300); t.f.Controller.tick();
+  assert.deepEqual(consentAnswers(t.f), [true], 'the town check off: accepted');
+});
+test('the town check is on by default and old saved party settings load with it on', () => {
+  const f = fixture();
+  assert.equal(f.botProfile({}).party.resTownCheck, true);
+  assert.equal(f.botProfile({ party: { autoRes: true, acceptRes: true } }).party.resTownCheck, true);
+  assert.equal(f.botProfile({ party: { resTownCheck: false } }).party.resTownCheck, false);
 });
 test('an unanswered rebirth is asked again instead of latching the dead state forever', () => {
   const rebirths = f => f.commands.filter(c => c.kind === 'rebirth').length;
@@ -7743,6 +7913,42 @@ test('town movement waits for collision coverage without timing out or blindly c
   f.Navigation.install(navProduct()); f.advance(6000); f.Town.tick();
   assert.ok(f.commands.filter(c => c.kind === 'move').length > moves);
 });
+test('a town walk that never gets collision data reloads the page, keeping hunting, and waits longer each time', () => {
+  const run = (f, ms) => { for (let i = 0; i < ms / 100; i++) { f.advance(100); f.Controller.tick(); } };
+  const setup = () => { const f = townFixture(); let reloads = 0; f.Reconnect.doReload = () => { reloads++; }; f.Reconnect.jitter = () => 0; f.World.charName = 'Tester'; f.Town.begin(); f.Town.enter('walk-storage'); f.Navigation.scene = null; return { f, reloads: () => reloads }; };
+  const { f, reloads } = setup();
+  run(f, 170000); assert.ok(f.Town.trip, 'the town walk is still waiting'); assert.equal(reloads(), 0, 'waits three minutes first');
+  run(f, 15000); assert.equal(reloads(), 1);
+  const saved = JSON.parse(f.storage.get('sro-lean-reload'));
+  assert.equal(saved.pending.character, f.World.charName); assert.equal(saved.pending.hunting, true);
+  f.Reconnect.snapshot(); f.Town.enter('walk-storage');
+  run(f, 300000); assert.equal(reloads(), 1, 'the second reload in a row waits six minutes');
+  run(f, 70000); assert.equal(reloads(), 2);
+  f.Navigation.install(navProduct()); f.Controller.tick(); assert.equal(f.storage.get('sro-lean-reload-nav'), undefined, 'collision data clears the count');
+  let removes = 0; const remove = f.win.localStorage.removeItem; f.win.localStorage.removeItem = k => { removes++; remove(k); };
+  run(f, 2000); assert.equal(removes, 0, 'the count is cleared once, not on every tick');
+  const g = setup(); g.f.Town.cancel(); g.f.Hunt.stop(); run(g.f, 400000); assert.equal(g.reloads(), 0, 'an idle bot never reloads');
+  const h = setup(); run(h.f, 120000); h.f.Navigation.install(navProduct()); run(h.f, 120000); assert.equal(h.reloads(), 0, 'collision data that arrives late is fine');
+  const e = setup(); e.f.Navigation.error = 'Unsupported collision data'; run(e.f, 400000); assert.equal(e.reloads(), 0, 'data the bot cannot use is not fixed by a reload');
+});
+test('after five collision reloads in a row the bot stops reloading for that cause and says so in the status line', () => {
+  const run = (f, ms) => { for (let i = 0; i < ms / 100; i++) { f.advance(100); f.Controller.tick(); } };
+  const f = townFixture(); let reloads = 0; f.Reconnect.doReload = () => { reloads++; }; f.Reconnect.jitter = () => 0; f.World.charName = 'Tester';
+  f.Town.begin(); f.Town.enter('walk-storage'); f.Navigation.scene = null;
+  for (let n = 0; n < 5; n++) {
+    run(f, Math.min(180000 * 2 ** n, 30 * 60000) + 5000);
+    assert.equal(reloads, n + 1, 'reload ' + (n + 1));
+    f.Reconnect.snapshot(); f.Town.enter('walk-storage');
+  }
+  run(f, 3 * 3600 * 1000);
+  assert.equal(reloads, 5, 'no sixth reload');
+  assert.match(f.Navigation.error, /stopped reloading/);
+  assert.ok(f.Town.trip, 'the bot is otherwise unchanged and still waits');
+  assert.match(String(f.Town.status()), /stopped reloading/);
+  f.Navigation.install(navProduct());
+  assert.equal(f.Navigation.error, '');
+  f.Controller.tick(); assert.equal(f.storage.get('sro-lean-reload-nav'), undefined, 'a scene clears the count');
+});
 test('a stalled walk to a town service says why, in plain words and without NPC names, on the panel and in reports', () => {
   const f = townFixture(); f.Town.begin(); f.Town.enter('walk-vendor'); f.Navigation.scene = null; f.Navigation.error = 'Unsupported collision data';
   f.World.gp.pose.x = 5000; f.Town.tick();
@@ -8521,6 +8727,69 @@ test('with bag selling on, the bag sells before pet loot, so a full bag frees a 
   assert.equal(off.commands.at(-1).kind, 'cos-transfer', 'with bag selling off only pet loot sells, as before');
 });
 
+test('a nearly full bag that nothing in town empties: warned on arrival, pet still sold, then a stop that says why', () => {
+  const gear = (slot, ref) => ({ slot, refObjId: ref, typeFlags: 44 | (6 << 7), quantity: 1, name: 'Blade ' + ref, plus: 0, magic: [], tooltip: { fields: { rarity: 0 } } });
+  const kept = (slot, ref) => ({ slot, refObjId: ref, typeFlags: 108, quantity: 1, name: 'Kept ' + ref });
+  const fill = (f, make) => { const gp = f.World.gp; for (let s = 13; f.World.freeBagSlots() > 1; s++) if (!gp.inventory.some(i => i.slot === s)) gp.inventory.push(make(s, 3000 + s)); };
+  const trip = (f) => {
+    const gp = f.World.gp; f.pet.status = 6; f.pet.inventory = Array.from({ length: 6 }, (_, n) => gear(n, 1100 + n));
+    f.Town.begin(); f.Town.arrived(); f.Town.enter('sell'); gp.target = 62; gp.shop = { npc: 62 };
+    let seen = f.commands.length;
+    for (let n = 0; n < 40 && f.Town.trip?.phase === 'sell'; n++) {
+      f.Town.tick();
+      for (; seen < f.commands.length; seen++) {
+        const c = f.commands[seen];
+        if (c.kind === 'cos-transfer') { const i = f.pet.inventory.find(i => i.slot === c.source); gp.inventory.push({ ...i, slot: c.destination }); f.pet.inventory = f.pet.inventory.filter(x => x !== i); }
+        if (c.kind === 'shop-sell') gp.inventory = gp.inventory.filter(i => i.slot !== c.slot);
+      }
+      f.advance(1000);
+    }
+    assert.equal(f.Town.trip?.phase, 'repair', 'the pet loot sells and the trip carries on'); assert.equal(f.pet.inventory.length, 0);
+    gp.inventory.find(i => i.slot === 6).durability = 10; gp.inventory.find(i => i.slot === 15).quantity = 50;
+    f.Town.leave();
+  };
+  const f = townFixture(); f.Town.cfg().sellBag = false; f.Town.cfg().storeSox = false; fill(f, kept);
+  trip(f);
+  assert.ok(f.notices.some(m => /nothing in it is sold or stored/.test(m)), 'warned on arrival');
+  assert.equal(f.Town.trip, null); assert.equal(f.Hunt.running, false);
+  assert.match(f.Town.message, /Bag still full after town \(1 free slot; it needs 2\)/);
+  assert.match(f.Town.message, /Pet loot that only passes through the bag does not free space/);
+  assert.match(f.Town.message, /turn on "Sell ordinary gear from the character bag too"/);
+  const g = townFixture(); g.Town.cfg().sellBag = true; g.Town.cfg().storeSox = false; g.Items.filesLoaded = true; fill(g, kept);
+  trip(g);
+  assert.ok(g.notices.some(m => /nothing in it is sold or stored/.test(m)));
+  assert.match(g.Town.message, /only ordinary Chinese \/ European gear sells from the bag/);
+  const h = townFixture(); h.Town.cfg().sellBag = true; h.Town.cfg().storeSox = false; h.Items.filesLoaded = true;
+  fill(h, (s, r) => { h.Items.data.set(r, { name: 'Sword', code: 'ITEM_CH_SWORD_01_A' }); return gear(s, r); });
+  trip(h);
+  assert.equal(h.notices.some(m => /nothing in it is sold or stored/.test(m)), false, 'no warning when the bag sells');
+  assert.doesNotMatch(h.Town.message, /stopped/);
+  const k = townFixture(); k.Town.cfg().sellBag = false; fill(k, kept); k.ItemRules.set([3020], { act: 'store' });
+  assert.equal(k.Town.bagClearable(), true);
+  const u = townFixture(); u.Town.cfg().sellBag = true; fill(u, kept); u.Items.filesLoaded = false;
+  assert.equal(u.Town.bagClearable(), true, 'unknown codenames never warn');
+});
+
+test('a full bag that OSB empties through the pet-loot rules gives no warning, and without them it does', () => {
+  const gear = (slot, ref) => ({ slot, refObjId: ref, typeFlags: 44 | (6 << 7), quantity: 1, name: 'Blade ' + ref, plus: 0, magic: [], tooltip: { fields: { rarity: 0 } } });
+  const kept = (slot, ref) => ({ slot, refObjId: ref, typeFlags: 108, quantity: 1, name: 'Kept ' + ref });
+  const setup = (rule) => {
+    const f = townFixture(), gp = f.World.gp; f.Town.cfg().sellBag = false; f.Town.cfg().storeSox = false; f.Items.filesLoaded = true;
+    f.Items.data.set(1100, { name: 'Sword', code: 'ITEM_CH_SWORD_01_A' });
+    let slot = 14; while (f.World.freeBagSlots() > 2) { gp.inventory.push(kept(slot, 3000 + slot)); slot++; }
+    const loot = gear(slot, 1100); gp.inventory.push(loot);
+    if (rule === 'drained') f.ItemRules.drained.add(f.ItemRules.drainKey(loot));
+    if (rule === 'store') { f.Town.cfg().storage = true; f.ItemRules.drained.add(f.ItemRules.drainKey(loot)); f.ItemRules.set([1100], { act: 'store' }); }
+    return f;
+  };
+  let f = setup('none'); assert.equal(f.World.freeBagSlots() <= 1, true);
+  assert.equal(f.Town.bagClearable(), false, 'the same bag of the same gear is stuck without the pet-loot rules');
+  f = setup('drained'); assert.equal(f.Town.sellableDrained(f.World.items().find(i => i.refObjId === 1100)), true);
+  assert.equal(f.Town.bagClearable(), true, 'pet loot moved into the bag is sold from it');
+  f.Town.begin(); f.Town.arrived();
+  assert.equal(f.notices.some(m => /nothing in it is sold or stored/.test(m)), false, 'no warning on arrival');
+  f = setup('store'); assert.equal(f.Town.bagClearable(), true, 'pet loot moved into the bag is stored from it');
+});
 test('pet summon scrolls and flutes are never sold, from the pet or the bag, even with a Sell rule', () => {
   const summons = [
     { refObjId: 9000, typeFlags: 12 | (2 << 5) | (1 << 7) | (2 << 11), quantity: 1, name: 'Rabbit summon scroll' },
@@ -9559,6 +9828,362 @@ test('the stone fusion limit is optional: off by default, and a set limit stops 
   const g = stoneFixture(); g.Alchemy.cfg().stoneLimit = 3; g.Alchemy.start(true); g.Alchemy.run.stoneAttempts = 3; g.advance(1500); g.Controller.tick();
   assert.equal(g.Alchemy.run, null); assert.match(g.Alchemy.message, /Stopped after 3 stone fusions \(your limit\)/);
 });
+function blueFixture({ maxMagic = 4, stones = 5 } = {}) {
+  const f = alchemyFixture();
+  const refs = [{ paramId: 70, optionName: 'MATTR_STR' }, { paramId: 76, optionName: 'MATTR_INT' }, { paramId: 77, optionName: 'MATTR_LUCK' }];
+  f.World.gp.inventory = f.World.gp.inventory.map(i => i.slot === 13 ? { ...i, magicReferences: refs, tooltip: { fields: { itemClass: 25, maxMagicOptions51c: maxMagic } } } : i);
+  f.World.gp.inventory.push({ slot: 20, refObjId: 6687, typeFlags: 0x0dec, quantity: stones }, { slot: 21, refObjId: 6699, typeFlags: 0x0dec, quantity: stones });
+  f.Alchemy.select(13);
+  const have = {};
+  f.blue = (slot, param, value, error = null) => {
+    const gp = f.World.gp; if (error === null || error === 0x23) { if (value !== undefined) have[param] = value; }
+    const used = error === null || error === 0x23;
+    const inventory = gp.inventory.map(i => used && i.slot === slot ? { ...i, quantity: i.quantity - 1 } : i.slot === 13 ? { ...i, magic: Object.entries(have).filter(([, v]) => v).map(([id, v]) => String((BigInt(v) << 32n) | BigInt(id))) } : i);
+    f.World.applyGameplay({ ...gp, inventory, inventoryPending: false, alchemy: { ...gp.alchemy, pending: false, flags: error === null ? 0x10 : 0, slot: 13, error } });
+    f.Controller.tick();
+  };
+  return f;
+}
+test('blue stones: the data has every blue with its D9 stone, values and items', () => {
+  const f = blueFixture(), A = f.Alchemy;
+  assert.equal(A.blueStone('MATTR_STR', 9).slot, 20, 'the D9 Str stone');
+  assert.deepEqual([...A.blueValues('MATTR_STR', 9)], [1, 2, 3, 4, 5, 6]);
+  const weapon = A.item();
+  assert.ok(A.blues(weapon).includes('MATTR_STR') && A.blues(weapon).includes('MATTR_HR'));
+  assert.equal(A.blues(weapon).includes('MATTR_HP'), false, 'HP does not go on weapons');
+  const helm = { ...weapon, typeFlags: 44 | (1 << 7) | (1 << 11) }, boots = { ...weapon, typeFlags: 44 | (1 << 7) | (6 << 11) };
+  assert.equal(A.kind(helm), 'armor'); assert.ok(A.blues(helm).includes('MATTR_HP'), 'HP goes on a helm');
+  assert.equal(A.blues(boots).includes('MATTR_HP'), false, 'but not on boots');
+  A.cfg().blue.targets.MATTR_STR = 99; assert.equal(A.blueTarget('MATTR_STR', A.cfg(), 9), 6, 'a goal above what the degree rolls is pulled down');
+});
+test('blue stones: fuses the D9 stone until the blue reaches its value, rolling it again when it comes out low', () => {
+  const f = blueFixture(); f.Settings.profile.alchemy.blue.targets.MATTR_STR = 4;
+  f.Alchemy.startBlues(); f.Controller.tick();
+  assert.deepEqual(sent(f), { kind: 'alchemy-start', mode: 'magic', slots: [13, 20] });
+  for (let n = 0; n < 8; n++) { f.advance(100); f.Controller.tick(); }
+  assert.equal(f.commands.length, 1, 'nothing more is sent before the result');
+  f.blue(20, 70, 2); assert.match(f.Alchemy.message, /Str is now 2/);
+  f.advance(1500); f.Controller.tick(); assert.equal(f.commands.length, 2, 'below 4, so it is rolled again');
+  f.blue(20, 70, undefined, 0x23); assert.match(f.Alchemy.message, /fusion failed/);
+  f.advance(1500); f.Controller.tick(); assert.equal(f.commands.length, 3, 'a failed fusion goes on');
+  f.blue(20, 70, 5); f.advance(1500); f.Controller.tick();
+  assert.equal(f.Alchemy.run, null); assert.match(f.Alchemy.message, /Every wanted blue is reached/);
+  assert.equal(f.Alchemy.result.blueFused, 3); assert.equal(f.Alchemy.result.stoneFailures, 1);
+  assert.ok(f.Alchemy.log.some(l => /Str: 0 → 2/.test(l.text)));
+});
+test('blue stones: a new blue without a free slot is passed over, and a 0x22 refusal passes it over too', () => {
+  const full = blueFixture({ maxMagic: 0 }); full.Settings.profile.alchemy.blue.targets.MATTR_STR = 1;
+  full.Alchemy.startBlues(); full.Controller.tick();
+  assert.equal(full.commands.filter(c => c.kind === 'alchemy-start').length, 0, 'nothing is sent');
+  assert.match(full.Alchemy.message, /No free magic slot for Str/);
+  const f = blueFixture(); f.World.gp.inventory = f.World.gp.inventory.map(i => i.slot === 13 ? { ...i, tooltip: { fields: { itemClass: 25 } } } : i);
+  Object.assign(f.Settings.profile.alchemy.blue.targets, { MATTR_STR: 1, MATTR_INT: 1 });
+  f.Alchemy.startBlues(); f.Controller.tick(); assert.deepEqual(sent(f), { kind: 'alchemy-start', mode: 'magic', slots: [13, 20] }, 'the slot count is unknown, so it is tried');
+  f.blue(20, 70, undefined, 0x22); assert.ok(f.Alchemy.run, 'not a stop');
+  f.advance(1500); f.Controller.tick(); assert.deepEqual(sent(f), { kind: 'alchemy-start', mode: 'magic', slots: [13, 21] }, 'Int is done instead');
+  f.blue(21, 76, 3); f.advance(1500); f.Controller.tick();
+  assert.equal(f.Alchemy.run, null); assert.match(f.Alchemy.message, /Every wanted blue is reached/);
+  const other = blueFixture(); other.Settings.profile.alchemy.blue.targets.MATTR_STR = 1; other.Alchemy.startBlues(); other.Controller.tick();
+  other.blue(20, 70, undefined, 0x21); assert.equal(other.Alchemy.run, null, 'other refusals still stop'); assert.match(other.Alchemy.message, /refused by the game \(code 33/);
+});
+test('blue stones: running out stops with the stones named, and a blue stone limit stops the run', () => {
+  const f = blueFixture({ stones: 1 }); f.Settings.profile.alchemy.blue.targets.MATTR_STR = 6;
+  f.Alchemy.startBlues(); f.Controller.tick(); f.blue(20, 70, 2); f.advance(1500); f.Controller.tick();
+  assert.equal(f.Alchemy.run, null); assert.match(f.Alchemy.message, /No Str stone of degree 9 in the bag/);
+  const g = blueFixture(); g.Settings.profile.alchemy.blue = { targets: { MATTR_STR: 6 }, limit: 2 };
+  g.Alchemy.startBlues(); g.Controller.tick(); g.blue(20, 70, 1); g.advance(1500); g.Controller.tick(); g.blue(20, 70, 1); g.advance(1500); g.Controller.tick();
+  assert.equal(g.Alchemy.run, null); assert.match(g.Alchemy.message, /Stopped after 2 blue stones/);
+});
+function queueFixture() {
+  const f = blueFixture();
+  f.World.gp.inventory.push({ slot: 22, refObjId: 101, typeFlags: 44 | (6 << 7), plus: 0, durability: 100, variance: '0', magic: [], quantity: 1, name: 'Second weapon',
+    magicReferences: [{ paramId: 70, optionName: 'MATTR_STR' }], tooltip: { fields: { itemClass: 25, maxMagicOptions51c: 4 } } });
+  const A = f.Alchemy, cfg = f.Settings.profile.alchemy;
+  cfg.target = 0; A.addRow(13); A.addRow(22);
+  cfg.queue[0].goals.target = 1; cfg.queue[1].goals.blue.targets.MATTR_STR = 1;
+  f.blue22 = () => {
+    const gp = f.World.gp;
+    const inventory = gp.inventory.map(i => i.slot === 20 ? { ...i, quantity: i.quantity - 1 } : i.slot === 22 ? { ...i, magic: [String((3n << 32n) | 70n)] } : i);
+    f.World.applyGameplay({ ...gp, inventory, inventoryPending: false, alchemy: { ...gp.alchemy, pending: false, flags: 0x10, slot: 22, error: null } });
+    f.Controller.tick();
+  };
+  return f;
+}
+test('the unique hunt does not start while the alchemy queue or material buying is running', () => {
+  const f = queueFixture();
+  f.Alchemy.run = null; f.Alchemy.pending = null; f.Alchemy.queue = null; f.AlchemyBuy.run = null;
+  assert.notEqual(f.UniqueHunt.blocked(), 'Stop alchemy and wait for its result first.', 'idle alchemy does not block');
+  f.Alchemy.queue = { row: f.Alchemy.rows()[0], step: 'plus', done: 0 };
+  assert.equal(f.UniqueHunt.blocked(), 'Stop alchemy and wait for its result first.', 'between queue steps');
+  f.Alchemy.queue = null; f.AlchemyBuy.run = { phase: 'walk' };
+  assert.equal(f.UniqueHunt.blocked(), 'Stop alchemy and wait for its result first.', 'while buying materials');
+  f.AlchemyBuy.run = null;
+});
+test('a queued alchemy item that came from the pet is neither sold nor stored on a town trip', () => {
+  const f = townFixture(), gp = f.World.gp;
+  const weapon = { slot: 40, refObjId: 4321, typeFlags: 44 | (6 << 7), plus: 0, durability: 100, variance: '0', magic: [], quantity: 1, name: 'Pet weapon' };
+  gp.inventory.push(weapon); f.ItemRules.set([4321], { act: 'sell' });
+  f.ItemRules.drained.add(f.ItemRules.drainKey(weapon));
+  assert.equal(f.Alchemy.selected, null);
+  const sellable = () => f.Town.sellableDrained(f.World.items().find(i => i.slot === 40));
+  assert.equal(sellable(), true, 'pet loot with a Sell rule is sold');
+  f.Settings.profile.alchemy.queue.push({ refObjId: 4321, slot: 40, goals: {} });
+  assert.equal(f.Alchemy.protects(f.World.items().find(i => i.slot === 40)), true);
+  assert.equal(sellable(), false, 'a queued item is kept even when it is not the selected one');
+});
+test('alchemy queue: items are done in order, Plus then White then Blue, and the queue closes the window at the end', () => {
+  const f = queueFixture(), A = f.Alchemy, cfg = f.Settings.profile.alchemy;
+  assert.deepEqual([...cfg.queue.map(r => r.slot)], [13, 22]);
+  assert.equal(cfg.queue[0].goals === cfg.queue[1].goals, false, 'each row has its own goals');
+  A.startQueue(); f.Controller.tick();
+  assert.deepEqual(sent(f), { kind: 'alchemy-start', mode: 'reinforce', slots: [13, 14] }, 'the first item is enhanced first');
+  assert.equal(A.rowStatus.get(cfg.queue[0]), 'Running: Plus');
+  f.result(0x10, 1);
+  assert.equal(A.run, null); assert.ok(A.queue, 'the queue goes on');
+  assert.equal(A.rowStatus.get(cfg.queue[0]), 'Plus done');
+  f.Controller.tick(); assert.equal(f.commands.filter(c => c.kind === 'alchemy-start').length, 1, 'the delay runs first');
+  f.advance(1500); f.Controller.tick(); assert.equal(A.rowStatus.get(cfg.queue[0]), 'Done', 'nothing else to do on it');
+  f.advance(1500); f.Controller.tick();
+  assert.deepEqual(sent(f), { kind: 'alchemy-start', mode: 'magic', slots: [22, 20] }, 'then the second item\'s blue');
+  f.blue22(); f.advance(1500); f.Controller.tick(); f.advance(1500); f.Controller.tick();
+  assert.equal(A.queue, null); assert.match(A.message, /Queue finished: 2 done\./);
+  assert.equal(f.commands.at(-1).kind, 'alchemy-close');
+  assert.equal(A.result.elixirs, 1); assert.equal(A.result.blueFused, 1, 'the results add up over the queue');
+});
+test('alchemy queue: an item out of materials is skipped, or the queue stops when asked', () => {
+  const f = queueFixture(); f.World.gp.inventory = f.World.gp.inventory.filter(i => i.slot !== 14);
+  f.Alchemy.startQueue(); f.Controller.tick();
+  assert.match(f.Alchemy.rowStatus.get(f.Settings.profile.alchemy.queue[0]), /Skipped: No selected weapon elixirs/);
+  f.advance(1500); f.Controller.tick();
+  assert.deepEqual(sent(f), { kind: 'alchemy-start', mode: 'magic', slots: [22, 20] }, 'the next item is done');
+  const g = queueFixture(); g.World.gp.inventory = g.World.gp.inventory.filter(i => i.slot !== 14); g.Settings.profile.alchemy.onMissing = 'stop';
+  g.Alchemy.startQueue(); g.Controller.tick();
+  assert.equal(g.Alchemy.queue, null); assert.match(g.Alchemy.message, /Test weapon: No selected weapon elixirs/);
+  assert.equal(g.commands.filter(c => c.kind === 'alchemy-start').length, 0);
+});
+test('alchemy queue: an item no longer in its bag slot is passed over', () => {
+  const f = queueFixture(); f.World.gp.inventory = f.World.gp.inventory.map(i => i.slot === 13 ? { ...i, slot: 30 } : i);
+  f.Alchemy.startQueue(); f.Controller.tick();
+  assert.match(f.Alchemy.rowStatus.get(f.Settings.profile.alchemy.queue[0]), /Skipped: Not in bag slot 13/);
+});
+test('alchemy queue: manual control, editing the running item\'s goals and a reset stop the whole queue', () => {
+  const f = queueFixture(); f.Alchemy.startQueue(); f.Controller.tick(); f.result(0x10, 1);
+  f.Manual.lastAt = 999999; f.advance(1500); f.Controller.tick();
+  assert.equal(f.Alchemy.queue, null, 'stopped between two steps'); assert.equal(f.commands.filter(c => c.kind === 'alchemy-start').length, 1);
+  const g = queueFixture(); g.Alchemy.startQueue(); g.Controller.tick(); g.result(0x10, 1); g.advance(1500); g.Controller.tick();
+  g.advance(1500); g.Controller.tick(); assert.equal(g.commands.at(-1).mode, 'magic');
+  g.Settings.profile.alchemy.queue[1].goals.blue.targets.MATTR_STR = 6; g.advance(100); g.Controller.tick();
+  assert.equal(g.Alchemy.queue, null); assert.match(g.Alchemy.message, /settings, character or manual control changed/);
+  const h = queueFixture(); h.Alchemy.startQueue(); h.Controller.tick(); h.bus.emit('reset');
+  assert.equal(h.Alchemy.queue, null); assert.equal(h.Alchemy.active(), false);
+  assert.equal(h.Alchemy.rowStatus.get(h.Settings.profile.alchemy.queue[0]), 'Stopped');
+});
+test('alchemy queue: rows are added once, kept in order and locked while it runs; other features see it as busy', () => {
+  const f = queueFixture(), A = f.Alchemy, rows = () => [...f.Settings.profile.alchemy.queue.map(r => r.slot)];
+  A.addRow(13); assert.deepEqual(rows(), [13, 22], 'an item is added once');
+  A.addRow(14); assert.deepEqual(rows(), [13, 22], 'only gear');
+  A.moveRow(1, -1); assert.deepEqual(rows(), [22, 13]); assert.equal(A.editRow, 0);
+  A.startQueue(); A.removeRow(0); A.moveRow(0, 1); assert.deepEqual(rows(), [22, 13], 'locked while it runs');
+  assert.equal(A.active(), true); A.run = null; assert.equal(A.active(), true, 'between steps too');
+  A.stop(); A.removeRow(0); assert.deepEqual(rows(), [13]);
+});
+test('queued alchemy items are kept in the bag like the selected one', () => {
+  const f = queueFixture(), A = f.Alchemy, second = f.World.items().find(i => i.slot === 22);
+  A.selected = null;
+  assert.equal(A.protects(second), true, 'a queued item');
+  assert.equal(A.protects({ ...second, refObjId: 999 }), false, 'another item in that slot is not');
+  assert.equal(A.protects(f.World.items().find(i => i.slot === 14)), false, 'elixirs are not');
+  A.select(13); A.removeRow(0); assert.equal(A.protects(f.World.items().find(i => i.slot === 13)), true, 'the selected item still is');
+});
+const BUY_ELIXIR = { refObjId: 3679, name: 'Elixir (weapon)', tab: 0, slot: 1, price: '1000000', maxStack: 50 };
+const BUY_STR = { refObjId: 6687, name: 'Str stone', tab: 2, slot: 0, price: '2000000', maxStack: 20 };
+function buyFixture({ offers = [BUY_ELIXIR, BUY_STR], gold = '200000000', answer = true } = {}) {
+  const f = queueFixture(), gp = () => f.World.gp, b = f.Settings.profile.alchemy.buy;
+  b.on = true; b.spend = 20000000;
+  const pose = f.World.pose(), npc = { gid: 500, kind: 'npc', name: 'OpenSRO Alchemy - Jangan', refObjId: 9999, regionId: pose.regionId, x: pose.x + 20, y: pose.y, z: pose.z };
+  f.World.ents.set(npc.gid, npc);
+  gp().progression.gold = gold; gp().alchemy.visible = false;
+  const stats = { buys: [] };
+  f.step = (ms = 600) => {
+    f.advance(ms); f.Controller.tick();
+    const g = gp();
+    for (const cmd of f.commands.splice(0)) {
+      if (cmd.kind === 'select') g.target = cmd.gid;
+      else if (cmd.kind === 'shop-open') { stats.opens = (stats.opens || 0) + 1; g.shopCompletionRevision++; g.shop = { npc: cmd.gid, offers }; }
+      else if (cmd.kind === 'npc-close') { g.shop = null; g.target = 0; }
+      else if (cmd.kind === 'alchemy-close') g.alchemy = { ...g.alchemy, visible: false };
+      else if (cmd.kind === 'alchemy-open') g.alchemy = { ...g.alchemy, visible: true };
+      else if (cmd.kind === 'shop-buy') {
+        stats.buys.push({ tab: cmd.tab, slot: cmd.slot, quantity: cmd.quantity });
+        if (!answer) continue;
+        const offer = offers.find(o => o.tab === cmd.tab && o.slot === cmd.slot);
+        g.progression.gold = String(BigInt(g.progression.gold) - BigInt(offer.price) * BigInt(cmd.quantity));
+        const row = g.inventory.find(i => i.refObjId === offer.refObjId);
+        if (row) row.quantity += cmd.quantity;
+        else g.inventory.push({ slot: 40 + g.inventory.length, refObjId: offer.refObjId, typeFlags: offer.typeFlags ?? 0x0dec, quantity: cmd.quantity });
+      } else f.sentLater = (f.sentLater || []).concat(cmd);
+    }
+  };
+  f.stats = stats;
+  return f;
+}
+test('alchemy buying: the shopping list follows the queued goals, at each item degree, up to the amounts set', () => {
+  const f = buyFixture(), list = f.AlchemyBuy.shortfall(f.Settings.profile.alchemy.queue);
+  assert.deepEqual(JSON.parse(JSON.stringify(list.map(n => [n.label, n.missing, n.refs]))), [['weapon elixir', 40, [3675, 3679]], ['Str stone (degree 9)', 15, [6687]]]);
+  const g = f.Settings.profile.alchemy.queue[0].goals; g.powder = true; g.use.astral = true;
+  const labels = f.AlchemyBuy.shortfall(f.Settings.profile.alchemy.queue).map(n => n.label);
+  assert.ok(labels.includes('lucky powder (degree 9)') && labels.includes('Astral stone (degree 9)'));
+  assert.ok(labels.includes('Immortal stone (degree 9)'), 'Astral charges need Immortal ones');
+  f.Settings.profile.alchemy.buy.stock.blue = 0;
+  assert.equal(f.AlchemyBuy.shortfall(f.Settings.profile.alchemy.queue).some(n => /Str/.test(n.label)), false, 'an amount of 0 buys none');
+});
+test('alchemy buying: the queue first buys within the gold limit, closes the shop, then starts', () => {
+  const f = buyFixture();
+  f.Alchemy.startQueue();
+  for (let i = 0; i < 30 && f.AlchemyBuy.run; i++) f.step();
+  assert.deepEqual(JSON.parse(JSON.stringify(f.stats.buys)), [{ tab: 0, slot: 1, quantity: 20 }], '20 million buys 20 elixirs, nothing is left for Str');
+  assert.equal(f.World.gp.shop, null, 'the shop is closed');
+  assert.ok(f.Alchemy.log.some(l => /^Done buying\. Bought 20 weapon elixir for 20.000.000 gold\. Not bought: weapon elixir \(gold limit\), Str stone \(degree 9\) \(gold limit\)/.test(l.text)));
+  assert.ok(f.Alchemy.queue, 'the queue goes on');
+  for (let i = 0; i < 10 && !f.commands.some(c => c.mode === 'reinforce') && !(f.sentLater || []).some(c => c.mode === 'reinforce'); i++) f.step();
+  assert.ok((f.sentLater || []).concat(f.commands).some(c => c.kind === 'alchemy-start' && c.mode === 'reinforce'), 'then the first item is enhanced');
+});
+test('alchemy buying: the gold to keep is never spent, and what the merchant does not sell is named', () => {
+  const f = buyFixture({ offers: [BUY_STR], gold: '16000000' });
+  f.Alchemy.startQueue();
+  for (let i = 0; i < 30 && f.AlchemyBuy.run; i++) f.step();
+  assert.deepEqual(JSON.parse(JSON.stringify(f.stats.buys)), [{ tab: 2, slot: 0, quantity: 7 }], '15 million above the million to keep buys 7 at 2 million');
+  assert.equal(f.World.gp.progression.gold, '2000000', 'the million to keep is never touched');
+  assert.ok(f.Alchemy.log.some(l => /Not bought: weapon elixir \(not sold here\)/.test(l.text)));
+  const poor = buyFixture({ gold: '1000000' }); poor.Alchemy.startQueue();
+  assert.equal(poor.AlchemyBuy.run, null); assert.ok(poor.Alchemy.log.some(l => /Not buying: Not enough gold/.test(l.text)));
+});
+test('a queued item never needs its elixir picked by hand', () => {
+  const f = queueFixture(), cfg = f.Settings.profile.alchemy;
+  f.World.gp.inventory = f.World.gp.inventory.map(i => i.slot === 14 ? { ...i, refObjId: 3675 } : i);
+  assert.equal(cfg.queue[0].goals.elixir, 0, 'a new row starts on any elixir of its kind');
+  cfg.queue[0].goals.elixir = 3679;
+  f.Alchemy.startQueue(); f.Controller.tick();
+  assert.deepEqual(JSON.parse(JSON.stringify(f.commands.at(-1))), { kind: 'alchemy-start', mode: 'reinforce', slots: [13, 14] }, 'the A elixir in the bag is used');
+  const g = queueFixture(); g.World.gp.inventory.push({ slot: 30, refObjId: 3675, typeFlags: 0x0d6c, quantity: 5 });
+  g.Settings.profile.alchemy.queue[0].goals.elixir = 3679;
+  g.Alchemy.startQueue(); g.Controller.tick(); assert.equal(g.commands.at(-1).slots[1], 14, 'the picked B elixir');
+  g.Settings.profile.alchemy.queue.length = 0; g.Alchemy.stop();
+});
+test('a shield in the queue uses and buys shield elixirs, even when the last goals named a weapon elixir', () => {
+  const SHIELD_ELIXIR = { refObjId: 3680, name: 'Elixir (shield)', tab: 0, slot: 2, price: '1000000', maxStack: 50, typeFlags: 0x0d6c };
+  const f = buyFixture({ offers: [BUY_ELIXIR, SHIELD_ELIXIR] }), cfg = f.Settings.profile.alchemy;
+  f.World.gp.inventory.push({ slot: 25, refObjId: 102, typeFlags: 44 | (4 << 7) | (1 << 11), plus: 0, durability: 100, variance: '0', magic: [], quantity: 1, name: 'Test shield', tooltip: { fields: { itemClass: 25 } } });
+  cfg.queue.length = 0; cfg.elixir = 3679; f.Alchemy.addRow(25);
+  assert.equal(f.Alchemy.kind(f.World.items().find(i => i.slot === 25)), 'shield');
+  assert.equal(cfg.queue[0].goals.elixir, 0, 'a weapon elixir is not kept on a shield');
+  cfg.queue[0].goals.elixir = 3679; cfg.queue[0].goals.target = 1;
+  const list = f.AlchemyBuy.shortfall(cfg.queue);
+  assert.deepEqual(JSON.parse(JSON.stringify(list.map(n => [n.label, n.refs]))), [['shield elixir', [3676, 3680]]], 'an old saved weapon elixir still buys shield ones');
+  f.Alchemy.startQueue();
+  for (let i = 0; i < 30 && f.AlchemyBuy.run; i++) f.step();
+  assert.deepEqual(JSON.parse(JSON.stringify(f.stats.buys.map(b => b.slot))), [2], 'the shield elixir offer');
+  for (let i = 0; i < 10 && !(f.sentLater || []).some(c => c.mode === 'reinforce'); i++) f.step();
+  const sent = (f.sentLater || []).find(c => c.mode === 'reinforce');
+  assert.ok(sent, 'the shield is enhanced'); assert.equal(f.World.items().find(i => i.slot === sent.slots[1]).refObjId, 3680);
+});
+test('alchemy buying: stones that keep running out are bought again until the queue gold limit', () => {
+  const f = buyFixture({ offers: [BUY_STR] }), cfg = f.Settings.profile.alchemy;
+  f.World.gp.inventory = f.World.gp.inventory.filter(i => i.slot !== 20 && i.slot !== 14);
+  cfg.queue[0].goals.target = 0; cfg.queue[1].goals.blue.targets.MATTR_STR = 6;
+  cfg.buy.stock.blue = 1; cfg.buy.spend = 6000000;
+  const answer = () => {
+    const sent = (f.sentLater || []).splice(0).filter(c => c.kind === 'alchemy-start');
+    for (const c of sent) {
+      const g = f.World.gp, inventory = g.inventory.map(i => i.slot === c.slots[1] ? { ...i, quantity: i.quantity - 1 } : i).filter(i => i.quantity > 0);
+      f.World.applyGameplay({ ...g, inventory, inventoryPending: false, alchemy: { ...g.alchemy, pending: false, flags: 0, slot: c.slots[0], error: 0x23 } });
+    }
+  };
+  f.Alchemy.startQueue();
+  for (let i = 0; i < 200 && f.Alchemy.queue; i++) { f.step(1000); answer(); }
+  assert.equal(f.stats.buys.length, 3, '6 million buys three Str stones, one per visit');
+  assert.ok(f.Alchemy.log.some(l => /The gold limit of this queue \(6\.000\.000\) is used up/.test(l.text)));
+  assert.match(f.Alchemy.rowStatus.get(cfg.queue[1]), /Skipped: No Str stone/);
+  assert.equal(f.World.gp.progression.gold, String(200000000 - 6000000), 'never more than the queue limit');
+});
+test('alchemy buying: the merchant is remembered once seen and walked to from further away', () => {
+  const f = buyFixture(); f.Alchemy.startQueue(); f.step();
+  const saved = f.Settings.profile.alchemy.buy.merchant;
+  assert.equal(saved.refObjId, 9999);
+  f.Alchemy.stop(); for (let i = 0; i < 10 && f.AlchemyBuy.run; i++) f.step();
+  const npc = f.World.ents.get(500); f.World.ents.delete(500);
+  let walked = null; f.WalkBack.startTo = (dest, opts) => { walked = dest; f.World.ents.set(500, npc); f.World.gp.pose = { ...f.World.gp.pose }; opts.onDone?.(); return false; };
+  f.World.gp.pose = { ...f.World.pose(), x: f.World.pose().x + 1000 };
+  f.Alchemy.startQueue(); assert.ok(f.AlchemyBuy.run, 'the saved spot is enough to start');
+  for (let i = 0; i < 5 && !walked; i++) f.step();
+  assert.equal(walked?.refObjId, 9999, 'it walks to the saved merchant');
+  assert.equal(f.botProfile({ alchemy: { buy: { merchant: { refObjId: 'x' } } } }).alchemy.buy.merchant, null, 'a broken saved spot is dropped');
+});
+test('alchemy buying: an unconfirmed purchase is never repeated, and far from the merchant nothing is bought', () => {
+  const f = buyFixture({ answer: false });
+  f.Alchemy.startQueue();
+  for (let i = 0; i < 40 && f.AlchemyBuy.run; i++) f.step();
+  assert.equal(f.stats.buys.length, 1, 'sent once');
+  assert.ok(f.Alchemy.log.some(l => /was not confirmed; nothing was repeated/.test(l.text)));
+  const far = buyFixture(); far.World.ents.delete(500);
+  far.Alchemy.startQueue();
+  assert.equal(far.AlchemyBuy.run, null); assert.ok(far.Alchemy.log.some(l => /Not buying: The alchemy merchant is not known here/.test(l.text)));
+  const off = buyFixture(); off.Settings.profile.alchemy.buy.on = false; off.Alchemy.startQueue(); assert.equal(off.AlchemyBuy.run, null);
+});
+test('alchemy buying: an item that runs out buys once more, then is skipped; Stop ends the visit', () => {
+  const f = buyFixture({ offers: [BUY_STR] }); f.World.gp.inventory = f.World.gp.inventory.filter(i => i.slot !== 14);
+  f.Settings.profile.alchemy.buy.stock.blue = 5;
+  f.Alchemy.startQueue();
+  for (let i = 0; i < 60 && f.Alchemy.rowStatus.get(f.Settings.profile.alchemy.queue[0]) !== undefined && !/Skipped/.test(f.Alchemy.rowStatus.get(f.Settings.profile.alchemy.queue[0])); i++) f.step(1000);
+  assert.match(f.Alchemy.rowStatus.get(f.Settings.profile.alchemy.queue[0]), /Skipped: No selected weapon elixirs/);
+  assert.equal(f.stats.opens, 2, 'one visit at the start, one more when the item ran out, then no more');
+  assert.equal(f.stats.buys.length, 0, 'the merchant sells no elixir and Str is stocked');
+  assert.ok(f.Alchemy.log.some(l => /Not bought: weapon elixir \(not sold here\)/.test(l.text)));
+  const g = buyFixture(); g.Alchemy.startQueue(); g.step(); assert.ok(g.AlchemyBuy.run);
+  g.Alchemy.stop(); for (let i = 0; i < 10 && g.AlchemyBuy.run; i++) g.step();
+  assert.equal(g.AlchemyBuy.run, null); assert.equal(g.Alchemy.active(), false);
+});
+test('gold amounts are shown with dots and typed with dots, commas or the short forms', () => {
+  const f = fixture();
+  assert.equal(f.goldText(100000000000), '100.000.000.000'); assert.equal(f.goldText(999), '999'); assert.equal(f.goldText(0), '0');
+  for (const [text, value] of [['100.000.000', 100000000], ['100,000,000', 100000000], ['1 000 000', 1000000], ['20m', 20000000], ['20kk', 20000000],
+    ['1.5b', 1500000000], ['2,5m', 2500000], ['500k', 500000], ['42', 42]]) assert.equal(f.parseGold(text), value, text);
+  for (const text of ['', 'abc', '-5', '5x', 'm']) assert.equal(f.parseGold(text), null, text);
+});
+test('alchemy settings: old saves load with an empty queue, and saved rows get every goal', () => {
+  const f = fixture();
+  const old = f.botProfile({ alchemy: { target: 5, limit: 30 } }).alchemy;
+  assert.deepEqual([...old.queue], []); assert.equal(old.target, 5); assert.equal(old.delay, 1000); assert.equal(old.onMissing, 'next');
+  const saved = f.botProfile({ alchemy: { delay: 50, onMissing: 'x', queue: [{ refObjId: 100, slot: 13, goals: { target: 7, blue: { targets: { MATTR_INT: 3 } } } }, { slot: 'x' }, null] } }).alchemy;
+  assert.equal(saved.queue.length, 1, 'broken rows are dropped'); assert.equal(saved.delay, 500); assert.equal(saved.onMissing, 'next');
+  const goals = saved.queue[0].goals;
+  assert.equal(goals.target, 7); assert.equal(goals.blue.targets.MATTR_INT, 3); assert.equal(goals.blue.limit, 100);
+  assert.equal(goals.limit, 20); assert.ok(goals.use && goals.attr && goals.from, 'missing goals take the defaults');
+  assert.equal('queue' in goals, false);
+});
+test('the alchemy tab draws the queue, the three goal tabs and the bag', () => {
+  const nodes = [];
+  const document = { createElement(tag) {
+    const events = {}, node = { tag, children: [], className: '', value: '', dataset: {}, style: {}, isConnected: true,
+      classList: { add() {} }, setAttribute() {}, append(...children) { this.children.push(...children); }, replaceChildren(...children) { this.children = children; },
+      addEventListener(name, fn) { events[name] = fn; }, click() { events.click?.(); }, querySelectorAll() { return []; } };
+    nodes.push(node); return node;
+  } };
+  const f = fixture(document); f.UI.draw = () => {}; f.UI.is = page => page === 'Alchemy'; f.Icons.paint = () => {}; f.UI.soundPicker = () => document.createElement('div');
+  f.World.gp.alchemy = { visible: true, pending: false, mode: 'reinforce', flags: 0, error: null, slot: null };
+  f.World.gp.inventory = [{ slot: 13, refObjId: 100, typeFlags: 44 | (6 << 7), plus: 2, durability: 100, variance: '0', magic: [], quantity: 1, name: 'Test weapon',
+    magicReferences: [], tooltip: { fields: { itemClass: 25, maxMagicOptions51c: 3 } } }, { slot: 20, refObjId: 6687, typeFlags: 0x0dec, quantity: 4 }];
+  const text = n => n.textContent ?? '';
+  for (const tab of ['plus', 'white', 'blue']) {
+    nodes.length = 0; f.UI.pane = document.createElement('div'); f.Alchemy.goalsTab = tab; f.Alchemy.draw();
+    assert.ok(nodes.some(n => text(n) === 'Alchemy queue') && nodes.some(n => text(n) === 'Start queue'), tab);
+  }
+  f.Alchemy.addRow(13); nodes.length = 0; f.UI.pane = document.createElement('div'); f.Alchemy.goalsTab = 'blue'; f.Alchemy.draw();
+  assert.ok(nodes.some(n => text(n) === 'Test weapon +2 → +3'), 'the queue line, with the plus goal new rows start with');
+  assert.ok(nodes.some(n => /^Str \(now –, 4 in bag\)$/.test(text(n))), 'the Str goal row');
+  assert.ok(nodes.some(n => /Magic slots: 0 of 3 used/.test(text(n))));
+  assert.ok(nodes.some(n => /For degree 9: .*blue stones 4/.test(text(n))), 'the bag line');
+});
 require('./lean.obstacle.test.cjs')({ fixture, combatFixture, navProduct, test });
 
 test('with Accept resurrection on, a living party member in view makes the bot wait 20 s before reviving itself', () => {
@@ -9680,13 +10305,15 @@ test('alchemy requires bag weapons, valid limits, settled state and compatible m
     f => { f.World.gp.inventory[0].slot = 6; }, f => { f.World.gp.inventoryPending = true; },
     f => { f.World.gp.alchemy.pending = true; }, f => { f.World.gp.alchemy = undefined; },
     f => { f.World.gp.inventory[1].refObjId = 3678; }, f => { f.Settings.profile.alchemy.target = 0; },
-    f => { f.Settings.profile.alchemy.limit = 1.5; }, f => { f.Settings.profile.alchemy.elixir = 3675; },
+    f => { f.Settings.profile.alchemy.limit = 1.5; },
     f => { f.Settings.profile.alchemy.powder = true; f.World.gp.inventory[2].refObjId = 3683; },
     f => { f.Settings.profile.alchemy.powder = true; delete f.World.gp.inventory[0].tooltip; },
     f => { f.World.gp.stall = { phase: 'owner', mode: 0 }; }, f => { f.Hunt.running = true; }]) {
     const f = alchemyFixture(); change(f); f.Alchemy.start();
     assert.equal(f.Alchemy.run, null); assert.equal(f.commands.length, 0);
-  }
+  }  // A picked elixir that is not in the bag is only a preference: another of the same kind is used.
+  const f = alchemyFixture(); f.Settings.profile.alchemy.elixir = 3675; f.Alchemy.start(); f.Controller.tick();
+  assert.deepEqual(JSON.parse(JSON.stringify(f.commands.at(-1))), { kind: 'alchemy-start', mode: 'reinforce', slots: [13, 14] });
 });
 
 test('alchemy does not accept stale flags or material consumption alone as a result', () => {
@@ -9698,9 +10325,26 @@ test('alchemy does not accept stale flags or material consumption alone as a res
   f.World.applyGameplay({ ...f.World.gp, inventory: items, alchemy: { ...f.World.gp.alchemy, flags: 0 } });
   f.Controller.tick(); assert.ok(f.Alchemy.pending); assert.equal(f.Alchemy.result.elixirs, 0);
   f.advance(16000); f.Controller.tick(); assert.equal(f.Alchemy.run, null); assert.ok(f.Alchemy.pending);
-  assert.match(f.Alchemy.message, /unconfirmed/); f.Alchemy.start(); assert.equal(f.Alchemy.run, null);
-  f.Controller.tick(); assert.equal(f.commands.filter(c => c.kind === 'alchemy-start').length, 1);
+  assert.match(f.Alchemy.message, /unconfirmed/);
+  f.Controller.tick(); assert.equal(f.commands.filter(c => c.kind === 'alchemy-start').length, 1, 'nothing is sent again');
   assert.equal(f.commands.at(-1).kind, 'alchemy-close');
+  assert.equal(f.Alchemy.pending, null); assert.match(f.Alchemy.message, /not confirmed, but its elixir was used: check the item/);
+  f.Alchemy.select(13); f.Alchemy.start(); assert.ok(f.Alchemy.run, 'Start works again');
+});
+test('an attempt left unconfirmed by a stop or an odd result never blocks the next start', () => {
+  const f = alchemyFixture(); f.Alchemy.start(); f.Controller.tick(); f.Alchemy.stop();
+  f.Alchemy.start(); assert.equal(f.Alchemy.run, null, 'right after the stop it still waits'); assert.match(f.Alchemy.message, /still waiting for its result/);
+  f.World.applyGameplay({ ...f.World.gp, alchemy: { ...f.World.gp.alchemy, pending: true } });
+  f.advance(6000); f.Controller.tick(); assert.ok(f.Alchemy.pending, 'not while the game still has the request out');
+  f.World.applyGameplay({ ...f.World.gp, alchemy: { ...f.World.gp.alchemy, pending: false } });
+  f.Controller.tick(); assert.equal(f.Alchemy.pending, null); assert.match(f.Alchemy.message, /was not carried out: nothing was used/);
+  f.Alchemy.select(13); f.Alchemy.start(); assert.ok(f.Alchemy.run);
+  const g = alchemyFixture(); g.Alchemy.start(); g.Controller.tick(); g.result(0x10, 2);
+  assert.equal(g.Alchemy.run, null); assert.ok(g.Alchemy.pending); assert.match(g.Alchemy.message, /Unexpected enhancement level/);
+  g.advance(6000); g.Controller.tick(); assert.equal(g.Alchemy.pending, null);
+  assert.equal(g.commands.filter(c => c.kind === 'alchemy-start').length, 1, 'nothing was sent again');
+  const q = queueFixture(); q.Alchemy.start(); q.Controller.tick(); q.Alchemy.stop(); q.advance(6000); q.Controller.tick();
+  q.Alchemy.startQueue(); assert.ok(q.Alchemy.queue);
 });
 
 test('alchemy waits for pending inventory to settle even after a matching result', () => {
@@ -11642,6 +12286,35 @@ test('an expired world session skips the futile resume, enters afresh, then relo
   g.f.advance(3000); g.f.Controller.tick(); g.f.advance(40000); g.f.Controller.tick();
   assert.equal(g.reloads(), 0, 'the fourth reload in a row waits 8 times as long: 4 minutes'); assert.equal(g.f.Reconnect.gaveUp, false);
   g.f.advance(205000); g.f.Controller.tick(); assert.equal(g.reloads(), 1); assert.equal(stored(g.f).reloads.count, 4);
+});
+
+test('a reconnect that hangs in a connecting phase with no answer ends in a page reload', () => {
+  const r = reloadFixture(), f = r.f;
+  r.lose('reconnecting'); f.advance(3000); f.Controller.tick();
+  f.World.phase = 'entering-world';
+  for (let i = 0; i < 17; i++) { f.advance(10000); f.Controller.tick(); }
+  assert.equal(r.reloads(), 0, 'gives the entry three minutes');
+  for (let i = 0; i < 3; i++) { f.advance(10000); f.Controller.tick(); }
+  assert.equal(r.reloads(), 1, 'still entering after three minutes: reload');
+  assert.equal(stored(f).pending.character, 'Tester'); assert.equal(stored(f).pending.hunting, true);
+  const g = reloadFixture(); g.lose('reconnecting'); g.f.World.phase = 'connecting';
+  for (let i = 0; i < 15; i++) { g.f.advance(10000); g.f.Controller.tick(); }
+  g.f.World.phase = 'character-select'; g.f.advance(1000); g.f.Controller.tick();
+  g.f.World.phase = 'connecting'; for (let i = 0; i < 15; i++) { g.f.advance(10000); g.f.Controller.tick(); }
+  assert.equal(g.reloads(), 0, 'progress to another phase starts the wait afresh');
+  const h = reloadFixture(); h.lose('reconnecting'); h.f.World.phase = 'connecting';
+  h.f.storage.set('sro-lean-reload', JSON.stringify({ reloads: { count: 2, first: Date.now(), last: Date.now() } }));
+  for (let i = 0; i < 60; i++) { h.f.advance(10000); h.f.Controller.tick(); }
+  assert.equal(h.reloads(), 0, 'the third reload in a row waits four times as long');
+  for (let i = 0; i < 20; i++) { h.f.advance(10000); h.f.Controller.tick(); }
+  assert.equal(h.reloads(), 1);
+});
+test('a hanging reconnect that reaches the 12-hour reload limit keeps the give-up message', () => {
+  const r = reloadFixture(), f = r.f; r.lose('reconnecting'); f.World.phase = 'connecting';
+  f.storage.set('sro-lean-reload', JSON.stringify({ reloads: { count: 9, first: Date.now() - 13 * 3600000, last: Date.now() - 60000 } }));
+  for (let i = 0; i < 200; i++) { f.advance(10000); f.Controller.tick(); }
+  assert.equal(r.reloads(), 0); assert.equal(f.Reconnect.gaveUp, true);
+  assert.match(f.Reconnect.message, /over 12 hours without getting back in; not reloading again/);
 });
 
 test('a plain "Disconnected from the server." that nothing recovers ends in a page reload, and reloads in a row wait longer, never stopping early', () => {

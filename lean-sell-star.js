@@ -24,7 +24,7 @@ const SellStar = {
     if (!World.inWorld() || !gp || !World.local()) return 'Enter the game world first.';
     if (World.isDead()) return 'Character is dead.';
     if (!c.storage || !c.smith) return 'Save the warehouse and the repair merchant first (Town page).';
-    if (Alchemy.run || Alchemy.pending || Stall.run || Trade.run || BuffGear.run || BuffGear.recovery) return 'Stop alchemy, stall, trade and gear swaps first.';
+    if (Alchemy.active() || Stall.run || Trade.run || BuffGear.run || BuffGear.recovery) return 'Stop alchemy, stall, trade and gear swaps first.';
     if (Hunt.running || Town.trip || WalkBack.active || Travel.active || Restock.trip || Restock.recording || Resurrect.trip || Quest.trip || Loot.active) return 'Stop hunting, travel and route recording first.';
     if (Restock.activeShop() || gp.storage || gp.exchange?.open || gp.exchange?.requesting || gp.stall?.phase && gp.stall.phase !== 'none') return 'Close shop, storage, trade and stall first.';
     if (World.isCasting() || World.isSitting() || gp.pendingMoves) return 'Stand still and wait for casts and movement to finish.';

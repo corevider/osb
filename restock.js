@@ -25,7 +25,7 @@ const Restock = {
   },
   tell(text) { this.message = text; UI.toast(text, 'info', 5000); },
   beginRecording() {
-    if (Alchemy.run || Alchemy.pending) return UI.toast('Stop alchemy before recording a route.', 'warn');
+    if (Alchemy.active()) return UI.toast('Stop alchemy before recording a route.', 'warn');
     const shop = this.activeShop();
     const npc = World.ents.get(shop?.npc);
     const p = this.pose();

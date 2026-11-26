@@ -1,3 +1,11 @@
+function goldText(n) { return String(BigInt(Math.max(0, Math.floor(Number(n) || 0)))).replace(/\B(?=(\d{3})+(?!\d))/g, '.'); }
+function parseGold(text) {
+  const t = String(text).trim().toLowerCase().replace(/[\s_']/g, ''), m = /^(\d[\d.,]*)(k{1,3}|m|b)?$/.exec(t);
+  if (!m) return null;
+  const scale = { k: 1e3, kk: 1e6, kkk: 1e9, m: 1e6, b: 1e9 }[m[2]] || 1;
+  const number = m[2] ? Number(m[1].replace(',', '.')) : Number(m[1].replace(/[.,]/g, ''));
+  return Number.isFinite(number) ? Math.round(number * scale) : null;
+}
 function el(tag, text, className = '') {
   const node = document.createElement(tag);
   if (text !== undefined && text !== null) node.textContent = String(text);
@@ -155,6 +163,17 @@ const UI = {
     });
     return this.field(title, input);
   },
+  gold(title, get, set, max = 1e12) {
+    const input = el('input'); input.type = 'text'; input.inputMode = 'numeric'; input.className = 'gold'; input.value = goldText(get());
+    input.addEventListener('focus', () => input.select?.());
+    input.addEventListener('change', () => {
+      const value = parseGold(input.value);
+      if (value === null) { input.value = goldText(get()); return; }
+      const valid = Math.min(max, value); input.value = goldText(valid); set(valid); Settings.saveProfile();
+    });
+    this.refreshers.push(() => { if (this.root?.activeElement !== input) input.value = goldText(get()); });
+    return this.field(title, input);
+  },
   text(title, get, set, placeholder = 'comma-separated names') {
     const input = el('input'); input.type = 'text'; input.value = get(); input.placeholder = placeholder;
     input.addEventListener('change', () => { set(input.value); Settings.saveProfile(); });
@@ -261,7 +280,7 @@ const UI = {
     // Busy comes from the live trips, not from Controller.mode: that label lags a tick behind (it still says
     // "returning" for up to 100 ms after Stop all ended a walk-back).
     const busy = UniqueHunt.active ? 'Unique hunt' : Town.trip ? 'Town trip' : WalkBack.active ? 'Returning' : Reconnect.active() ? 'Reconnecting' : Restock.trip ? 'Shopping'
-      : Resurrect.trip ? 'Resurrecting' : BuffGear.run ? 'Buff gear' : Trade.run ? 'Trading' : Alchemy.run || Alchemy.pending ? 'Alchemy' : Stall.run ? 'Stall' : SellStar.run ? 'Sell Star' : '';
+      : Resurrect.trip ? 'Resurrecting' : BuffGear.run ? 'Buff gear' : Trade.run ? 'Trading' : Alchemy.active() ? 'Alchemy' : Stall.run ? 'Stall' : SellStar.run ? 'Sell Star' : '';
     const label = dead ? 'Dead' : error ? 'Error' : busy || (Hunt.running ? 'Hunting' : 'Stopped');
     // `note` is what only the state can say; the icon falls back to the first wait reason, which the wide window shows below the strip.
     const note = UniqueHunt.active ? UniqueHunt.status() : Town.trip ? Town.status() : Travel.active ? Travel.status() : WalkBack.active ? WalkBack.status() : Reconnect.active() && Reconnect.message ? Reconnect.message
@@ -984,9 +1003,11 @@ const UI = {
       this.speedNote = el('p', '', 'muted');
       pots.append(this.check('Use beginner +100% speed scroll automatically', () => P().speedScroll, v => { P().speedScroll = v; SpeedScroll.reset(); }),
         el('p', 'Uses only the beginner scroll during hunting or travel when no movement-speed buff is active. Works during combat casts; potions have priority. Waits for buff confirmation and stops retrying after three unconfirmed attempts.', 'muted'), this.speedNote);
-      pots.append(this.check('Keep a 20% damage scroll active', () => Settings.profile.scroll.damageInc, v => { Settings.profile.scroll.damageInc = v; ScrollBuff.reset(); }),
-        this.check('Keep a 20% resistance scroll active', () => Settings.profile.scroll.damageAbs, v => { Settings.profile.scroll.damageAbs = v; ScrollBuff.reset(); }),
-        el('p', 'While hunting, uses a 20% damage increase and/or resistance scroll from your bag whenever its 30-minute buff runs out, like the speed scroll above: potions have priority, each use waits for its buff, and it stops retrying after three unconfirmed attempts. Buying more scrolls is set under Item mall below.', 'muted'));
+      const keep = (k, label) => this.check(label, () => Settings.profile.scroll[k], v => { Settings.profile.scroll[k] = v; ScrollBuff.reset(); });
+      pots.append(keep('damageInc', 'Keep a damage increase scroll active'), keep('damageAbs', 'Keep a damage absorption scroll active'),
+        keep('hpUp', 'Keep an HP increase scroll active'), keep('mpUp', 'Keep an MP increase scroll active'),
+        keep('hit', 'Keep a hit scroll active'), keep('dodge', 'Keep a dodging scroll active'),
+        el('p', 'While hunting, uses a matching scroll from your bag whenever its buff runs out: the 2-minute Damage Increase, Damage Absorption, HP 1000 and MP 1000 scrolls first, then the Item mall 20% scrolls and the 500 HP/MP scrolls. Like the speed scroll above: potions have priority, each use waits for its buff, and a scroll that is not confirmed after three attempts is set aside while the others keep going. Buying Item mall scrolls is set under Item mall below.', 'muted'));
       const R = () => P().repairHammer;
       this.hammerNote = el('p', '', 'muted');
       pots.append(this.check('Use a repair hammer when gear is worn', () => R().on, v => { R().on = v; RepairHammer.reset(); }),
@@ -1379,8 +1400,10 @@ const UI = {
         el('p', 'Off by default: Auto-recruit, Auto-accept, Auto-invite and joining the party leader also work while hunting is stopped. Turn this on to make all of them wait until you press Start. Resurrection is not affected.', 'muted'),
         this.check('Accept resurrection from party members', () => party().acceptRes, v => party().acceptRes = v),
         this.check('Accept resurrection from any player', () => party().acceptResAny, v => party().acceptResAny = v),
+        this.check('Also accept beast-form resurrection', () => party().acceptBeast, v => party().acceptBeast = v),
+        this.check('Revive in town instead when town is needed', () => party().resTownCheck, v => party().resTownCheck = v),
         this.number('Wait for a party resurrection (s)', () => party().reviveWaitS, v => party().reviveWaitS = v, 5, 600),
-        el('p', 'When you are dead and a party member casts Rebirth on you, the bot answers Yes. Works during hunting and while stopped. Offers from other players are left to you unless Accept resurrection from any player is on (off by default). With a living party member in view, or any living player when that option is on, it waits this long after dying before reviving itself in town (20 s by default). The log names who resurrected you.', 'muted'),
+        el('p', 'When you are dead and a party member casts Rebirth on you, the bot answers Yes. Works during hunting and while stopped. Offers from other players are left to you unless Accept resurrection from any player is on (off by default). With a living party member in view, or any living player when that option is on, it waits this long after dying before reviving itself in town (20 s by default). A beast-form resurrection (weaker attacks, more defence, much less HP and MP) is left to you unless Also accept beast-form resurrection is on (off by default); an offer the bot leaves alone never stops it from reviving itself. The log names who resurrected you. While the bot is running (hunting or on a town trip) with Revive in town on (Town page), and no return scroll, no gold, broken or worn-out gear or a chosen potion used up, it answers No to every offer it would otherwise accept and revives in town at once instead (on by default), so the town services can refill everything. While stopped, it keeps accepting.', 'muted'),
         this.check('Auto-resurrect party members', () => party().autoRes, v => { party().autoRes = v; Resurrect.reset(); }),
         this.text('Also resurrect these players (not in the party)', () => party().resNames, v => { party().resNames = v; Resurrect.reset(); }, 'names, comma separated'),
         this.number('Maximum res distance from hunt spot (m)', () => party().resRadius / 10, v => party().resRadius = v * 10, 1, 100),

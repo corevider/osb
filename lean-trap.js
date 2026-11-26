@@ -57,7 +57,7 @@ const Trap = {
   */
 	busy() {
 		return !!(Town.trip || WalkBack.active || Resurrect.trip || Restock.trip || Restock.recording ||
-			BuffGear.run || Alchemy.run || World.gp?.storage || Restock.activeShop());
+			BuffGear.run || Alchemy.active() || World.gp?.storage || Restock.activeShop());
 	},
 	/*
   ================

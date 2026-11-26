@@ -329,7 +329,7 @@ const Town = {
       if (fromBag && this.needed(item)) return false;
       const key = BuffGear.key(item);
       if (BuffGear.cfg().buffSets.some(s => s.weapon === key || s.shield === key)) return false;
-      return !(fromBag && Alchemy.selected && Alchemy.selected.slot === item.slot);
+      return !(fromBag && Alchemy.protects(item));
     }
     if (!Number.isInteger(item.typeFlags) || !ItemType.isEquipment(item.typeFlags)) return false;
     const level = this.requiredLevel(item);
@@ -337,7 +337,7 @@ const Town = {
     if (splitList(c.keep).some(s => (item.name || '').toLowerCase().includes(s))) return false;
     const key = BuffGear.key(item);
     if (BuffGear.cfg().buffSets.some(s => s.weapon === key || s.shield === key)) return false;
-    return !(fromBag && Alchemy.selected && Alchemy.selected.slot === item.slot);
+    return !(fromBag && Alchemy.protects(item));
   },
   // Loot kept in the warehouse instead of being sold. Stones are also deposited from the character bag; elixirs are
   // not, because alchemy takes them from there.
@@ -370,7 +370,7 @@ const Town = {
   // weapons, armour, shields and accessories are sold. Pet summon scrolls, avatars, devil spirits, job suits,
   // fortress weapons, item mall and event items, tablets, powders and anything with an unknown codename stay.
   sellableBag(item) {
-    if (this.needed(item) || Alchemy.selected && Alchemy.selected.slot === item.slot) return false;
+    if (this.needed(item) || Alchemy.protects(item)) return false;
     const key = BuffGear.key(item);
     if (BuffGear.cfg().buffSets.some(s => s.weapon === key || s.shield === key)) return false;
     if (!this.sellable(item)) return false;
@@ -379,7 +379,7 @@ const Town = {
     return ItemRules.get(item.refObjId)?.act === 'sell' || this.plainGear(item);
   },
   sellableDrained(item) {
-    if (!ItemRules.fromPet(item) || this.needed(item) || Alchemy.selected && Alchemy.selected.slot === item.slot) return false;
+    if (!ItemRules.fromPet(item) || this.needed(item) || Alchemy.protects(item)) return false;
     if (this.cfg().storage && Equip.wanted(item)) return false;
     return this.sellable(item);
   },
@@ -396,6 +396,21 @@ const Town = {
   // Whether a trip could empty any of the pet's slots (sell or store something). A pet full of protected items would
   // otherwise send the bot to town again and again for nothing.
   petClearable(pet) { return pet.rec.inventory.some(i => this.sellable(i) || this.eligible(i)); },
+  bagClearable() {
+    const t = this.trip, sellBag = t ? !!t.sellFirst : this.sellsBag();
+    if (sellBag && !Items.filesLoaded) return true;
+    return World.items().some(i => sellBag && this.sellableBag(i) || this.sellableDrained(i) || this.cfg().storage && this.storesFromBag(i)) ||
+      !!(t && this.cfg().sellExcess && this.excess());
+  },
+  bagHint() {
+    const sellBag = this.trip ? !!this.trip.sellFirst : this.sellsBag();
+    return (sellBag ? 'without a Sell rule only ordinary Chinese / European gear sells from the bag, so add Sell or Store item rules for the rest'
+      : 'turn on "Sell ordinary gear from the character bag too", add Sell or Store item rules') + ', or clear some bag space yourself.';
+  },
+  bagFullStop() {
+    const free = World.freeBagSlots();
+    return `Bag still full after town (${free} free slot${free === 1 ? '' : 's'}; it needs 2). Pet loot that only passes through the bag does not free space. To keep looping: ${this.bagHint()}`;
+  },
   autoRevive() { return this.cfg().enabled && this.cfg().revive; },
   // A dead companion waits in the bag as its summoner item with summon state 4; a Grass of life
   // (revival item) brings it back. Both are needed before the town trip is worth starting for this.
@@ -419,6 +434,21 @@ const Town = {
     if (this.noXpDue()) return `no XP for ${c.noXp.minutes} minutes`;
     if (c.every?.on && this.cycleFrom && now() - this.cycleFrom >= c.every.minutes * 60000) return `every ${c.every.minutes} minutes`;
     return '';
+  },
+  reviveNeeds() {
+    const c = this.cfg();
+    if (!this.autoRevive()) return [];
+    const why = [];
+    const invalid = this.validate(false);
+    if (invalid) why.push(invalid === 'Carry a return scroll before hunting.' ? 'no return scroll' : invalid.replace(/\.$/, '').replace(/^./, ch => ch.toLowerCase()));
+    const equipped = World.gp?.equipmentSlotCount || 13;
+    const broken = (World.gp?.inventory || []).filter(i => i.slot < equipped && ItemType.isEquipment(i.typeFlags) && i.durability === 0);
+    const worn = !broken.length && c.wear?.on ? this.wear() : null;
+    if (broken.length) why.push(broken.some(i => i.slot === 6) ? 'weapon broken' : 'armor broken');
+    else if (worn && worn.pct < c.wear.pct) why.push(`gear durability low (${worn.name} at ${Math.floor(worn.pct)}%)`);
+    const out = this.supplies().filter(s => Restock.count(s.refObjId) === 0).map(s => s.kind);
+    if (out.length) why.push('out of ' + out.join(', ') + ' potions');
+    return why;
   },
   // The equipped weapon (slot 6) at zero durability.
   weaponBroken() {
@@ -521,6 +551,10 @@ const Town = {
     t.scrollAttempts = 0; t.scrollRequest = null;
     // With bag selling on, the trip sells first, so a full bag can still make room for refills.
     if (full && !t.sellFirst && !(this.cfg().storage && World.items().some(i => this.storesFromBag(i)))) return this.fail('Returned to town; free a character bag slot for storage and refills.');
+    if (World.freeBagSlots() <= 1 && !this.bagClearable()) {
+      this.message = 'Town: the bag is nearly full and nothing in it is sold or stored, so the trip stops after the services. To keep looping: ' + this.bagHint();
+      Log.warn(this.message); UI.toast(this.message, 'warn', 10000);
+    }
     t.order = this.order(full);
     // A dead pet is brought back first, before the services, so it carries loot again for the rest of the trip.
     if (this.cfg().revivePet && this.deadCollar() && this.grass()) { this.enter('pet-revive'); return; }
@@ -584,7 +618,7 @@ const Town = {
     }
     if (gp.inventoryPending || World.isCasting()) return;
     if (this.supplyShort(t) || this.damaged().length || !t.revival && !this.scroll(0x09ec)) return this.fail('Final supply, repair or travel-scroll check failed.');
-    if (World.freeBagSlots() <= 1) return this.fail('Returned to town; free at least two character bag slots before hunting again.');
+    if (World.freeBagSlots() <= 1) return this.fail(this.bagFullStop());
     if (!Hunt.cfg().center) return this.fail('No saved hunting spot to walk back to.');
     this.trip = null; Hunt.targetGid = Hunt.lootGid = 0; this.restartClocks();
     if (t.move && Leveling.startMove(t.move)) { this.message = 'Town service complete; moving to the next town.'; return; }
@@ -1178,7 +1212,7 @@ const Town = {
         return true;
       }
       if (this.supplyShort(t) || this.damaged().length || !t.revival && !this.scroll(0x09ec) || !this.scroll(0x19ec)) { this.fail('Final supply, repair or travel-scroll check failed.'); return true; }
-      if (World.freeBagSlots() <= 1) { this.fail('Returned to town; free at least two character bag slots before hunting again.'); return true; }
+      if (World.freeBagSlots() <= 1) { this.fail(this.bagFullStop()); return true; }
       const npc = this.npc('gate');
       if (!npc || gp.target !== npc.gid || !(gp.targetCapabilities & 0x20000000)) { this.fail('Reverse-return teleport NPC unavailable.'); return true; }
       const scroll = this.scroll(0x19ec);

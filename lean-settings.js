@@ -133,7 +133,11 @@ const DEFAULT_PROFILE = {
     // Luck and lucky powder help at every plus, and Astral keeps +4 on a failure.
     from: { powder: 0, luck: 0, steady: 5, immortal: 5, astral: 4 },
     // Attribute percentages: the lowest variance value (0 to 31) wanted per NATTR_ name, 0 or missing = leave it alone.
-    attr: { targets: {}, limit: 100 } },
+    attr: { targets: {}, limit: 100 },
+    blue: { targets: {}, limit: 100 },
+    queue: [], delay: 1000, onMissing: 'next', queueSound: false,
+    buy: { on: false, stock: { elixir: 50, powder: 30, protect: 6, white: 20, blue: 20 }, spend: 100000000, keep: 1000000,
+      merchant: null } },
   statPoints: { enabled: false, str: 1, int: 0, reserve: 0 },
   leveling: { on: false, spots: true, gear: true, accessories: true, sellOld: true, move: true, reserve: 5000, skills: true, prepared: '', added: [], elements: '', imbued: [], pet: '', build: 'auto', weapon: null },
   // Auto Quest: learned tokens bind a quest codename (QNO_...) to its refId, and learned targets
@@ -144,9 +148,9 @@ const DEFAULT_PROFILE = {
   mastery: { enabled: false, ids: [], gap: 0, skills: false, scope: 'rotation', reserve: 0, order: 'masteries', max: false },
   lure: { enabled: false, points: [], taunt: { id: 0, group: 0 }, area: { id: 0, group: 0 }, holdS: 10, pauseEveryM: 10, pauseS: 4, radius: 15, returnHpPct: 50, stopAt: 0, stopOnPlayers: 0, stopAfter: 0 },
   pet: { attack: { on: false, recall: true, radius: 15, timeout: 3, resend: 5 } },
-  scroll: { damageInc: false, damageAbs: false },
+  scroll: { damageInc: false, damageAbs: false, hpUp: false, mpUp: false, hit: false, dodge: false },
   mall: { on: false, budgetSilk: 0, hp: { on: false, low: 10, target: 1000 }, mp: { on: false, low: 10, target: 1000 }, damageInc: { on: false, low: 5, target: 20 }, damageAbs: { on: false, low: 5, target: 20 }, reverse: { on: false, low: 1, target: 5 } },
-  party: { autoAcceptMatching: false, autoRecruit: false, joinMain: false, mainName: '', leaveIfNotLeader: false, onlyWhileRunning: false, acceptNames: '', autoInvite: false, inviteNames: '', inviteAnyone: false, inviteRadius: 300, autoRes: false, acceptRes: false, acceptResAny: false, resNames: '', reviveWaitS: 20, resRadius: 300, resWaitS: 31, resMax: 0, title: 'Hunting party', min: 1, max: 90, purpose: 0, expShare: true, itemShare: true,
+  party: { autoAcceptMatching: false, autoRecruit: false, joinMain: false, mainName: '', leaveIfNotLeader: false, onlyWhileRunning: false, acceptNames: '', autoInvite: false, inviteNames: '', inviteAnyone: false, inviteRadius: 300, autoRes: false, acceptRes: false, acceptResAny: false, acceptBeast: false, resTownCheck: true, resNames: '', reviveWaitS: 20, resRadius: 300, resWaitS: 31, resMax: 0, title: 'Hunting party', min: 1, max: 90, purpose: 0, expShare: true, itemShare: true,
     support: { enabled: false, whileStopped: false, range: 30, heal: { id: 0, group: 0, pct: 60, self: false }, group: { id: 0, group: 0, pct: 60, count: 2 },
       mpHeal: { id: 0, group: 0, pct: 60, self: false }, mpGroup: { id: 0, group: 0, pct: 60, count: 2 }, buffs: [] },
     protect: { enabled: false, all: false, names: [], range: 40, whileNoAttack: false },
@@ -210,6 +214,12 @@ function cleanPreferred(list) {
     if (out.length >= PREFERRED_MAX) break;
   }
   return out;
+}
+const ALCHEMY_GOAL_FIELDS = ['target', 'limit', 'elixir', 'powder', 'use', 'stones', 'stoneLimit', 'from', 'attr', 'blue'];
+function alchemyGoals(input) {
+  const goals = {};
+  for (const field of ALCHEMY_GOAL_FIELDS) goals[field] = deepMerge(DEFAULT_PROFILE.alchemy[field], input && typeof input === 'object' ? input[field] : undefined);
+  return goals;
 }
 // Preserve only bot settings. The original assistant's settings are never changed.
 function botProfile(input) {
@@ -320,6 +330,16 @@ function botProfile(input) {
   if (oldStones && !input.alchemy?.use) for (const key of Object.keys(result.alchemy.use)) {
     const n = Number(oldStones[key]) || 0; result.alchemy.use[key] = n > 0; result.alchemy.stones[key] = Math.min(6, Math.max(1, n));
   }
+  result.alchemy.queue = (Array.isArray(result.alchemy.queue) ? result.alchemy.queue : []).filter(row => row && Number.isInteger(row.refObjId) && Number.isInteger(row.slot))
+    .slice(0, 40).map(row => ({ refObjId: row.refObjId, slot: row.slot, goals: alchemyGoals(row.goals) }));
+  if (!Number.isInteger(result.alchemy.delay)) result.alchemy.delay = DEFAULT_PROFILE.alchemy.delay;
+  result.alchemy.delay = Math.min(10000, Math.max(500, result.alchemy.delay));
+  if (!['next', 'stop'].includes(result.alchemy.onMissing)) result.alchemy.onMissing = 'next';
+  const buy = result.alchemy.buy, whole = (n, max, fallback) => Number.isInteger(n) && n >= 0 ? Math.min(max, n) : fallback;
+  buy.on = buy.on === true;
+  const m = buy.merchant; buy.merchant = m && Number.isInteger(m.refObjId) && Number.isInteger(m.regionId) && [m.x, m.y, m.z].every(Number.isFinite) ? { refObjId: m.refObjId, regionId: m.regionId, x: m.x, y: m.y, z: m.z } : null;
+  for (const key of Object.keys(DEFAULT_PROFILE.alchemy.buy.stock)) buy.stock[key] = whole(buy.stock[key], 1000, DEFAULT_PROFILE.alchemy.buy.stock[key]);
+  buy.spend = whole(buy.spend, 1e12, DEFAULT_PROFILE.alchemy.buy.spend); buy.keep = whole(buy.keep, 1e12, DEFAULT_PROFILE.alchemy.buy.keep);
   // A character wears one shield: the old primary and secondary shield become that one, the primary first.
   const gear = result.items.gear, oldGear = input.items?.gear;
   if (oldGear && typeof oldGear === 'object' && !('shield' in oldGear)) gear.shield = [oldGear.primaryShield, oldGear.secondaryShield].find(k => typeof k === 'string' && k) || null;
